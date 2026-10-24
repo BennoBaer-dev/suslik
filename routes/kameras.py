@@ -13,7 +13,11 @@ import json
 
 import webui
 
+from core import registry as _reg
 from core.sprache import t
+
+# Schluessel-Praefix der Stufennamen (kameras.prio.<stufe>); auch die Systemseite liest ihn von hier.
+PRIO_TEXT = "kameras.prio."
 
 
 def render(cams, err, kam_store, rz_cfg, steckbriefe=None):
@@ -39,7 +43,8 @@ def render(cams, err, kam_store, rz_cfg, steckbriefe=None):
         nid = html.escape(name, quote=True)
         verwenden = (f'<label class="sw"><input type="checkbox" class="kam-verw" '
                      f'data-cam="{nid}"{" checked" if verw else ""}> '
-                     f'{t("kameras.karte.verwenden")}</label>')
+                     f'{t("kameras.karte.verwenden")}</label>'
+                     + _prio_auswahl(nid, (kam_store.get(name) or {}).get("prio")))
         if cc["zones"]:
             zboxes = " ".join(
                 f'<label class="zbox"><input type="checkbox" class="kam-zone" '
@@ -81,6 +86,20 @@ def render(cams, err, kam_store, rz_cfg, steckbriefe=None):
                  '<span id="kam-status" style="color:var(--dim)"></span></p>' if cams else "")
               + _steckbrief_block(cams, steckbriefe))
     return fehlerbanner + inhalt
+
+
+def _prio_auswahl(nid, gespeichert):
+    """Die Auswahl der Prioritaet neben „verwenden" (Bauplan analysen/bauplan_disponent.md, Stufe D1 Punkt 2).
+    -> HTML einer Auswahlliste mit den Stufen der Registry; vorgewaehlt der gespeicherte Wert, sonst der Werkswert"""
+    wahl = gespeichert if gespeichert in _reg.PRIO_STUFEN else _reg.PRIO_WERK
+    optionen = []
+    for stufe in _reg.PRIO_STUFEN:
+        # Der Schluessel wird zusammengesetzt und nicht als Literal in t() geschrieben (Bauform routes/event.py).
+        schluessel = PRIO_TEXT + stufe
+        optionen.append(f'<option value="{html.escape(stufe, quote=True)}"'
+                        f'{" selected" if stufe == wahl else ""}>{html.escape(t(schluessel))}</option>')
+    return (f' <label class="sw">{html.escape(t("kameras.karte.prio"))} '
+            f'<select class="kam-prio" data-cam="{nid}">{"".join(optionen)}</select></label>')
 
 
 def _steckbrief_block(cams, steckbriefe):

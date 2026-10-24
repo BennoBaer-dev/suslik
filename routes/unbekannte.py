@@ -70,7 +70,8 @@ def infos(idents_roh, gesichter, mitglieder=None):
     duerfen die Seite nie toeten (kc_phase34 R-2): nur Dicts kommen durch, Identitaeten ohne lebendes Mitglied fallen raus.
     Stufe V1c (Bauplan analysen/bauplan_verbraucher_unbekannt.md Punkt 2): mitglieder = core.unbekanntpool.mitglieder
     (vom Handler); daraus die gebundenen Saetze mit Zeit aus dem Satz, juengste zuerst vor dem Altbestand (Liste members,
-    Zeit und Guete aus der Pool-Zeile). -> Liste der Anzeige-Eintraege"""
+    Zeit und Guete aus der Pool-Zeile). Bauplan analysen/bauplan_unbekannt_zeit.md, Stufe UZ1: ohne Zeit bleiben von und
+    bis None (kein Ersatz-Null). -> Liste der Anzeige-Eintraege"""
     faces = {g["id"]: g for g in gesichter}
     aus = []
     for u in idents_roh:
@@ -90,7 +91,7 @@ def infos(idents_roh, gesichter, mitglieder=None):
         refs.update({m: faces[m].get("ref_id") for m in alt})
         aus.append({"u": u, "id": str(u.get("id", "")), "mids": mids,
                     "refs": refs,
-                    "von": min(tss, default=0), "bis": max(tss, default=0), "rep": mids[0],
+                    "von": min(tss, default=None), "bis": max(tss, default=None), "rep": mids[0],
                     "n": len(mids),
                     "objekt": bool(u.get("objekt")),
                     "status": u.get("status", "aktiv"),
@@ -108,19 +109,21 @@ def in_gruppe(i):
 
 def gruppen(alle):
     """Die Gruppen „Vermutlich P“ (Entscheid 19): je Person P ihre Identitaeten, das Sammelbecken „ähnlich P“ zuerst
-    (Entscheid 27), dann juengste Sichtung zuerst, Personen nach Namen. -> Liste (Person, [Anzeige-Eintraege])"""
+    (Entscheid 27), dann juengste Sichtung zuerst (ohne Zeit als aelteste, UZ1), Personen nach Namen.
+    -> Liste (Person, [Anzeige-Eintraege])"""
     out = {}
     for i in alle:
         if in_gruppe(i):
             out.setdefault(i["aehnlich"]["person"], []).append(i)
-    return [(p, sorted(out[p], key=lambda i: (not i.get("sammel"), -i["bis"], -i["n"]))) for p in sorted(out)]
+    return [(p, sorted(out[p], key=lambda i: (not i.get("sammel"), i["bis"] is None, -(i["bis"] or 0), -i["n"])))
+            for p in sorted(out)]
 
 
 def auswahl(alle, vors, sortierung="bilder", filter_="offen", jetzt=None):
     """Serverseitiges Sortieren/Filtern (der Browser bekommt nur, was er zeigt).
     vors = Vorschlagspaare (fuer den Filterwert "merge suggested"). Unbekannte
     Werte fallen auf den Standard zurueck — eine getippte URL darf keine leere
-    Seite ergeben."""
+    Seite ergeben. UZ1: eine Gruppe ohne Zeit gilt in jeder Sortierung als aelteste, „new today“ nimmt sie nicht."""
     if sortierung not in SORT:
         sortierung = SORT[0]
     if filter_ not in FILTER:
@@ -136,13 +139,13 @@ def auswahl(alle, vors, sortierung="bilder", filter_="offen", jetzt=None):
             aus = [i for i in aus if i["n"] >= 2]
         elif filter_ == "heute":
             grenze = _tagesbeginn(jetzt)
-            aus = [i for i in aus if i["von"] >= grenze]
+            aus = [i for i in aus if i["von"] is not None and i["von"] >= grenze]
         elif filter_ == "vorschlag":
             aus = [i for i in aus if i["id"] in mit_vorschlag]
     if sortierung == "neu":
-        aus.sort(key=lambda i: (-i["bis"], -i["n"]))
+        aus.sort(key=lambda i: (i["bis"] is None, -(i["bis"] or 0), -i["n"]))
     else:
-        aus.sort(key=lambda i: (-i["n"], -i["bis"]))
+        aus.sort(key=lambda i: (-i["n"], i["bis"] is None, -(i["bis"] or 0)))
     return aus
 
 
@@ -159,6 +162,9 @@ def zaehler(alle):
 def _tag(t0, t1):
     # Datums-Hardcodes (%d.%m., B19): bleiben Code, bis die
     # Format-Schluessel-Stufe (format.datum_*) gebaut ist.
+    # Bauplan analysen/bauplan_unbekannt_zeit.md, Stufe UZ1: ohne Zeit der Text, nie ein Datum.
+    if t0 is None or t1 is None:
+        return t("unbekannte.zeit_unbekannt")
     d0 = datetime.datetime.fromtimestamp(t0)
     d1 = datetime.datetime.fromtimestamp(t1)
     if d0.date() == d1.date():

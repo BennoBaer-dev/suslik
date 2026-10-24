@@ -833,15 +833,25 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
            "zustand": "gruen", "verweigert": False, "unter_formel": None}
     if kind == "cuda":
         # MS1: alle aktiven CUDA-Wege vor der alten Postenrechnung abzweigen.
+        guards, guard_reason = waechter_abzug_mb(n_waechter, kind, engine_alter_s)
+        # Bauplan Kartengroesse KG1 Punkt 5: `frei_gemessen_mb is None` heisst „Freimessung
+        # fehlt", eine Zahl (auch 0) ist eine Messung. Fehlen Kartengroesse UND Freimessung,
+        # startet der Worker wie bis 0.1.1.025 mit einem Strang und festem Profil-Deckel, rot
+        # (Eigentuemer 22.10.2026 15:34:14); fehlt nur eines, bleibt die Sperre und nennt den Teil.
+        if gesamt <= 0 and frei_gemessen_mb is None:
+            aus.update(dienst_mb=s["dienst_mb"], waechter_mb=waechter_posten_mb(n_waechter, kind),
+                       engine_alter_s=engine_alter_s)
+            return _cuda.fallback(aus, guards, guard_reason, DECODER_CUDA_MB)
         why = _cuda.pair_reason(measured, gesamt) if laufend_n else None
         own = measured["own"]["mb"] if laufend_n and why is None else 0
         free = (measured["card"]["mb"] if laufend_n and why is None
                 else max(0, int(frei_gemessen_mb or 0)))
         if isinstance(frei_band, dict) and frei_band.get("moment_mb") is not None and not laufend_n:
             free = max(0, int(frei_band["moment_mb"]))
-        if gesamt <= 0 or frei_gemessen_mb is None:
-            why = why or "native card memory unavailable"
-        guards, guard_reason = waechter_abzug_mb(n_waechter, kind, engine_alter_s)
+        if gesamt <= 0:
+            why = why or "native card memory unavailable (card size not measured)"
+        elif frei_gemessen_mb is None:
+            why = why or "native card memory unavailable (free memory not measured)"
         aus.update(dienst_mb=s["dienst_mb"], waechter_mb=waechter_posten_mb(n_waechter, kind),
                    frei_gerechnet_mb=gesamt - _cuda.reserve(gesamt, res_wunsch)
                    - s["dienst_mb"] - waechter_posten_mb(n_waechter, kind),

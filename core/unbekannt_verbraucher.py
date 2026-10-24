@@ -71,7 +71,10 @@ den Becken (anlernen.nicht_p_auswahl_kern). Das Sammelbecken ist kein Ziel der D
 EHRLICHE GRENZEN:
   - Die Durchgaenge bestehen nur aus Ereignissen mit Unbekannt-Gruppen (nur sie stehen in der Schlange); die
     Aktivitaetsseite kettet ueber alle Ereignisse. Eine Luecke ohne Unbekannte kann einen Durchgang teilen: dann zwei
-    Meldungen derselben Identitaet, kein Vermengen. Ebenso ein spaet gebuchtes Ereignis, das den Start verschiebt.
+    Meldungen derselben Identitaet, kein Vermengen. Verschiebt ein spaet gebuchtes Ereignis den Start oder verbindet es
+    zwei Durchgaenge, haengt durchgang_einordnen Vermerke und offene Meldungen auf den neuen Namen um (je Identitaet
+    hoechstens eine, Bauplan analysen/bauplan_neueste_zuerst.md Stufe LZ1); schon versandte Meldungen zweier bis dahin
+    getrennter Durchgaenge bleiben versandt, und geaenderte Ereigniszeiten oder Kettungen loest das nicht.
   - Gehalten werden die Buchungen des juengsten Tags und des Vortags (TAGE_HALTEN); ein noch aelteres Nachhol-Ereignis
     bildet einen eigenen Durchgang (es meldet ohnehin nicht).
   - Die Altersgrenze der Meldung kommt vom Aufrufer (heute ein Literal 900 an zwei Stellen in verifyd.py).
@@ -321,12 +324,46 @@ def durchgang_einordnen(z, cfg, zeile):
         if neu:
             gaenge.append(cur)
     mein = next(g for g in gaenge if any(e["eid"] == ev["eid"] for e in g["evs"]))
+    name = _meldungen_umhaengen(z, fach, kette, mein)
     tage = sorted({t for faecher in z["durchgaenge"].values() for t in faecher})[-TAGE_HALTEN:]
     for k in list(z["durchgaenge"]):
         z["durchgaenge"][k] = {t: f for t, f in z["durchgaenge"][k].items() if t in tage}
         if not z["durchgaenge"][k]:
             del z["durchgaenge"][k]
-    return _sz._pass_schluessel(mein["start"], kette), {e["eid"] for e in mein["evs"]}, fach
+    return name, {e["eid"] for e in mein["evs"]}, fach
+
+
+def _meldungen_umhaengen(z, fach, kette, mein):
+    """Meldungsvermerke und offene Meldungen des Durchgangs mein von den Schluesseln seiner Ereignisse auf seinen Namen
+    umhaengen, je Identitaet hoechstens eine (Bauplan analysen/bauplan_neueste_zuerst.md, Stufe LZ1 Punkt 3).
+    -> der Name des Durchgangs (szenarien._pass_schluessel seines Starts)"""
+    import szenarien as _sz                             # noqa: PLC0415
+    name = _sz._pass_schluessel(mein["start"], kette)
+    # Jeder fruehere Name dieses Durchgangs war der Start eines seiner Ereignisse (Startverschiebung oder Bruecke);
+    # bearbeitet wird nur das Fach dieses Tages und dieser Kette.
+    alte = {_sz._pass_schluessel(e["start"], kette) for e in mein["evs"]}
+    je_uid = {}
+    for v in fach["gemeldet"]:
+        gang, _s, uid = v.partition("|")
+        if gang in alte:
+            je_uid.setdefault(uid, []).append(v)
+    offen = {m["id"]: m for m in z["faellig"]}
+    for uid, vermerke in je_uid.items():
+        ziel = f"{name}|{uid}"
+        if vermerke == [ziel]:
+            continue
+        # Erledigt heisst: Vermerk ohne offene Meldung; bestimmt vor dem Umhaengen, der Zielschluessel eingeschlossen.
+        offene = [offen[v] for v in vermerke if v in offen]
+        weg = set(vermerke)
+        neu = None
+        if offene and len(offene) == len(vermerke):
+            neu = dict(min(offene, key=lambda m: m["faellig_ab"]), id=ziel)     # keine neue Karenz
+            neu["fenster_namen"] = sorted({n for m in offene for n in m["fenster_namen"]})
+            best = max(offene, key=lambda m: m["mass"])
+            neu.update(ref_id=best["ref_id"], mass=best["mass"])
+        fach["gemeldet"] = [v for v in fach["gemeldet"] if v not in weg] + [ziel]
+        z["faellig"] = [m for m in z["faellig"] if m["id"] not in weg] + ([neu] if neu else [])
+    return name
 
 
 def meldung_vormerken(z, fach, durchgang, zeile, uid, gruppe, ident, jetzt, karenz, alt_grenze_s):

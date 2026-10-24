@@ -279,6 +279,10 @@ def det_schwelle(det_global, guards, kamera):
 # Fehlertext); SW_ERZWUNGEN setzt der Dienst fuer den einen Neulauf (Wert: derselbe Text).
 HW_TEILABBRUCH = "hw_teilabbruch"
 SW_ERZWUNGEN = "sw_erzwungen"
+# Bauplan analysen/bauplan_katalog_lebenszyklus.md, Stufe LK1 (Nachbesserung, Codex-Befund 3): der Schluessel im
+# zaehler von event_rechnen fuer die Gesichter, die scores_rechnen gegen die Matrix gerechnet hat, auch wenn das
+# Norm-Sieb ihnen den Erkennungswert danach wieder nimmt; der Dienst liest ihn fuer das Journal der Nutzung.
+VERGLICHEN = "verglichen"
 # glibc-Allokator: Parameter-Nummer aus malloc.h. -3 ist M_MMAP_THRESHOLD.
 M_MMAP_THRESHOLD = -3
 # Die Schwelle, ab der malloc() einen Block direkt per mmap holt statt aus einer Arena.
@@ -1420,12 +1424,14 @@ class Bildvorrat:
             gruende["kopfwinkel"] = f"{_mk.GRUND_MESSFEHLER}: {type(e).__name__}: {e}"
         return aligned, werte, gruende
 
-    def _satz_weg(self, eid, label, set_feed, kennung, datei):
+    def _satz_weg(self, eid, label, set_feed, kennung, datei, ereignis_start=None):
         """Der Satz-Schreibweg dieses Ereignisses (E3a-3; Fix 0.1.1.013 F3: ohne Rechenwerk, mit der Kennung des
-        Rechengraphen). Ohne Job-Feld oder ohne Kennung gesperrt, laut (ERROR im SetWriter).
+        Rechengraphen). Ohne Job-Feld oder ohne Kennung gesperrt, laut (ERROR im SetWriter). Bauplan
+        analysen/bauplan_unbekannt_zeit.md, Stufe UZ1: ereignis_start (Startzeit des Ereignisses oder None) steht als
+        ts im Kontext und damit in herkunft.ereignis_start jedes Satzes.
         -> core.harvest_set.SetWriter"""
         from core import harvest_set as _hs                   # noqa: PLC0415  nur am Ereignis-Ende
-        ctx = {"eid": eid, "kamera": label, "ts": None, "quelle": eid if datei else None,
+        ctx = {"eid": eid, "kamera": label, "ts": ereignis_start, "quelle": eid if datei else None,
                "latten": dict(self.lat)}
         if not isinstance(set_feed, dict):
             return _hs.SetWriter(set_feed, None, ctx, lock=f"job field '{_hs.FEED_FIELD}' is missing",
@@ -1449,14 +1455,16 @@ class Bildvorrat:
                 "mk_quelle": (MK_QUELLE if (g["guete_t"] is not None and g["guete_e"] is not None) else None),
                 "mk_modell": self.modell, "label": label, "source": eid}
 
-    def schreiben(self, ordner, label, eid, persons, alle, set_feed=None, kennung=None, datei=False):
+    def schreiben(self, ordner, label, eid, persons, alle, set_feed=None, kennung=None, datei=False,
+                  ereignis_start=None):
         """Bestbilder (als Saetze), Anzeige-Bilder und Kandidaten dieses Events schreiben. Jeder
         gebrauchte Frame wird GENAU EINMAL nach BGR gewandelt; das win_thresh-Gate ist das
         von analyze.py:911 (ohne es truege ein Bild einen Personennamen, den die Zahlen
         nicht hergeben). E3a-3: je Uebernahme-Angebot ein Satz ueber den Schreibweg (`_satz_weg`,
         set_feed = Job-Feld, kennung = Kennung des Rechengraphen (F3), datei = eigene Videodatei); ein Fund,
         der auf demselben Frame mit derselben Box schon einen Satz hat, bekommt dieselbe ref_id. F4: danach der
-        Unbekannt-Stapel (`_unbekannt_schreiben`, Bilanz unbekannt_gruppen und unbekannt_saetze). -> Bilanz"""
+        Unbekannt-Stapel (`_unbekannt_schreiben`, Bilanz unbekannt_gruppen und unbekannt_saetze). UZ1: ereignis_start
+        (Startzeit des Ereignisses, None = ohne Zeit) geht an `_satz_weg`. -> Bilanz"""
         kand = self._kandidaten()
         bgr = {}
         wt = self.lat["win_thresh"]
@@ -1475,7 +1483,7 @@ class Bildvorrat:
                     gebraucht.add(d[person][1])
         if gebraucht:
             os.makedirs(ordner, exist_ok=True)
-        weg = (self._satz_weg(eid, label, set_feed, kennung, datei)
+        weg = (self._satz_weg(eid, label, set_feed, kennung, datei, ereignis_start)
                if kand or self.unbekannt or any(p in self.best for p in oben) else None)
         saetze = {}
 
@@ -1554,7 +1562,7 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
     (leerer Box-Ausschnitt fuer e) heisst bei einer siebenden Stufe Abbruch an ihr.
     Eine Latte <= 0 ist aus: der Wert wird nicht gemessen. Werte ungerundet;
     "abbruch" nennt die Stufe, an der ein Gesicht die KASKADE verliess; zaehler:
-    wie viele Gesichter jede Stufe bestanden.
+    wie viele Gesichter jede Stufe bestanden, dazu VERGLICHEN (gegen die Matrix gerechnet, LK1).
 
     v7: die Stufen laufen ueber den Satz dieses Rechenstrangs (satz.stufe), in
     Aufrufen fester Breite; das RGB-Vollbild entsteht einmal je Frame in satz.det()
@@ -1731,6 +1739,7 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
             # w[0]: L2-normiertes Embedding [512], w[1]: Feature-Norm (E1: die Stufe
             # liefert keine Scores mehr, die rechnet scores_rechnen hier)
             sc = scores_rechnen([w[0] for w in aus], erk)
+            zaehler[VERGLICHEN] += len(weiter)                      # LK1: gegen die Matrix gerechnet
             for q, (f, w) in enumerate(zip(weiter, aus)):
                 f["sc"] = {**ohne, **{pn: float(sc[q][j]) for j, pn in enumerate(mit_refs)}}
                 f["norm"] = float(np.ravel(w[1])[0])

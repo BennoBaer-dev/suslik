@@ -278,12 +278,15 @@ def regie_setzen(straenge):
             f"({je_klasse})")
     if bericht.get("ueberbucht"):
         u = bericht["ueberbucht"]
-        _log.warning(f"WARN: cpu_threads is set explicitly, so every session gets that "
+        # ET1 (Bauplan Erststart-Threads): die Zahl kann aus cpu_threads (Settings,
+        # auch als Auto-Wert einer schwachen Maschine) oder aus der Umgebung kommen;
+        # die Meldung schreibt sie deshalb niemandem zu.
+        _log.warning(f"WARN: the thread count per session is preset by cpu_threads "
+                f"(Settings) or SUSLIK_CPU_THREADS, so every session gets that "
                 f"number — {bericht['straenge']} compute thread(s) x "
                 f"{bericht['budget_je_strang']} = {u['threads_gesamt']} threads on "
-                f"{u['kerne']} usable core(s). That is your setting and it is kept; "
-                f"if the analysis feels slow, either lower cpu_threads or reduce the "
-                f"number of compute threads.")
+                f"{u['kerne']} usable core(s); if the analysis feels slow, either "
+                f"lower cpu_threads or reduce the number of compute threads.")
     return bericht
 
 

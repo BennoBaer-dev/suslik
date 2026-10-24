@@ -442,7 +442,8 @@ for k, eid in enumerate(a.eids):
         # Kill/Reboot abgerissener Download darf beim Retry nie als gueltiges,
         # halbes Video durchgehen -> falsches Urteil) und setzt den Pin im
         # selben Zug; Dateiname und Ablage bleiben <cache>/<eid>.mp4.
-        vid, pin_eid = clipcache.clip_holen(eid, frigate_url=FRIGATE), eid
+        # Bauplan Disponent D3b Punkt 8: die Kennung „nur Cache" des Live-Auftrags (vom Dienst ueber die Umgebung).
+        vid, pin_eid = clipcache.clip_holen(eid, frigate_url=FRIGATE, cache_only=clipcache.CLIP_CACHE_ONLY), eid
     try:
         faces = []; sampled = 0
         show, nnctx = {}, {}   # person -> (flaeche, ctx-crop) bzw. (score, ctx-crop): Anzeige-Bilder

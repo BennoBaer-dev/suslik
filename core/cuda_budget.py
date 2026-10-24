@@ -146,6 +146,44 @@ def selection(out, free, own, reason, guards, guard_reason, running_n, stock,
     return out
 
 
+def fallback(out, guards, guard_reason, decoder_mb):
+    """Plans the start when card size and native free memory are both unknown (Bauplan KG1).
+    -> Result in the service format: one thread, fixed profile arena cap, red, not refused.
+
+    Wie bis 0.1.1.025 (`afd57621:core/gpubudget.py` `_fail_closed`) startet der Worker trotzdem,
+    statt gesperrt zu sein (Eigentuemer 22.10.2026 15:34:14). Es gibt keine Messung, aus der ein Budget
+    folgen koennte: Budget und Frei bleiben 0 bzw. leer, nichts wird als Messwert ausgegeben. Der
+    Deckel ist der vorlaeufige Anlaufbedarf des Profils; ein Config-Deckel ersetzt ihn im Dienst
+    wie den errechneten. Ein gesetzter worker_straenge gilt hier nicht nach oben; der Dienst
+    nennt die Kuerzung in seiner ERROR-Zeile (ED001)."""
+    cap = PROFILE["startup_mb"]
+    lt = ladder(0, 1, 1, None, decoder_mb)
+    lt["grund"] = "nicht_messbar"
+    text = (f"cuda: card not measurable (card size and native free memory unknown) -> "
+            f"1 thread, fixed arena cap {cap} MiB from the provisional profile "
+            f"({PROFILE['source']}), no free-memory check before the start")
+    out.update(n=1, formel_n=1, leiter=lt, g_zusatz=0, geometrien_max=1,
+               reserve_mb=0, reserve_quelle="config" if out["reserve_wunsch_mb"] >= 0
+               else "absolute CUDA profile",
+               worker_budget_mb=0, frei_mb=0, frei_quelle="nicht_messbar",
+               frei_gemessen_mb=None, frei_moment_mb=None,
+               laufend_eigen_mb=0, laufend_eigen_quelle=None,
+               waechter_abzug_mb=guards, waechter_abzug_grund=guard_reason,
+               fussabdruck_mb=lt["summe_mb"], arena_deckel_mb=cap,
+               posten_ausserhalb_mb=decoder_mb,
+               posten={"decoder_mb": decoder_mb, "straenge": 1},
+               deckel_quelle="provisional CUDA profile",
+               preis_quelle=lt["quelle"], preis_quelle_stufen=lt["preis_quelle"],
+               preise_mb=lt["preise_mb"], gemessen_mb={},
+               verweigert=False, zustand="rot", grund="nicht_messbar",
+               hinweis=(f"CUDA memory planning: card not measurable (card size and native "
+                        f"free memory unknown) — one thread with the fixed profile arena cap "
+                        f"{cap} MiB, no free-memory check before the start"),
+               rechenweg=text, geometrien_rechenweg=text,
+               cuda_messgrund="card not measurable", unmeasurable_card=True)
+    return out
+
+
 def geometry_plan(st, arena_mb, running_n=0, stock_known=True, measured=None):
     """Erhält vorhandene Geometrien und erlaubt höchstens den nächsten Aufbauschritt.
     -> Plan; die Worker-Klammer prüft jeden Satz und Warm-up erneut gegen nativfrei."""

@@ -103,6 +103,10 @@ T = {
         "Frigate n'exécute aucune détection de personne sur ce flux "
         "&mdash; aucun événement ne peut arriver ici",
     "kameras.karte.pill_keine_detektion": "pas de détection dans Frigate",
+    "kameras.karte.prio": "priorité",
+    "kameras.prio.low": "basse",
+    "kameras.prio.mid": "moyenne",
+    "kameras.prio.high": "haute",
     "kameras.leer.titel": "Aucune caméra trouvée dans Frigate.",
     "kameras.leer.hinweis":
         "Vérifiez que suslik peut joindre l'API Frigate.",
@@ -444,7 +448,7 @@ T = {
     "konfiguration.neustart.frage": "Redémarrer le service maintenant ? Le traitement s'interrompt quelques secondes.",
     "antwort.neustart": "Redémarrage en cours — cette page répond de nouveau dans quelques secondes.",
     "konfiguration.support.titel": "Acces support a distance",
-    "konfiguration.support.satz": "Telechargement en lecture seule de zones nommees (logs, config masquee, visages, passes d'apprentissage, materiel corporel, fichiers d'etat) pour le detenteur du token de support. L'interrupteur support_zugriff se trouve dans le tableau ci-dessous, desactive par defaut. Chaque requete est ecrite dans le log du service. Les zones visages et corps contiennent des images de personnes reelles — remettez le token avec prudence. Sans TLS devant ce service, le token circule en clair. Le jeton permet aussi cinq actions : redemarrer ce service a distance (POST /support/restart), renvoyer des evenements dans la reconnaissance (POST /support/einspielen), activer ou desactiver la mesure fine (POST /support/feinmessung), activer ou desactiver le log de debug sans redemarrage (POST /support/debug) et mesurer de petites operations sur fichiers dans le service et dans un nouveau processus (POST /support/dateiprobe).",
+    "konfiguration.support.satz": "Telechargement en lecture seule de zones nommees (logs, config masquee, visages, passes d'apprentissage, materiel corporel, fichiers d'etat, liste des threads du service) pour le detenteur du token de support. L'interrupteur support_zugriff se trouve dans le tableau ci-dessous, desactive par defaut. Chaque requete est ecrite dans le log du service. Les zones visages et corps contiennent des images de personnes reelles — remettez le token avec prudence. Sans TLS devant ce service, le token circule en clair. Le jeton permet aussi six actions : redemarrer ce service a distance (POST /support/restart), renvoyer des evenements dans la reconnaissance (POST /support/einspielen), activer ou desactiver la mesure fine (POST /support/feinmessung), activer ou desactiver le log de debug sans redemarrage (POST /support/debug), mesurer de petites operations sur fichiers dans le service et dans un nouveau processus (POST /support/dateiprobe) et vider une fois le cache des clips (POST /support/cache_leeren).",
     "konfiguration.support.token_gesetzt": "Un token de support est defini.",
     "konfiguration.support.token_fehlt": "Pas encore de token de support.",
     "konfiguration.support.knopf_token": "Creer un nouveau token",
@@ -2149,6 +2153,7 @@ T = {
         "Frigate et des surveillances enregistrées.",
     "unbekannte.name": "Inconnu {nummer}",
     "unbekannte.meta_zeit": " apparitions · {zeit}",
+    "unbekannte.zeit_unbekannt": "heure inconnue",
     "unbekannte.mehr_bilder": "+{n} autres images dans ce groupe",
     "unbekannte.knopf_reaktivieren": "réactiver",
     "unbekannte.attr_name": "Nom (nouveau ou existant)",
@@ -2257,6 +2262,8 @@ T = {
         "Moins de la moitié des images de la séquence étaient lisibles",
     "event.verwurf_grund.clip_fehlt":
         "La séquence n'est plus dans Frigate (rétention expirée ou événement supprimé)",
+    "event.verwurf_grund.cache_verloren":
+        "La séquence manquait deux fois dans le cache local alors qu'elle avait été préparée — aucune analyse",
     "event.pass_zurueck": "&#8592; préc.",
     "event.pass_weiter": "suiv. &#8594;",
     "event.pass_teil": "Fait partie d'un passage",
@@ -2324,13 +2331,8 @@ T = {
     "system.sync.titel": "Synchronisation avec Frigate",
     "system.sync.knopf": "Ouvrir la synchronisation Frigate",
     "system.sync.satz":
-        "La page de synchronisation compare les deux bibliothèques "
-        "personne par personne, soumet chaque candidat à la même "
-        "vérification préalable que Frigate, n'envoie que ce que vous "
-        "cochez, et importe ce que seul Frigate possède.",
-    "system.sync.fehlt":
-        "pas encore disponible — nécessite un Frigate joignable et au "
-        "moins un visage de référence",
+        "Ouvrez la synchronisation Frigate pour comparer les bibliothèques et "
+        "vérifier les transferts. Cette page n'effectue pas la comparaison.",
     "system.qc.titel": "Rapport qualité",
     "system.qc.stand": "(au {stand}, {tage} jours)",
     "system.qc.kopf_gesicht": "avec visage",
@@ -3354,6 +3356,8 @@ T = {
     "antwort.setup_gespeichert": "Configuration enregistrée — redémarrage",
     "antwort.kameras_gespeichert":
         "{n} caméras enregistrées — redémarrage",
+    "antwort.prio_ungueltig":
+        "caméra « {kamera} » : priorité invalide « {wert} » (autorisé : {erlaubt})",
     "antwort.name_ungueltig":
         "nom de personne invalide (2-40 lettres, chiffres, espace, -)",
     "antwort.anker_unbekannt": "point d'ancrage inconnu",
@@ -3620,15 +3624,6 @@ connues.</p>""",
     "setupwiz.fertig.wieder_satz":
         "Vous pouvez relancer cet assistant à tout moment depuis "
         "<b>Système → Relancer l'assistant d'installation</b>.",
-    "system.sync.diagnose_satz":
-        'Si une synchronisation signale un problème, <a '
-        'href="/sync_diagnose" target="_blank">ouvrez le diagnostic</a> '
-        "— il rassemble le rapport suslik et le journal Frigate, prêts "
-        "à coller dans un ticket.",
-    "system.sync.diagnose_kurz":
-        '<a href="/sync_diagnose" target="_blank">ouvrez le '
-        "diagnostic</a> — rassemble le rapport suslik et le journal "
-        "Frigate.",
     "vision.kopf.einleitung":
         "Une troisième voie de reconnaissance à côté du visage et du "
         "corps : un modèle de vision-langage regarde une image d'un "
@@ -4103,6 +4098,8 @@ connues.</p>""",
     "systemstat.rueckstau.stand": "Mis en file · en attente · en cours",
     "systemstat.rueckstau.stand_wert": "{gesamt} · {schlange} · {arbeit}",
     "systemstat.rueckstau.fenster": "Fenêtre rétrospective",
+    "systemstat.rueckstau.stufe": "Retard {stufe}",
+    "systemstat.rueckstau.stufe_wert": "{n} · plus ancien {alter} s",
     "systemstat.kachel.live": "Moteur en direct",
     "systemstat.live.waechter": "Veilleurs actifs",
     "systemstat.live.supervisor": "Superviseur",
@@ -4216,6 +4213,13 @@ connues.</p>""",
     "gpu.engpass.rechenzeit": "Ici, c'est le temps de calcul qui limite, pas la mémoire.",
     "gpu.noch_moeglich": "De la place pour {n} fil(s) de calcul de plus.",
     "gpu.passt_nicht": "Cela ne tient pas. Réduisez les veilleurs ou les fils de calcul, sinon le système atteint la limite mémoire et le noyau décide quel processus meurt.",
+    "gpu.plan.passt": "Cela tient : la carte supporte les fils de calcul prévus.",
+    "gpu.plan.warten": "Le worker attend de la mémoire de la carte : quelque chose hors de ce service l'occupe, ou le moteur en direct est en train de démarrer.",
+    "gpu.plan.minimal": "La reconnaissance tourne en mode minimal (1 fil de calcul, 1 géométrie) : à côté des veilleurs directs, la carte ne supporte pas plus.",
+    "gpu.plan.reduziert": "Des veilleurs directs ont été arrêtés pour que la reconnaissance continue ; le worker tourne en mode minimal (1 fil de calcul, 1 géométrie).",
+    "gpu.plan.aus": "Le worker de reconnaissance n'est pas démarré : la carte ne supporte pas un seul fil de calcul en ce moment.",
+    "gpu.plan.aus_messung": "Le worker de reconnaissance n'est pas démarré : la mémoire libre de la carte n'a pas pu être mesurée. Le journal en indique la raison.",
+    "gpu.plan.unmessbar": "Mémoire de la carte non mesurable : le worker fonctionne avec un fil de calcul et une limite fixe, sans vérification de la mémoire libre. Le journal en indique la raison.",
     "gpu.regler.titel": "Fils de calcul",
     "gpu.regler.erklaerung": "Combien d'événements le worker d'analyse peut calculer en même temps. Le travail de fond — moisson, collecte et tout ce sur quoi vous cliquez — tourne à côté sur son propre fil et ne prend plus la place d'un événement.",
     "gpu.regler.legacy": "Le mode hérité sans worker d'analyse (worker: false) est activé, et ce réglage n'y commande rien : chaque événement est calculé dans son propre processus, l'un après l'autre.",

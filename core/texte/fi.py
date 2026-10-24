@@ -115,6 +115,10 @@ T = {
         "Frigate ei tee tällä streamilla henkilöiden havaitsemista "
         "&mdash; tänne ei voi tulla tapahtumia",
     "kameras.karte.pill_keine_detektion": "ei havaitsemista Frigatessa",
+    "kameras.karte.prio": "prioriteetti",
+    "kameras.prio.low": "matala",
+    "kameras.prio.mid": "keski",
+    "kameras.prio.high": "korkea",
     "kameras.leer.titel": "Frigatesta ei löytynyt kameroita.",
     "kameras.leer.hinweis": "Tarkista, että suslik tavoittaa Frigaten API:n.",
     "kameras.fuss.knopf_speichern": "Tallenna kamerat",
@@ -445,19 +449,21 @@ T = {
     "konfiguration.support.titel": "Etätuen pääsy",
     "konfiguration.support.satz":
         "Vain luku -lataus nimetyistä alueista (lokit, maskattu config, "
-        "kasvot, oppimisajot, kehomateriaali, tilatiedostot) sille, jolla "
+        "kasvot, oppimisajot, kehomateriaali, tilatiedostot, palvelun "
+        "säieluettelo) sille, jolla "
         "on support-token. Kytkin support_zugriff on alla olevassa "
         "taulukossa, oletuksena pois. Jokainen pyyntö kirjataan palvelun "
         "lokiin. Kasvo- ja kehoalueet sisältävät kuvia oikeista ihmisistä "
         "— luovuta token harkiten. Ilman TLS:ää tämän palvelun edessä "
-        "token kulkee selkokielisenä. Token sallii myös viisi toimintoa: "
+        "token kulkee selkokielisenä. Token sallii myös kuusi toimintoa: "
         "tämän palvelun uudelleenkäynnistyksen etänä (POST /support/restart), "
         "tapahtumien ajamisen uudelleen tunnistuksen läpi "
         "(POST /support/einspielen), hienomittauksen kytkemisen päälle tai "
         "pois (POST /support/feinmessung), debug-lokin kytkemisen päälle "
-        "tai pois ilman uudelleenkäynnistystä (POST /support/debug) ja "
+        "tai pois ilman uudelleenkäynnistystä (POST /support/debug), "
         "pienten tiedosto-operaatioiden mittaamisen palvelussa ja uudessa "
-        "prosessissa (POST /support/dateiprobe).",
+        "prosessissa (POST /support/dateiprobe) ja leikevälimuistin "
+        "tyhjentämisen kerran (POST /support/cache_leeren).",
     "konfiguration.support.token_gesetzt": "Support-token on asetettu.",
     "konfiguration.support.token_fehlt": "Ei vielä support-tokenia.",
     "konfiguration.support.knopf_token": "Luo uusi token",
@@ -2271,6 +2277,7 @@ T = {
         "vahdeista.",
     "unbekannte.name": "Tuntematon {nummer}",
     "unbekannte.meta_zeit": " esiintymistä · {zeit}",
+    "unbekannte.zeit_unbekannt": "aika tuntematon",
     "unbekannte.mehr_bilder": "+{n} kuvaa lisää tässä ryhmässä",
     "unbekannte.knopf_reaktivieren": "aktivoi uudelleen",
     "unbekannte.attr_name": "Nimi (uusi tai olemassa oleva)",
@@ -2374,6 +2381,8 @@ T = {
     "event.verwurf_grund.clip_fehlt":
         "Leike ei ole enää Frigatessa (säilytysaika umpeutui tai "
         "tapahtuma poistettiin)",
+    "event.verwurf_grund.cache_verloren":
+        "Leike puuttui kahdesti paikallisesta välimuistista, vaikka se oli valmisteltu — analyysiä ei tehty",
     "event.pass_zurueck": "&#8592; edellinen",
     "event.pass_weiter": "seuraava &#8594;",
     "event.pass_teil": "Osa käyntiä",
@@ -2434,13 +2443,8 @@ T = {
     "system.sync.titel": "Täsmäytys Frigaten kanssa",
     "system.sync.knopf": "Avaa Frigate-täsmäytys",
     "system.sync.satz":
-        "Täsmäytyssivu vertaa molempia kirjastoja luokka luokalta, "
-        "esitarkistaa jokaisen ehdokkaan samalla tavalla kuin Frigate, "
-        "lähettää vain sen, minkä merkitset, ja tuo sen, mikä on vain "
-        "Frigatella.",
-    "system.sync.fehlt":
-        "ei vielä käytettävissä — vaatii tavoitettavan Frigaten ja "
-        "vähintään yhdet viitekasvot",
+        "Avaa Frigate-täsmäytys, kun haluat verrata kirjastoja ja tarkistaa "
+        "siirrot. Tämä sivu ei suorita vertailua.",
     "system.qc.titel": "Laaturaportti",
     "system.qc.stand": "(tilanne {stand}, {tage} päivää)",
     "system.qc.kopf_gesicht": "kasvot mukana",
@@ -3374,6 +3378,8 @@ T = {
         "Asennus tallennettu — palvelu käynnistyy uudelleen",
     "antwort.kameras_gespeichert":
         "{n} kameraa tallennettu — palvelu käynnistyy uudelleen",
+    "antwort.prio_ungueltig":
+        "kamera '{kamera}': virheellinen prioriteetti '{wert}' (sallitut: {erlaubt})",
     "antwort.name_ungueltig":
         "virheellinen henkilön nimi (2–40 kirjainta, numeroa, väli, -)",
     "antwort.anker_unbekannt": "tuntematon ankkuri",
@@ -3493,13 +3499,6 @@ T = {
     "setupwiz.fertig.wieder_satz":
         "Voit ajaa tämän ohjatun asennuksen uudelleen milloin tahansa "
         "kohdasta <b>Järjestelmä → Aja ohjattu asennus uudelleen</b>.",
-    "system.sync.diagnose_satz":
-        'Jos täsmäytys ilmoittaa ongelmasta, <a href="/sync_diagnose" '
-        'target="_blank">avaa diagnoosi</a> — se kokoaa suslikin raportin '
-        'ja Frigaten lokin, valmiina kopioitavaksi issueen.',
-    "system.sync.diagnose_kurz":
-        '<a href="/sync_diagnose" target="_blank">avaa diagnoosi</a> — '
-        'kokoaa suslikin raportin ja Frigaten lokin.',
     "vision.kopf.einleitung":
         "Kolmas tunnistustie kasvojen ja kehon rinnalla: "
         "Vision-kielimalli katsoo yhtä käynnin kuvaa ja sanoo, kuka "
@@ -3898,6 +3897,8 @@ T = {
     "systemstat.rueckstau.stand": "Jonoon otettu · jonossa · työn alla",
     "systemstat.rueckstau.stand_wert": "{gesamt} · {schlange} · {arbeit}",
     "systemstat.rueckstau.fenster": "Takautuva ikkuna",
+    "systemstat.rueckstau.stufe": "Ruuhka {stufe}",
+    "systemstat.rueckstau.stufe_wert": "{n} · vanhin {alter} s",
     "systemstat.kachel.live": "Live-engine",
     "systemstat.live.waechter": "Vahteja aktiivisena",
     "systemstat.live.supervisor": "Supervisor",
@@ -4046,6 +4047,23 @@ T = {
         "Tämä ei mahdu. Vähennä vahteja tai laskentasäikeitä, muuten "
         "järjestelmä ajaa muistirajaan ja kernel päättää, mikä prosessi "
         "kuolee.",
+    "gpu.plan.passt": "Mahtuu: kortti kantaa suunnitellut laskentasäikeet.",
+    "gpu.plan.warten":
+        "Worker odottaa kortin muistia: jokin tämän palvelun ulkopuolella "
+        "varaa sen, tai live-moottori on juuri käynnistymässä.",
+    "gpu.plan.minimal":
+        "Tunnistus toimii minimitilassa (1 laskentasäie, 1 geometria): "
+        "live-vahtien rinnalla kortti ei kanna enempää.",
+    "gpu.plan.reduziert":
+        "Live-vahteja kytkettiin pois, jotta tunnistus jatkuu; worker toimii "
+        "minimitilassa (1 laskentasäie, 1 geometria).",
+    "gpu.plan.aus":
+        "Tunnistuksen workeria ei ole käynnistetty: kortti ei juuri nyt kanna "
+        "yhtäkään laskentasäiettä.",
+    "gpu.plan.aus_messung":
+        "Tunnistuksen workeria ei ole käynnistetty: kortin vapaata muistia ei "
+        "voitu mitata. Loki kertoo syyn.",
+    "gpu.plan.unmessbar": "Kortin muistia ei voi mitata: worker toimii yhdellä laskentasäikeellä ja kiinteällä ylärajalla ilman vapaan muistin tarkistusta. Loki kertoo syyn.",
     "gpu.regler.titel": "Laskentasäikeet",
     "gpu.regler.erklaerung":
         "Kuinka monta tapahtumaa analyysiworker saa laskea samaan aikaan. "

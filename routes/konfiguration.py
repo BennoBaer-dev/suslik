@@ -263,7 +263,7 @@ def render(cfg, whitelist, auto_hinweis, kette=None, kette_lage=None, store=None
                       f"<td>{html.escape(erkl)}{grenzen}{auto}</td></tr>")
     nur_lesen = []
     for key in ("trigger", "ov_device", "backend",
-                "lookback_h", "clip_delay", "web_port"):
+                "lookback_h", "web_port"):
         if key in cfg and key not in whitelist:
             nur_lesen.append(f"<tr><td>{key}</td><td colspan=2>"
                              f"{html.escape(json.dumps(anzeigewert(key), ensure_ascii=False))}</td></tr>")

@@ -100,6 +100,10 @@ T = {
         "Frigate no ejecuta detección de personas en este stream &mdash; "
         "aquí no pueden llegar eventos",
     "kameras.karte.pill_keine_detektion": "sin detección en Frigate",
+    "kameras.karte.prio": "prioridad",
+    "kameras.prio.low": "baja",
+    "kameras.prio.mid": "media",
+    "kameras.prio.high": "alta",
     "kameras.leer.titel": "No se han encontrado cámaras en Frigate.",
     "kameras.leer.hinweis":
         "Comprueba que suslik puede acceder a la API de Frigate.",
@@ -430,7 +434,7 @@ T = {
     "konfiguration.neustart.frage": "¿Reiniciar el servicio ahora? El procesamiento se pausa unos segundos.",
     "antwort.neustart": "Reiniciando — esta página vuelve a responder en unos segundos.",
     "konfiguration.support.titel": "Acceso remoto de soporte",
-    "konfiguration.support.satz": "Descarga de solo lectura de areas con nombre (logs, config enmascarada, caras, corridas de aprendizaje, material corporal, archivos de estado) para quien tenga el token de soporte. El interruptor support_zugriff esta en la tabla de abajo, apagado por defecto. Cada peticion queda en el log del servicio. Las areas de caras y cuerpo contienen imagenes de personas reales — entrega el token con cuidado. Sin TLS delante de este servicio el token viaja en texto plano. El token tambien permite cinco acciones: reiniciar este servicio a distancia (POST /support/restart), volver a pasar eventos por el reconocimiento (POST /support/einspielen), encender o apagar la medicion fina (POST /support/feinmessung), encender o apagar el log de depuracion sin reiniciar (POST /support/debug) y medir pequenas operaciones de archivos en el servicio y en un proceso nuevo (POST /support/dateiprobe).",
+    "konfiguration.support.satz": "Descarga de solo lectura de areas con nombre (logs, config enmascarada, caras, corridas de aprendizaje, material corporal, archivos de estado, lista de hilos del servicio) para quien tenga el token de soporte. El interruptor support_zugriff esta en la tabla de abajo, apagado por defecto. Cada peticion queda en el log del servicio. Las areas de caras y cuerpo contienen imagenes de personas reales — entrega el token con cuidado. Sin TLS delante de este servicio el token viaja en texto plano. El token tambien permite seis acciones: reiniciar este servicio a distancia (POST /support/restart), volver a pasar eventos por el reconocimiento (POST /support/einspielen), encender o apagar la medicion fina (POST /support/feinmessung), encender o apagar el log de depuracion sin reiniciar (POST /support/debug), medir pequenas operaciones de archivos en el servicio y en un proceso nuevo (POST /support/dateiprobe) y vaciar una vez la cache de clips (POST /support/cache_leeren).",
     "konfiguration.support.token_gesetzt": "Hay un token de soporte establecido.",
     "konfiguration.support.token_fehlt": "Aun no hay token de soporte.",
     "konfiguration.support.knopf_token": "Crear token nuevo",
@@ -2111,6 +2115,7 @@ T = {
         "Frigate y de las vigilancias guardadas.",
     "unbekannte.name": "Persona desconocida {nummer}",
     "unbekannte.meta_zeit": " apariciones · {zeit}",
+    "unbekannte.zeit_unbekannt": "hora desconocida",
     "unbekannte.mehr_bilder": "+{n} imágenes más en este grupo",
     "unbekannte.knopf_reaktivieren": "reactivar",
     "unbekannte.attr_name": "Nombre (nuevo o existente)",
@@ -2216,6 +2221,8 @@ T = {
         "Menos de la mitad de los fotogramas del clip eran legibles",
     "event.verwurf_grund.clip_fehlt":
         "El clip ya no está en Frigate (retención vencida o evento borrado)",
+    "event.verwurf_grund.cache_verloren":
+        "El clip faltó dos veces en la caché local aunque se había preparado — no se analizó",
     "event.pass_zurueck": "&#8592; anterior",
     "event.pass_weiter": "siguiente &#8594;",
     "event.pass_teil": "Parte de un recorrido",
@@ -2281,13 +2288,8 @@ T = {
     "system.sync.titel": "Sincronización con Frigate",
     "system.sync.knopf": "Abrir la sincronización con Frigate",
     "system.sync.satz":
-        "La página de sincronización compara los dos bancos de rostros "
-        "persona por persona, somete cada candidata a la misma "
-        "comprobación previa que hace Frigate, envía solo lo que marques "
-        "e importa lo que solo tiene Frigate.",
-    "system.sync.fehlt":
-        "aún no disponible — necesita un Frigate accesible y al menos un "
-        "rostro de referencia",
+        "Abre la sincronización con Frigate para comparar las bibliotecas y "
+        "revisar las transferencias. Esta página no ejecuta la comparación.",
     "system.qc.titel": "Informe de calidad",
     "system.qc.stand": "(a fecha de {stand}, {tage} días)",
     "system.qc.kopf_gesicht": "con rostro",
@@ -3286,6 +3288,8 @@ T = {
     "antwort.setup_gespeichert":
         "Configuración inicial guardada — reiniciando",
     "antwort.kameras_gespeichert": "{n} cámaras guardadas — reiniciando",
+    "antwort.prio_ungueltig":
+        "cámara «{kamera}»: prioridad no válida «{wert}» (permitido: {erlaubt})",
     "antwort.name_ungueltig":
         "nombre de persona no válido (2-40 letras, dígitos, espacio, -)",
     "antwort.anker_unbekannt": "ancla desconocida",
@@ -3556,14 +3560,6 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "setupwiz.fertig.wieder_satz":
         "Puedes lanzar este asistente otra vez cuando quieras desde "
         "<b>Sistema → Volver a ejecutar el asistente inicial</b>.",
-    "system.sync.diagnose_satz":
-        "Si una sincronización informa de un problema, "
-        '<a href="/sync_diagnose" target="_blank">abre el diagnóstico</a> '
-        "— reúne el informe de suslik y el registro de Frigate, listos "
-        "para copiar en una issue.",
-    "system.sync.diagnose_kurz":
-        '<a href="/sync_diagnose" target="_blank">abre el diagnóstico</a> '
-        "— reúne el informe de suslik y el registro de Frigate.",
     "vision.kopf.einleitung":
         "Una tercera vía de reconocimiento junto al rostro y el cuerpo: un "
         "modelo de visión y lenguaje mira una imagen de un recorrido y "
@@ -4004,6 +4000,8 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "systemstat.rueckstau.stand": "En cola · esperando · en análisis",
     "systemstat.rueckstau.stand_wert": "{gesamt} · {schlange} · {arbeit}",
     "systemstat.rueckstau.fenster": "Ventana hacia atrás",
+    "systemstat.rueckstau.stufe": "Cola {stufe}",
+    "systemstat.rueckstau.stufe_wert": "{n} · más antiguo {alter} s",
     "systemstat.kachel.live": "Motor en directo",
     "systemstat.live.waechter": "Vigilantes activos",
     "systemstat.live.supervisor": "Supervisor",
@@ -4114,6 +4112,13 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "gpu.engpass.rechenzeit": "Aquí el límite es el tiempo de cálculo, no la memoria.",
     "gpu.noch_moeglich": "Espacio para {n} hilo(s) de cálculo más.",
     "gpu.passt_nicht": "Esto no cabe. Reduzca vigilantes o hilos de cálculo; de lo contrario el sistema alcanza el límite de memoria y el núcleo decide qué proceso muere.",
+    "gpu.plan.passt": "Cabe: la tarjeta soporta los hilos de cálculo previstos.",
+    "gpu.plan.warten": "El worker espera memoria de la tarjeta: algo ajeno a este servicio la ocupa, o el motor en vivo está arrancando.",
+    "gpu.plan.minimal": "El reconocimiento funciona en modo mínimo (1 hilo de cálculo, 1 geometría): junto a los vigilantes en vivo, la tarjeta no soporta más.",
+    "gpu.plan.reduziert": "Se desactivaron vigilantes en vivo para que el reconocimiento siga funcionando; el worker funciona en modo mínimo (1 hilo de cálculo, 1 geometría).",
+    "gpu.plan.aus": "El worker de reconocimiento no se ha iniciado: ahora mismo la tarjeta no soporta ni un solo hilo de cálculo.",
+    "gpu.plan.aus_messung": "El worker de reconocimiento no se ha iniciado: no se pudo medir la memoria libre de la tarjeta. El registro indica el motivo.",
+    "gpu.plan.unmessbar": "Memoria de la tarjeta no medible: el worker funciona con un hilo de cálculo y un límite fijo, sin comprobar la memoria libre. El registro indica el motivo.",
     "gpu.regler.titel": "Hilos de cálculo",
     "gpu.regler.erklaerung": "Cuántos eventos puede calcular a la vez el worker de análisis. El trabajo en segundo plano — recolección, recopilación y todo lo que usted pulsa — corre al lado en su propio hilo y ya no ocupa el sitio de un evento.",
     "gpu.regler.legacy": "El modo heredado sin worker de análisis (worker: false) está activado, y allí este ajuste no controla nada: cada evento se calcula en su propio proceso, uno tras otro.",

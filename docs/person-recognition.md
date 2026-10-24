@@ -93,7 +93,10 @@ walk-through, never on a single image.
   apply to both paths).
 - **MQTT**: every hit above the threshold is published on
   `verifyd/person_erkennung` as JSON (`person`, `score`, `stuetzen`,
-  `feuer`, `quelle`) — handy for Home Assistant automations.
+  `feuer`, `quelle`, `ts` = time of the judgment, `start` = start time of
+  the Frigate event) — handy for Home Assistant automations. With a
+  backlog the most recently queued event is analysed first, so messages may
+  arrive out of event order; sort by `start` if the order matters.
 
 ## How it shows up on Today
 

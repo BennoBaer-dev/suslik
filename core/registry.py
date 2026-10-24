@@ -841,12 +841,79 @@ VERWURF_LESBARKEIT = "lesbarkeit_riegel"   # < 50 % der Frames lesbar (E1-Entsch
 #                                            26.07., verifyd: res wird verworfen)
 VERWURF_CLIP_FEHLT = "clip_fehlt"          # Frigate hat den Clip nicht (mehr):
 #                                            404 / Retention / Erzeugung gescheitert
-VERWURF_GRUENDE = (VERWURF_ANALYSE_NONE, VERWURF_LESBARKEIT, VERWURF_CLIP_FEHLT)
+VERWURF_CACHE_VERLOREN = "cache_verloren"  # Bauplan analysen/bauplan_disponent.md, Stufe D3b Punkt 8: der
+#                                            Disponent hatte den Clip bereitgestellt, der Live-Auftrag fand
+#                                            ihn zweimal nicht im lokalen Cache (ein Ruecklauf, dann gebucht)
+VERWURF_GRUENDE = (VERWURF_ANALYSE_NONE, VERWURF_LESBARKEIT, VERWURF_CLIP_FEHLT, VERWURF_CACHE_VERLOREN)
 # Praefix der fuenf Sprachdateien (`event.verwurf_grund.<code>`). Steht HIER,
 # damit Renderer und Gate-Deckung dieselbe Zeichenkette benutzen; im
 # `t()`-Aufruf selbst darf sie nicht als Literal stehen, sonst liest der
 # Deckungs-Scan das halbe Literal als eigenen Schluessel (B3b-Befund).
 VERWURF_TEXT_PRAEFIX = "event.verwurf_grund."
+
+
+# --- Prioritaet je Kamera (Bauplan analysen/bauplan_disponent.md, Stufe D1, 22.10.2026) ----------
+# Der Eigentuemer 22.10.2026 07:08:03 (Befehlsbuch befehle/2026-10-22.md): drei Stufen Low, Mid,
+# High, Werk Mid; 08:01:56 Prioritaet je Kamera. DIE eine Aufzaehlung samt Werkswert: das
+# Kamera-Blatt prueft beide Speicherwege dagegen, die Warteschlange ordnet jedes Ereignis einer
+# Stufe zu (Grenze je Stufe, Rueckstau je Stufe in /health), die Probe e3_59 liest sie von hier.
+PRIO_STUFEN = ("low", "mid", "high")
+PRIO_WERK = "mid"
+
+
+# --- Seiten-Zeitprotokoll (Bauplan analysen/bauplan_seitenzeit.md, Stufe SZ1, 22.10.2026) ---------
+# Der Eigentuemer 22.10.2026 13:20:54 (Befehlsbuch befehle/2026-10-22.md): „Ja, schreib einen kleinen
+# Bauplan Seiten-Zeitprotokoll fuer die naechste Version". DIE eine Liste der Routen, die die Zeile je
+# Aufruf und der Block `web` in /health nennen (core/request_timing.py): genaue Routen und Praefixe fuer
+# Routen mit variablem Teil (der variable Teil faellt weg); alles andere heisst WEB_ROUTE_OTHER, der
+# Abfrageteil fehlt immer. So kommen keine Namen aus Pfaden oder Abfragen ins Log. Grenze: eine neue Route
+# ohne Eintrag hier erscheint als `other`, bis die Liste nachgezogen ist (Stand der Liste: die Zweige von
+# do_GET und do_POST in verifyd.make_handler am 22.10.2026).
+WEB_ROUTES = (
+    "/", "/aehnliche", "/aehnliche_status", "/anlern_wartung_jetzt", "/anlernen", "/anlernen_benennen",
+    "/anwesenheit", "/areas", "/areas_speichern", "/auftritt_lernen", "/auftritt_lernen_undo", "/auftritte",
+    "/backup_voll", "/backup_voll_wiederherstellen", "/benachrichtigung_speichern", "/benachrichtigungen",
+    "/cache_aufraeumen", "/catchup_start", "/config_sichern", "/config_wiederherstellen", "/doc", "/enroll",
+    "/ereignisse", "/erkennung", "/erkennung_live", "/erkennungstest", "/faces", "/fremde", "/frigate",
+    "/gesichter", "/gpu", "/gpu_speichern", "/gt", "/health", "/heute", "/kalibrierung",
+    "/kalibrierung_fuellen", "/kalibrierung_fuellstand", "/kameras", "/kameras/steckbriefe_neu",
+    "/kameras_speichern", "/kette", "/konfig", "/konfiguration", "/lernen", "/lernlauf",
+    "/lernlauf/alte_loeschen", "/lernlauf/anker", "/lernlauf/benenn_pruefung", "/lernlauf/benennen",
+    "/lernlauf/lauf_loeschen", "/lernlauf/sichtung", "/lernlauf/uebernehmen", "/lernlauf/verwerfen",
+    "/lernlauf_abbruch", "/lernlauf_fortsetzen", "/lernlauf_start", "/lernlauf_status", "/live",
+    "/live_alarmbild", "/live_alerts", "/live_kalib_bild", "/live_kalib_leeren", "/live_messung",
+    "/live_schalter", "/live_speichern", "/live_status", "/live_test", "/live_verstecken", "/log",
+    "/log/suslik-logs.tar.gz", "/neustart", "/offen", "/person", "/person/einstellungen",
+    "/person/kontrolle", "/person/modell", "/person/schalter", "/person_loeschen", "/person_umbenennen",
+    "/person_umbenennen/status", "/personlauf", "/personlauf/abnahme", "/personlauf/abnahme_fertig",
+    "/personlauf/bestand", "/personlauf/loeschen", "/personlauf/urteil", "/personlauf_abbruch",
+    "/personlauf_start", "/pruefen", "/qualitaet", "/qualitaet/start", "/qualitaet/status", "/readme",
+    "/readme_gesehen", "/readme_noetig", "/reconcile_status", "/ref_entfernen", "/ref_entfernen_batch",
+    "/ref_pruef_neu", "/review", "/setup", "/setup_speichern", "/sprache_speichern", "/support/cache_leeren",
+    "/support/dateiprobe", "/support/debug", "/support/einspielen", "/support/feinmessung",
+    "/support/restart", "/support_token_neu", "/sync_abwahl", "/sync_auswahl", "/sync_auswahl_start",
+    "/sync_diagnose", "/sync_export", "/sync_import", "/sync_status", "/sync_vorpruefung_status",
+    "/sync_wieder_anbieten", "/system", "/systemstat", "/test_mqtt", "/test_pushover", "/test_telegram",
+    "/unbekannt_benennen", "/unbekannt_besucher", "/unbekannt_merge", "/unbekannt_merge_viele",
+    "/unbekannt_nicht_p", "/unbekannt_nicht_p_auswahl", "/unbekannt_objekt", "/unbekannt_reconcile",
+    "/unbekannt_seite", "/unbekannt_verwerfen", "/unbekannte", "/upload", "/vision", "/vision/galerie",
+    "/vision/galerie/abnahme", "/vision/galerie/vergessen", "/vision/galerie/weg", "/vision/konfig",
+    "/vision/modell_manuell", "/vision/nachanalyse", "/vision/schalter", "/vision/schluessel",
+    "/vision/test", "/vision/urteil", "/vorrat_aufnehmen", "/vorschlaege_neu", "/vorschlag_aufnehmen",
+)
+WEB_ROUTE_PREFIXES = (
+    "/anlern/crops/", "/clip/", "/doc/", "/event/", "/events/", "/hilfe/", "/kalibrierung/",
+    "/lernlauf/crop/", "/lernlauf/satz/", "/lernlauf/vorrat/", "/live/", "/live_bild/",
+    "/live_kalibrierung/", "/pass/", "/person/kontrolle/bild/", "/person/treffer/", "/personlauf/bild/",
+    "/personlauf/fremdbild/", "/static/", "/support/", "/video/", "/vision/galerie/bild/",
+)
+WEB_ROUTE_OTHER = "other"
+# Routen, deren Zeile nur auf DEBUG steht: /health, der Sekundentakt der Live-Seite (/live_status, die
+# Vorschaubilder unter /live_bild/) und die statischen Dateien.
+WEB_DEBUG_ROUTES = ("/health", "/live_status", "/live_bild/", "/static/")
+# Die Methoden, die die Zeile nennt; jedes andere erste Wort der Anfrage heisst WEB_METHOD_OTHER.
+WEB_METHODS = ("GET", "HEAD", "POST")
+WEB_METHOD_OTHER = "OTHER"
 
 
 # --- Support-Zugriff (analysen/support_api.md, 28.08.2026) --------------------------
@@ -879,6 +946,12 @@ SUPPORT_BEREICHE = {
                            "***, including access data inside a value (a "
                            "camera URL leaves as rtsp://***@host/path); "
                            "plain-text values never leave the machine"},
+    # Bauplan analysen/bauplan_fadenliste.md, Stufe FL1 (Eigentuemer 22.10.2026 13:49:37): die Fadenliste des
+    # Dienstprozesses (core/support.thread_list) — nur Code-Stellen, keine Werte von Variablen.
+    "faeden":     {"art": "json",
+                   "text": "the threads of the service process: for each thread the place in the code where it "
+                           "is right now (file, line, function), plus the page requests still running — code "
+                           "locations only, no values of variables"},
     "logs":       {"art": "tar", "wurzel": ("logs",),
                    "text": "current + rotated service logs"},
     # E3d (Bauplan analysen/bauplan_refquelle_einbau.md Stufe E3 Punkt 4, I4,
@@ -920,7 +993,7 @@ SUPPORT_BEREICHE = {
                            "fetches one file or one folder (as tar.gz); "
                            "anything under config/ is served masked only"},
 }
-# DIE FUENF AKTIONS-ENDPUNKTE stehen ABSICHTLICH NICHT in dieser Tabelle: sie
+# DIE SECHS AKTIONS-ENDPUNKTE stehen ABSICHTLICH NICHT in dieser Tabelle: sie
 # holen nichts, also haben sie weder Wurzel noch Groesse, und der Deckungs-
 # Vertrag (Inventar == Handler == QS-Liste, tools/qs.sh) gilt fuer BEREICHE.
 # Sie sind hier trotzdem benannt, damit wer die Support-API liest, sie findet:
@@ -933,6 +1006,10 @@ SUPPORT_BEREICHE = {
 #   POST /support/dateiprobe   — Dateiprobe ({} als Body): dieselben kleinen
 #       Dateioperationen im Dienst und in einem frischen Kindprozess, NFS-Zaehler
 #       des Datenordners, freier Platz; Groessen in SUPPORT_DATEIPROBE unten.
+#   POST /support/cache_leeren — Clip-Cache einmal leeren ({} als Body): loescht im
+#       Hintergrund jede alte .mp4 in clips/, die beim Verzeichnislauf weder
+#       gepinnt noch eingespeist ist; Ergebnis unter der Auftragskennung der
+#       Antwort in state/cache_leeren.json (lesbar ueber /support/data/).
 #   POST /support/einspielen   — Ereignisse (erneut) durch die Erkennung
 #       schicken. Drei Wege, alle mit demselben Torwaechter:
 #         {"event": <id>}                  ein Ereignis der verbundenen Frigate,

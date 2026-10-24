@@ -1189,12 +1189,16 @@ function unbMehr(btn) {
 function kamerasSpeichern(btn) {
   var kameras = {}, i,
       vs = document.querySelectorAll('.kam-verw'),
-      zs = document.querySelectorAll('.kam-zone:checked');
+      zs = document.querySelectorAll('.kam-zone:checked'),
+      ps = document.querySelectorAll('.kam-prio');
   for (i = 0; i < vs.length; i++) {
     kameras[vs[i].dataset.cam] = {verwenden: vs[i].checked, zonen: []};
   }
   for (i = 0; i < zs.length; i++) {
     if (kameras[zs[i].dataset.cam]) kameras[zs[i].dataset.cam].zonen.push(zs[i].value);
+  }
+  for (i = 0; i < ps.length; i++) {                     // Prioritaet je Kamera (Bauplan Disponent D1 Punkt 2)
+    if (kameras[ps[i].dataset.cam]) kameras[ps[i].dataset.cam].prio = ps[i].value;
   }
   var s = document.getElementById('kam-status');
   btn.disabled = true; if (s) s.textContent = TT('js.status.speichern', 'saving …');

@@ -536,8 +536,13 @@ def _sonde_cuda():
         _logbuch.swallowed(_log, _logbuch.WARNING, "returning _fehlt('nicht_lesbar')")
         return _fehlt("nicht_lesbar")
     zeile = (r.stdout or "").strip().splitlines()
-    if r.returncode != 0 or not zeile:
-        return _fehlt("nicht_lesbar")
+    # Bauplan Kartengroesse KG1 Punkt 4: Rueckgabewert, leere Ausgabe und Wandlungsfehler
+    # tragen je einen eigenen `messgrund` wie die Zeitueberschreitung; der Dienst nennt ihn
+    # in der ERROR-Zeile einer unlesbaren Kartengroesse. `grund` bleibt "nicht_lesbar".
+    if r.returncode != 0:
+        return dict(_fehlt("nicht_lesbar"), messgrund=f"returncode {r.returncode}")
+    if not zeile:
+        return dict(_fehlt("nicht_lesbar"), messgrund="empty output")
     teile = [x.strip() for x in zeile[0].split(",")]
     try:
         return {"prozent": float(teile[0]), "grund": None,
@@ -547,7 +552,7 @@ def _sonde_cuda():
                 "speicher_frei_mb": int(float(teile[4]))}
     except Exception:                                        # noqa: BLE001
         _logbuch.swallowed(_log, _logbuch.WARNING, "returning _fehlt('nicht_lesbar')")
-        return _fehlt("nicht_lesbar")
+        return dict(_fehlt("nicht_lesbar"), messgrund="parse error")
 
 
 def prozesse_karte_mb(pids=None):

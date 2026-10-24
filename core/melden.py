@@ -469,7 +469,10 @@ def publish_erkennung(cfg, pub, log, debug, entry):
                           "stufe": _vertrauen.stufe(
                               (entry["ours"].get(p) or {}).get("max"),
                               cfg.get("win_thresh"))}
-                         for p in entry["bestaetigt"]]}, ensure_ascii=False)):
+                         for p in entry["bestaetigt"]],
+            # "start" ADDITIV (Bauplan analysen/bauplan_neueste_zuerst.md, Stufe LZ1 Punkt 4): die Ereigniszeit aus der
+            # Ergebniszeile; "ts" bleibt der Zeitpunkt der Analyse.
+            "start": entry.get("start")}, ensure_ascii=False)):
         debug(f"MQTT {t} -> {entry['eid']} cat={entry['kategorie']} "
               f"persons={entry['bestaetigt'] or '[]'}")
 

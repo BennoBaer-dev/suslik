@@ -140,29 +140,43 @@ def in_den_bestand(data_dir, ids, person, grund):
     """Saetze in den Bestand aufnehmen: je ref_id eine Bindung (person, aktiv wahr) und eine Statuszeile
     referenz ueber core/refquelle; erst werden alle geprueft (Lese-Stufe c), dann wird geschrieben; danach zieht
     das Modul den abgeleiteten Personenordner nach (E4-3). Vor dem gruenen Umzug lehnt das Modul die Zeilen ab (V2).
+    Bauplan analysen/bauplan_katalog_lebenszyklus.md, Stufe LK1: Anfang (Auswahl) und Ende (Uebernahme oder Fehlschlag
+    mit Kennwort) stehen im Journal der Nutzung (refquelle.usage_selection, usage_adoption); eine Ablehnung ist eine
+    refquelle.UsageRefusal, also weiter ein ValueError mit demselben Text.
     -> {"neu": [ref_id...], "schon_da": [ref_id...]}; fehlt ein Satz oder ist er nicht aufnehmbar:
     ValueError, und es ist nichts geschrieben."""
     from core import refquelle as _rq                      # noqa: PLC0415
     cfg = {"data_dir": data_dir}
-    neu, da = [], []
-    for rid in dict.fromkeys(ids):
-        s = _rq.read_set(cfg, rid)
-        if s is None:
-            raise ValueError(f"reference set {rid} does not exist — nothing adopted")
-        if s["fehler"] or s["fingerabdruck"] is None:
-            raise ValueError(f"reference set {rid} is damaged ({', '.join(sorted(s['fehler'])) or 'fingerprint'})"
-                             " — nothing adopted")
-        bindung, status = s["katalog"]["bindung"], s["katalog"]["status"].get("status")
-        if bindung.get("person") == person and bindung.get("aktiv") is True and status == "referenz":
-            da.append(rid)
-            continue
-        if status != "kandidat" or bindung.get("person"):
-            raise ValueError(f"reference set {rid} cannot be adopted (status {status}"
-                             f"{', bound to a person' if bindung.get('person') else ''}) — nothing adopted")
-        neu.append(rid)
-    for rid in neu:
-        _rq.append(cfg, rid, "bindung", {"person": person, "aktiv": True, "grund": grund})
-        _rq.append(cfg, rid, "status", {"status": "referenz", "grund": grund})
+    vorgang = _rq.usage_selection(cfg, ids, __file__)
+    neu, da, fertig, schreiben = [], [], [], False
+    try:
+        for rid in dict.fromkeys(ids):
+            s = _rq.read_set(cfg, rid)
+            if s is None:
+                raise _rq.UsageRefusal(_rq.UsageRefusal.MISSING,
+                                       f"reference set {rid} does not exist — nothing adopted")
+            if s["fehler"] or s["fingerabdruck"] is None:
+                raise _rq.UsageRefusal(_rq.UsageRefusal.DAMAGED, f"reference set {rid} is damaged "
+                                       f"({', '.join(sorted(s['fehler'])) or 'fingerprint'}) — nothing adopted")
+            bindung, status = s["katalog"]["bindung"], s["katalog"]["status"].get("status")
+            if bindung.get("person") == person and bindung.get("aktiv") is True and status == "referenz":
+                da.append(rid)
+                continue
+            if status != "kandidat" or bindung.get("person"):
+                raise _rq.UsageRefusal(_rq.UsageRefusal.NOT_ADOPTABLE, f"reference set {rid} cannot be adopted "
+                                       f"(status {status}{', bound to a person' if bindung.get('person') else ''})"
+                                       " — nothing adopted")
+            neu.append(rid)
+        schreiben = True
+        for rid in neu:
+            _rq.append(cfg, rid, "bindung", {"person": person, "aktiv": True, "grund": grund})
+            _rq.append(cfg, rid, "status", {"status": "referenz", "grund": grund})
+            fertig.append(rid)
+    except Exception as e:
+        _rq.usage_adoption(cfg, vorgang, fertig, da, e.code if isinstance(e, _rq.UsageRefusal) else (
+            _rq.UsageRefusal.WRITE if schreiben else _rq.UsageRefusal.OTHER))
+        raise
+    _rq.usage_adoption(cfg, vorgang, neu, da)
     if neu:                                  # E4-3 (Entscheid 6): der abgeleitete Personenordner zieht nach
         _rq.build_person_folders(cfg, follow=True)
     return {"neu": neu, "schon_da": da}

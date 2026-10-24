@@ -59,6 +59,7 @@ import json
 import mimetypes
 import os
 import re
+import sys
 import tarfile
 import threading
 import time
@@ -66,8 +67,10 @@ import time
 from core.registry import (SUPPORT_BEREICHE, SUPPORT_MASKE_ORDNER,
                            SUPPORT_SECRET_MUSTER, LAUF_ID_RE,
                            endpunkt_anzeige)
+from core.pfade import WURZEL
 from core import logbuch as _logbuch
 from core import refquelle as _refquelle
+from core import request_timing as _request_timing
 _log = _logbuch.logger(__name__)
 # E3d (Bauplan analysen/bauplan_refquelle_einbau.md Stufe E3 Punkt 4, I4): die
 # Auswahlen, die ein tar-Bereich ueber den Registry-Schluessel "auswahl" statt
@@ -425,6 +428,44 @@ def inventar(data_dir, version):
                 e["laeufe"] = []
         aus["bereiche"][code] = e
     return aus
+
+
+# ---------------------------------------------------------------- Fadenliste
+# Bauplan analysen/bauplan_fadenliste.md, Stufe FL1 (Eigentuemer 22.10.2026 13:49:37 „ja"): der JSON-Bereich
+# `faeden` zeigt je Faden des Dienstprozesses die Stelle im Code, dazu die laufenden Seitenaufrufe aus dem
+# Seiten-Zeitprotokoll. Der Stapel laeuft ueber `f_back` und liest nur Dateiname, Zeile und Funktionsname: kein
+# traceback, kein linecache, kein Quelltext, keine lokalen Variablen, kein Oeffnen von Dateien — die Liste soll
+# auch dann antworten, wenn ein Faden an einer haengenden Datei steht. Ehrliche Grenzen: Momentaufnahme; Fadenliste
+# und Frames sind keine gemeinsame atomare Aufnahme; rein native Faeden koennen fehlen; Fadennamen stehen in der
+# Antwort und koennen Ereigniskennungen tragen.
+def thread_list():
+    """Die Fadenliste des Dienstprozesses: je Faden Name, Kennung und Stapel, dazu die anderen laufenden Aufrufe.
+    -> dict (time, pid, threads mit name, ident, stack aus file, line, function innen nach aussen; running_requests)."""
+    threads = threading.enumerate()
+    frames = sys._current_frames()
+    calls = _request_timing.other_running_calls()
+    rows = [{"name": t.name, "ident": t.ident, "stack": _stack_of(frames.pop(t.ident, None))}
+            for t in threads]
+    rows += [{"name": None, "ident": ident, "stack": _stack_of(frames[ident])} for ident in sorted(frames)]
+    return {"time": round(time.time(), 3), "pid": os.getpid(), "threads": rows,
+            "running_requests": [{"method": m, "route": r, "age_s": a} for m, r, a in calls]}
+
+
+def _stack_of(frame):
+    """Der Stapel ab `frame` von innen nach aussen, je Frame nur Datei, Zeile und Funktion.
+    -> Liste von dicts; ohne Frame leer."""
+    stack = []
+    while frame is not None:
+        code = frame.f_code
+        stack.append({"file": _shown_file(code.co_filename), "line": frame.f_lineno, "function": code.co_name})
+        frame = frame.f_back
+    return stack
+
+
+def _shown_file(path):
+    """Ein Dateiname im Projekt relativ zur Projektwurzel, jeder andere unveraendert (reiner Textvergleich).
+    -> str."""
+    return path[len(WURZEL) + 1:] if path.startswith(WURZEL + os.sep) else path
 
 
 def tar_streamen(data_dir, code, wfile, log, lauf_id=None, dbg=None):

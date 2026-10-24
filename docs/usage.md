@@ -14,8 +14,10 @@ learned material and model status), **Vision** (vision detect), **Live**
 class-by-class comparison with Frigate's own face library), **Settings**,
 **Recognition test** and **System**.
 
-Two buttons sit in the top bar next to the sections: **Calibration** (per-camera bars) and
-**Presence** (route `/anwesenheit`) — the day, person by person, in quarter-hour cells. Red =
+Two buttons sit in the top bar next to the sections: **Calibration** (per-camera bars; shown
+in Expert mode only, in Easy mode the page stays reachable at `/kalibrierung` and through each
+camera's **Calibrate** button on the Live page) and **Presence** (route `/anwesenheit`) — the
+day, person by person, in quarter-hour cells. Red =
 that person was confirmed present in that quarter hour (by the event analysis or a live
 watcher, shown once), green = the system was running and confirmed nobody, an empty cell =
 the system was not running or did not look at that slot (no statement, not "absent"). The

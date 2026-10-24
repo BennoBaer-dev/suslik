@@ -208,7 +208,6 @@ HTML_SCHLUESSEL = frozenset({
     "hilfe.faces_lernlauf.satz3", "hilfe.faces_lernlauf.satz4",
     # ---- §8.1-Nachzuegler (Stufe 3): Markup-Prosa der Tranchen B/C ----
     "setupwiz.backend.system_satz", "setupwiz.fertig.wieder_satz",
-    "system.sync.diagnose_satz", "system.sync.diagnose_kurz",
     "vision.kopf.einleitung", "vision.hinweis.modell_satz",
     "vision.hinweis.host_satz", "vision.hinweis.mess_satz",
     "vision.hinweis.kosten_satz", "vision.verb.key_ort",

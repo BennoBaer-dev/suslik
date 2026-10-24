@@ -327,20 +327,25 @@ def auto_default(cfg, log_path, log, *, store_pfad, store_laden, store_schreiben
             store_schreiben(store_datei, store)
             angewendet = True                          # erst NACH dem realen Schreiben (D1)
             cfg.update(info["gesetzt"])                # sofort wirksam, kein Neustart noetig
-            # ENV nachziehen: __init__ hat SUSLIK_CPU_THREADS mit dem alten cfg-Wert 0
-            # NICHT gesetzt (der cpu_threads-Block dort laeuft vor diesem Aufruf); ohne
-            # Nachzug wirkte der Deckel erst nach dem naechsten Neustart.
-            os.environ["SUSLIK_CPU_THREADS"] = str(kerne)
-            # Kappungs-Cache zuruecksetzen (Recheck-Fund): placement_aufloesen laeuft in
-            # load_config VOR diesem Entscheid und kann _ORT_THREADS bereits auf die
-            # Affinitaets-Maske eingefroren haben (2C/4T: 4 statt 2). Der Reset laesst
-            # alle KUENFTIGEN In-Prozess-Sessions den neuen Deckel ziehen; der gelaufene
-            # Placement-Benchmark bleibt unberuehrt. Worker-Subprozesse erben die ENV ohnehin.
-            try:
-                import face_audit as _fa
-                _fa._ORT_THREADS = None
-            except Exception:
-                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
+            # ET1 (Bauplan Erststart-Threads): Umgebung und Thread-Speicher NUR dort,
+            # wo cpu_threads wirklich vorbelegt wird. Von .541 bis .031 lief beides auf
+            # jeder Maschine und machte auf starken Maschinen die Kernzahl zur
+            # ausdruecklichen Vorgabe, ohne dass cpu_threads in der Config stand.
+            if schwach:
+                # ENV nachziehen: __init__ hat SUSLIK_CPU_THREADS mit dem alten cfg-Wert 0
+                # NICHT gesetzt (der cpu_threads-Block dort laeuft vor diesem Aufruf); ohne
+                # Nachzug wirkte der Deckel erst nach dem naechsten Neustart.
+                os.environ["SUSLIK_CPU_THREADS"] = str(kerne)
+                # Kappungs-Cache zuruecksetzen (Recheck-Fund): placement_aufloesen laeuft in
+                # load_config VOR diesem Entscheid und kann _ORT_THREADS bereits auf die
+                # Affinitaets-Maske eingefroren haben (2C/4T: 4 statt 2). Der Reset laesst
+                # alle KUENFTIGEN In-Prozess-Sessions den neuen Deckel ziehen; der gelaufene
+                # Placement-Benchmark bleibt unberuehrt. Worker-Subprozesse erben die ENV ohnehin.
+                try:
+                    import face_audit as _fa
+                    _fa._ORT_THREADS = None
+                except Exception:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             _gesetzt_text = ", ".join(f"{k}={v}" for k, v in
                                       sorted(info["gesetzt"].items()))
             log.info(f"chain defaults set at first start -> {_gesetzt_text}. A fresh "

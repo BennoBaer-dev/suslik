@@ -660,9 +660,10 @@ def _job_ausfuehren(job, antwort_out=None):
     # Branch unten) gewinnen.
     _clipdbg_fr.CLIP_ERZEUGUNG = bool(job.get("clip_erzeugung"))
     _clipdbg_fr.CLIP_ERZEUGUNG_DECKEL_S = job.get("clip_erzeugung_deckel_s")
-    # .292: VOD-Weg-Schalter je Job (Default AN — nur explizites False der
-    # Dienst-Config schaltet ab); wirkt nur im Erzeugungs-Fall (Alt-Events).
-    _clipdbg_fr.CLIP_VOD = job.get("clip_vod") is not False
+    # .292: VOD-Weg-Schalter je Job, wirkt fuer jeden Clip-Zug dieses Jobs.
+    # Bauplan VOD aus, Stufe VA1: ausgelegt ueber core.frames.vod_an, an nur bei
+    # true, Werkseinstellung aus.
+    _clipdbg_fr.CLIP_VOD = _clipdbg_fr.vod_an(job.get("clip_vod"))
     # .509 Clip-Download-Tor (core/frames, Abschnitt „Das Tor"): wie viele
     # Clips gleichzeitig von Frigate gezogen werden duerfen. Der Download
     # passiert HIER, in diesem Subprozess — je Analyse-Platz einer; das Tor

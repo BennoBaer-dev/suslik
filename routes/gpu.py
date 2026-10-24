@@ -348,6 +348,53 @@ def _JS(vorschau_text="", frage="", nicht_erreichbar="", zu_wenig_text="",
             "})();</script>")
 
 
+def _frei_gemessen(straenge):
+    """Der gemessene Freiwert der Karte, wenn er als Messung gilt (Bauplan CUDA-Harmonie, HA2 Punkt 4).
+    -> MiB ab 0, sonst None (kein Block `vram`, kein Schluessel `frei_grund`, Grund gesetzt, keine ganze Zahl).
+
+    Ein Grund im Block heisst „nicht gemessen", auch wenn daneben eine Zahl steht: die Sonde
+    gibt einen aelteren Wert nur zusammen mit einem Grund zurueck (`Service._karte_frei_mb`).
+    Eine 0 ohne Grund ist dagegen eine Messung (die Karte ist voll) und keine fehlende Zahl."""
+    st = straenge or {}
+    vram, wert = st.get("vram"), st.get("frei_gemessen_mb")
+    if (st.get("mass") != "vram" or not isinstance(vram, dict) or "frei_grund" not in vram
+            or vram["frei_grund"] is not None or type(wert) is not int or wert < 0):
+        return None
+    return wert
+
+
+def _plan_urteil(straenge):
+    """Das Speicher-Urteil aus der Planung des Workers (Bauplan CUDA-Harmonie, HA2 Punkt 1), erste passende Zeile gilt.
+    -> (Klasse „ok“ oder „warn“, Text), oder None ohne Planungsblock (`mass == "vram"` und `vram` als dict).
+
+    Die Schluessel stehen WOERTLICH in den `t()`-Aufrufen (Sprach-Deckung des Gates, Modul-Kopf).
+    Kuerzung, Hoechstwert und `unter_formel` gehen bewusst nicht ein (HA2 Punkt 2).
+    Bauplan Kartengroesse KG1b: der Rueckfall bei unmessbarer Karte (`cuda_budget.fallback`) laeuft im
+    Modus „voll“, ist im Block `vram` aber rot, nicht verweigert, Grund nicht_messbar; er bekommt die
+    Warnung `gpu.plan.unmessbar`, nie „passt“. Die Kennung `unmeasurable_card` steht nicht in /health."""
+    st = straenge or {}
+    vram = st.get("vram")
+    if st.get("mass") != "vram" or not isinstance(vram, dict):
+        return None
+    modus = st.get("modus")
+    if modus == "aus" and vram.get("frei_grund") is not None:
+        return "warn", t("gpu.plan.aus_messung")
+    if modus == "aus":
+        return "warn", t("gpu.plan.aus")
+    if modus == "warten":
+        return "warn", t("gpu.plan.warten")
+    if modus == "minimal":
+        return "warn", t("gpu.plan.minimal")
+    if modus == "reduziert":
+        return "warn", t("gpu.plan.reduziert")
+    if (vram.get("zustand") == "rot" and not vram.get("verweigert")
+            and vram.get("grund") == "nicht_messbar"):
+        return "warn", t("gpu.plan.unmessbar")
+    if modus != "voll" and (vram.get("verweigert") or vram.get("zustand") == "rot"):
+        return "warn", t("gpu.plan.aus")
+    return "ok", t("gpu.plan.passt")
+
+
 def seite(gpu, n_worker, n_waechter, vorschlag, kapazitaet_jetzt, auto,
           belegt=0, npu=None, gpu_eigen=None, ram=None, cpu=None, verlauf=None,
           klassen=None, straenge=None, mess_n=None, legacy=False):
@@ -446,9 +493,14 @@ def seite(gpu, n_worker, n_waechter, vorschlag, kapazitaet_jetzt, auto,
     # ein beschriftetes „Anteil nicht zuordenbar" — und alles Belegte steht in
     # EINEM Segment. Eine 0 daneben waere die luegende Diagnose, die .535
     # ueberall abstellt.
+    #
+    # HA2 (Bauplan CUDA-Harmonie, Punkt 4): OB EIN FREIWERT GEMESSEN IST, SAGT SEINE
+    # HERKUNFT, nicht seine Groesse. Bis hier fiel eine gueltig gemessene 0 (Karte
+    # voll) durch `> 0` in die Richtwert-Leiste, als waere nichts gemessen; ein
+    # aelterer Wert mit Fehlergrund galt dagegen als Messung. `_frei_gemessen`.
     _stv = straenge if (straenge or {}).get("mass") == "vram" else None
-    _gem_frei = int((_stv or {}).get("frei_gemessen_mb") or 0)
-    if _stv and _gem_frei > 0:
+    _gem_frei = _frei_gemessen(_stv)
+    if _gem_frei is not None:
         res = int(_stv.get("reserve_mb") or 0)
         # Die Schluessel stehen WOERTLICH da (Sprach-Deckung des Gates, s. u.).
         _q_res = (t("gpu.q.config") if str(_stv.get("reserve_quelle") or "") == "config"
@@ -546,7 +598,18 @@ def seite(gpu, n_worker, n_waechter, vorschlag, kapazitaet_jetzt, auto,
         f'{html.escape(t("gpu.rechen.median"))} &nbsp; '
         f'<span class="lg gh"></span>{html.escape(t("gpu.rechen.bis"))} {hoch:.0%}</p>')
 
-    if not b["passt"]:
+    # HA2 (Bauplan CUDA-Harmonie, Punkt 1 bis 3): LIEGT EIN PLANUNGSBLOCK VOR,
+    # URTEILT DIE PLANUNG DES WORKERS, nicht die Anker-Formel einer fremden
+    # Referenzkarte. Eine Planung, die verweigert, wartet oder im Minimalmodus
+    # laeuft, stand sonst als „passt“ da. Der Engpass-Satz der Anker-Formel
+    # entfaellt dort; nur neben „passt“ steht die Rechenzeit-Zeile, wenn die
+    # geschaetzte Rechenzeit der Waechter 100 % erreicht (neben einem roten oder
+    # gelben Speicherurteil stuende sie im Widerspruch). Ohne Block bleibt alles
+    # wie vor HA2.
+    _plan = _plan_urteil(straenge)
+    if _plan is not None and _plan[0] == "warn":
+        urteil = f'<p class="warn">{html.escape(_plan[1])}</p>'
+    elif _plan is None and not b["passt"]:
         urteil = f'<p class="warn">{html.escape(t("gpu.passt_nicht"))}</p>'
     else:
         # .535 (g1): WIEVIEL NOCH GEHT, SAGT DIE LEITER — nicht die Anker-Formel.
@@ -559,10 +622,15 @@ def seite(gpu, n_worker, n_waechter, vorschlag, kapazitaet_jetzt, auto,
             moeglich = max(0, int(_stv["n"]) - int(n_worker or 0))
         else:
             moeglich = _gb.worker_noch_moeglich(gesamt, n_waechter, n_worker)
-        eng = (t("gpu.engpass.speicher") if b["engpass"] == "speicher"
-               else t("gpu.engpass.rechenzeit"))
+        if _plan is not None:
+            eng = _plan[1]
+        else:
+            eng = (t("gpu.engpass.speicher") if b["engpass"] == "speicher"
+                   else t("gpu.engpass.rechenzeit"))
         urteil = (f'<p class="ok">{html.escape(eng)} '
                   f'{html.escape(t("gpu.noch_moeglich", n=moeglich))}</p>')
+        if _plan is not None and b["rechen_median"] >= 1.0:
+            urteil += f'<p class="warn">{html.escape(t("gpu.engpass.rechenzeit"))}</p>'
 
     # .534 (B10): auf Karten-Backends kommt die Platzzahl aus der Leiter. Dann
     # steht hier deren Aussage — und die Browser-Vorschau bekommt BEWUSST keine

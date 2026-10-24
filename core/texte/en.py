@@ -101,6 +101,10 @@ T = {
         "Frigate runs no person detection on this stream &mdash; no events "
         "can arrive here",
     "kameras.karte.pill_keine_detektion": "no detection in Frigate",
+    "kameras.karte.prio": "priority",
+    "kameras.prio.low": "Low",
+    "kameras.prio.mid": "Mid",
+    "kameras.prio.high": "High",
     "kameras.leer.titel": "No cameras found in Frigate.",
     "kameras.leer.hinweis": "Check that suslik can reach the Frigate API.",
     "kameras.fuss.knopf_speichern": "Save cameras",
@@ -456,7 +460,7 @@ T = {
     "konfiguration.neustart.frage": "Restart the service now? Processing pauses for a few seconds.",
     "antwort.neustart": "Restarting — this page answers again in a few seconds.",
     "konfiguration.support.titel": "Remote support access",
-    "konfiguration.support.satz": "Read-only download of named areas (logs, masked config, faces, learning runs, body material, state files) for whoever holds the support token. The on/off switch support_zugriff sits in the table below, default off. Every request is written to the service log. The face and body areas contain pictures of real people — hand the token out with care. Without TLS in front of this service the token travels in plain text. The token also allows five actions: restarting this service remotely (POST /support/restart), sending events through the recognition again (POST /support/einspielen), switching the fine measurement on or off (POST /support/feinmessung), switching debug logging on or off without a restart (POST /support/debug) and timing small file operations in the service and in a fresh process (POST /support/dateiprobe).",
+    "konfiguration.support.satz": "Read-only download of named areas (logs, masked config, faces, learning runs, body material, state files, thread list of the service) for whoever holds the support token. The on/off switch support_zugriff sits in the table below, default off. Every request is written to the service log. The face and body areas contain pictures of real people — hand the token out with care. Without TLS in front of this service the token travels in plain text. The token also allows six actions: restarting this service remotely (POST /support/restart), sending events through the recognition again (POST /support/einspielen), switching the fine measurement on or off (POST /support/feinmessung), switching debug logging on or off without a restart (POST /support/debug), timing small file operations in the service and in a fresh process (POST /support/dateiprobe) and emptying the clip cache once (POST /support/cache_leeren).",
     "konfiguration.support.token_gesetzt": "A support token is set.",
     "konfiguration.support.token_fehlt": "No support token yet.",
     "konfiguration.support.knopf_token": "Create new token",
@@ -2159,6 +2163,7 @@ T = {
         "Tiles come from Frigate's camera list and saved watchers only.",
     "unbekannte.name": "Unknown {nummer}",
     "unbekannte.meta_zeit": " appearances · {zeit}",
+    "unbekannte.zeit_unbekannt": "time unknown",
     "unbekannte.mehr_bilder": "+{n} more pictures in this group",
     "unbekannte.knopf_reaktivieren": "reactivate",
     "unbekannte.attr_name": "Name (new or existing)",
@@ -2257,6 +2262,8 @@ T = {
         "fewer than half the frames of the clip were readable",
     "event.verwurf_grund.clip_fehlt":
         "the clip is no longer in Frigate (retention or deleted event)",
+    "event.verwurf_grund.cache_verloren":
+        "the clip was missing from the local cache twice although it had been provided — no analysis ran",
     "event.pass_zurueck": "&#8592; prev",
     "event.pass_weiter": "next &#8594;",
     "event.pass_teil": "Part of a pass",
@@ -2328,12 +2335,8 @@ T = {
     "system.sync.titel": "Sync with Frigate",
     "system.sync.knopf": "Open Frigate sync",
     "system.sync.satz":
-        "The sync page compares both libraries class by class, pre-checks "
-        "every candidate the way Frigate does, sends only what you tick, "
-        "and imports what only Frigate has.",
-    "system.sync.fehlt":
-        "not available yet — needs a reachable Frigate and at least one "
-        "reference face",
+        "Open Frigate sync to compare the libraries and review transfers. This "
+        "page does not run the comparison.",
     "system.qc.titel": "QC report",
     "system.qc.stand": "(as of {stand}, {tage} days)",
     "system.qc.kopf_gesicht": "with face",
@@ -3271,6 +3274,8 @@ T = {
     "antwort.kameras_fehlen": "Frigate cameras not available: {fehler}",
     "antwort.setup_gespeichert": "Setup saved — restarting",
     "antwort.kameras_gespeichert": "{n} cameras saved — restarting",
+    "antwort.prio_ungueltig":
+        "camera '{kamera}': invalid priority '{wert}' (allowed: {erlaubt})",
     "antwort.name_ungueltig":
         "invalid person name (2-40 letters, digits, space, -)",
     "antwort.anker_unbekannt": "unknown anchor",
@@ -3512,14 +3517,6 @@ between.</p>""",
     "setupwiz.fertig.wieder_satz":
         "You can re-run this wizard any time from <b>System → Re-run "
         "setup wizard</b>.",
-    # routes/system.py Sync-Karte (Happy-Path + Fallback-Karte).
-    "system.sync.diagnose_satz":
-        'If a sync reports a problem, <a href="/sync_diagnose" '
-        'target="_blank">open the diagnosis</a> — it bundles the suslik '
-        "report and the Frigate log, ready to copy into an issue.",
-    "system.sync.diagnose_kurz":
-        '<a href="/sync_diagnose" target="_blank">open the diagnosis</a> '
-        "— bundles the suslik report and the Frigate log.",
     # routes/vision.py Einleitungs-Absatz.
     "vision.kopf.einleitung":
         "A third recognition path next to face and body: a vision language "
@@ -3995,6 +3992,8 @@ between.</p>""",
     "systemstat.rueckstau.stand": "Queued · waiting · running",
     "systemstat.rueckstau.stand_wert": "{gesamt} · {schlange} · {arbeit}",
     "systemstat.rueckstau.fenster": "Look-back window",
+    "systemstat.rueckstau.stufe": "Backlog {stufe}",
+    "systemstat.rueckstau.stufe_wert": "{n} · oldest {alter} s",
     "systemstat.kachel.live": "Live engine",
     "systemstat.live.waechter": "Watchers active",
     "systemstat.live.supervisor": "Supervisor",
@@ -4101,6 +4100,13 @@ between.</p>""",
     "gpu.engpass.rechenzeit": 'Compute time is what limits you here, not memory.',
     "gpu.noch_moeglich": 'Room for {n} more compute thread(s).',
     "gpu.passt_nicht": 'This does not fit. Reduce watchers or compute threads, otherwise the system runs into the memory limit and the kernel decides which process dies.',
+    "gpu.plan.passt": "Fits: the card carries the planned compute threads.",
+    "gpu.plan.warten": "The worker is waiting for card memory: something outside this service holds it, or the live engine is just starting.",
+    "gpu.plan.minimal": "Recognition runs in minimum mode (1 compute thread, 1 geometry): the card does not carry more next to the live watchers.",
+    "gpu.plan.reduziert": "Live watchers were switched off to keep recognition running; the worker runs in minimum mode (1 compute thread, 1 geometry).",
+    "gpu.plan.aus": "The recognition worker is not started: the card does not carry one compute thread right now.",
+    "gpu.plan.aus_messung": "The recognition worker is not started: the card's free memory could not be measured. The log names the reason.",
+    "gpu.plan.unmessbar": "Card memory not measurable: the worker runs one compute thread with a fixed cap and no free-memory check. The log names the reason.",
     "gpu.regler.titel": 'Compute threads',
     "gpu.regler.erklaerung": "How many events the analysis worker may compute at the same time. Background work — harvesting, collecting and anything you click on — runs beside them on its own thread and no longer takes an event's place.",
     "gpu.regler.legacy": 'Legacy mode without the analysis worker (worker: false) is switched on, and there this setting steers nothing: each event is computed in its own process, one after another.',

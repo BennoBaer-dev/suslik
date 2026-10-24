@@ -12,7 +12,33 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.030"   # 0.1.1.030: Eigentuemer 19.10.2026 17:21:56 (Befehlsbuch): "Commit L2, D1b und S1, Nummer 0.1.1.030".
+STAND = "0.1.1.037"   # 0.1.1.037: Eigentuemer 24.10.2026 09:23:49 (Befehlsbuch): "Wir machen eine saubere Version,
+                      # erhoehen auf einen Version, damit wir das mit dem bestehenden vergleichen koennen." Inhalt
+                      # wie 0.1.1.036 (nie veroeffentlicht, Lauf 20261024_002352 in Stufe 5 rot: intel Test 1 Stehend-
+                      # Regel), CHANGELOG mit dem Buendel-Satz; Box unveraendert, nur STAND geht hoch.
+                      # Davor 0.1.1.036: Eigentuemer 24.10.2026 00:20:55 (Befehlsbuch): "Ja, What's-new fuer 0.1.1.036 so
+                      # uebernehmen (Box unveraendert, CHANGELOG wie im Entwurf)". Box unveraendert: nur STAND geht hoch;
+                      # neu im Code: PK1, PK1b, PK3, PK1c, LK1, PK2 (Katalog-Fortschreibung, Systemseite, Vorwaermen,
+                      # Nutzungsjournal). Entwurf analysen/whatsnew_0_1_1_036_entwurf.md.
+                      # Davor 0.1.1.035: Eigentuemer 23.10.2026 10:58:14 (Befehlsbuch): "Whatsnew bleibt wie bei der vor ersinne"
+                      # (Lesart der Session: wie bei der Vorversion), Lauf 10:58:47 ("Lauf starten alle normal"). Box
+                      # unveraendert: nur STAND geht hoch; neu im Code: TW1 (Abfragetakt und Clip-Wartezeit).
+                      # Davor 0.1.1.034: Eigentuemer 22.10.2026 17:08:00 (Befehlsbuch): "Alles klar passt" auf Box-Zeile
+                      # und CHANGELOG-Entwurf (Priorität je Kamera, Stufennamen je Sprache wie in core/texte); Nummer
+                      # auf 20:05:26 ("die Nummer setzen und den Lauf starten,  ja"). Neu im Code: CL1/CL1b, SZ1, FL1, KG1,
+                      # D1, D2, D3a, D3b.
+                      # Davor 0.1.1.033: Eigentuemer 21.10.2026 15:17:31 (Befehlsbuch): "Box-Zeile und CHANGELOG-Entwurf für
+                      # 0.1.1.033 passen so, LIFO-Absatz nach der LZ1-Bilanz gegen den Code prüfen." und 16:28:10 "Danach die
+                      # Nummer 0.1.1.033 mit den freigegebenen Texten setzen und committen." Neuer Box-Eintrag 0.1.1.033
+                      # (eine Zeile, Backlog FIFO auf LIFO); neu im Code sind KE1, VA1, LZ1 und NZ1 mit ihrer Doku.
+                      # Davor 0.1.1.032: Eigentuemer 20.10.2026 21:21:23 (Befehlsbuch): "Ja, der CHANGELOG-Absatz passt, Box
+                      # unverändert. Setz die Nummer 0.1.1.032 und committe sie." Box unveraendert: nur STAND geht hoch;
+                      # neu im Code sind ET1 (ec18aafd), Doku ET2 (de38d63d).
+                      # Davor 0.1.1.031: Eigentuemer 20.10.2026 15:05:24 (Befehlsbuch): "Wenn du mit Bauen bzw. Dem Kette Lauf
+                      # durch bist starte den Lauf normal". Box unveraendert: nur STAND geht hoch; neu im Code sind UZ1
+                      # (b9b461e4), ST1/ST1b (114ead40), VOD1 (d194b594), VOD2 (1ecdf237), VL1 (44fd4d76), HA1 (ef678d53)
+                      # und HA2 (17efa93a).
+                      # Davor 0.1.1.030: Eigentuemer 19.10.2026 17:21:56 (Befehlsbuch): "Commit L2, D1b und S1, Nummer 0.1.1.030".
                       # Box unveraendert: nur STAND geht hoch; 0.1.1.029 wurde nicht veroeffentlicht (Stufe 7 hielt an)
                       # und geht in 0.1.1.030 auf; neu im Code sind D1b (a4953ae2) und die Startlesung S1 (96769de2).
                       # Davor 0.1.1.029: Eigentuemer 19.10.2026 (Befehlsbuch): "wir machen hier aber nur ein comact vorher
@@ -812,6 +838,40 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.1.034 — EIN Eintrag, INHALT VOM INHABER: abgenommen 22.10.2026 17:08:00 (Befehlsbuch: "Alles klar passt"), Anlass
+    # 16:58:29 (Priorisierung je Kamera; der Umbau des Disponenten bleibt ungenannt). Stufennamen je Sprache wie in
+    # core/texte/<sprache>.py (kameras.prio.*); Wortlaut in backups/release_0_1_1_034/whatsnew_changelog_freigegeben.md.
+    ("0.1.1.034", (
+        {"de": "Priorität je Kamera: In den Kamera-Einstellungen bekommt jede Kamera die Stufe niedrig, mittel oder "
+               "hoch; Ereignisse von Kameras mit höherer Stufe werden zuerst abgearbeitet.",
+         "en": "Priority per camera: in the camera settings each camera gets the level Low, Mid or High; events from "
+               "cameras with a higher level are analyzed first.",
+         "es": "Prioridad por cámara: en los ajustes de cámaras, cada cámara recibe la prioridad baja, media o alta; "
+               "los eventos de las cámaras con una prioridad más alta se analizan primero.",
+         "it": "Priorità per telecamera: nelle impostazioni delle telecamere ogni telecamera riceve la priorità bassa, "
+               "media o alta; gli eventi delle telecamere con priorità più alta vengono analizzati per primi.",
+         "fr": "Priorité par caméra : dans les réglages des caméras, chaque caméra reçoit la priorité basse, moyenne "
+               "ou haute ; les événements des caméras de priorité plus élevée sont analysés en premier.",
+         "fi": "Prioriteetti kameroittain: kamera-asetuksissa jokaiselle kameralle valitaan prioriteetti matala, keski "
+               "tai korkea; korkeamman prioriteetin kameroiden tapahtumat analysoidaan ensin."},
+    )),
+    # 0.1.1.033 — EIN Eintrag, INHALT VOM INHABER: Wortlaut DE und EN abgenommen 21.10.2026 15:17:31 (Befehlsbuch:
+    # "Box-Zeile und CHANGELOG-Entwurf für 0.1.1.033 passen so, LIFO-Absatz nach der LZ1-Bilanz gegen den Code prüfen."),
+    # Anlass 10:43:34 (eine kurze Zeile zur Umstellung des Backlogs von FIFO auf LIFO). ES, IT, FR und FI von der
+    # Hauptsession (Opus) nach EN übersetzt; Wortlaut in backups/release3_bau/nummer_033/changelog_entwurf.md.
+    # Nicht betont, ohne Gedankenstrich. Die Eintraege darunter bleiben stehen.
+    ("0.1.1.033", (
+        {"de": "Backlog von FIFO auf LIFO umgestellt: Stauen sich Ereignisse, kommt jetzt das neueste zuerst dran.",
+         "en": "Backlog switched from FIFO to LIFO: when events pile up, the newest one is now analyzed first.",
+         "es": "La cola de eventos pendientes pasa de FIFO a LIFO: cuando se acumulan eventos, ahora se analiza "
+               "primero el más reciente.",
+         "it": "La coda degli eventi in attesa passa da FIFO a LIFO: quando gli eventi si accumulano, ora viene "
+               "analizzato per primo il più recente.",
+         "fr": "La file des événements en attente passe de FIFO à LIFO : quand les événements s'accumulent, le plus "
+               "récent est désormais analysé en premier.",
+         "fi": "Odottavien tapahtumien jono vaihtui FIFO:sta LIFO:on: kun tapahtumia kertyy, uusin analysoidaan nyt "
+               "ensin."},
+    )),
     # ####################################################################
     # 0.1.1.021 — EIN Eintrag, INHALT VOM INHABER, unveraendert von 0.1.1.020 umgehaengt (Eigentuemer 16.10.2026
     # 18:48:02, "Box unveraendert"): Wortlaut DE und EN abgenommen 16.10.2026 13:14:16 (Befehlsbuch:

@@ -32,6 +32,7 @@ import webui
 
 from core import registry as _reg
 from core.sprache import t
+from routes.kameras import PRIO_TEXT
 
 # Balkenreihe: feste Zeichenflaeche, damit alle Kacheln dieselbe Zeitachse
 # haben. 60 Werte = eine Stunde im 60-s-Takt; ein kuerzerer Puffer fuellt von
@@ -145,6 +146,25 @@ def _kachel(titel, block, wert_html, verlauf, zeilen=(), marke=None, unter=""):
             f'{html.escape(titel)}</div>'
             f'<div class="sst-wert">{wert_html}</div>{u}'
             f'{_grund(block, marke)}{verlauf}{"".join(st)}</div>')
+
+
+def _stufen_zeilen(rs):
+    """Die drei Backlogs je Prioritaetsstufe fuer die Kachel Rueckstau (Bauplan analysen/bauplan_disponent.md, D1 Punkt 8).
+    -> Zeilen (Beschriftung, Wert) in der Reihenfolge der Registry; leer ohne Stufenstand (Ringzeilen von vor D1, kein Dienst)"""
+    stufen = rs.get("stufen") if not rs.get("grund") else None
+    if not isinstance(stufen, dict):
+        return ()
+    zeilen = []
+    for stufe in _reg.PRIO_STUFEN:
+        stand = stufen.get(stufe) or {}
+        n = int(stand.get("n") or 0)
+        # Der Schluessel wird zusammengesetzt und nicht als Literal in t() geschrieben (Bauform routes/event.py).
+        schluessel = PRIO_TEXT + stufe
+        name = t(schluessel)
+        zeilen.append((t("systemstat.rueckstau.stufe", stufe=name),
+                       t("systemstat.rueckstau.stufe_wert", n=n, alter=int(stand.get("aeltester_s") or 0))
+                       if n else "0"))
+    return tuple(zeilen)
 
 
 def _ram_belegt(block):
@@ -398,6 +418,7 @@ def render(verlauf, jetzt, takt_s, aufbewahrung_h, live=None):
          t("systemstat.rueckstau.stand_wert", gesamt=int(rs.get("gesamt") or 0),
            schlange=int(rs.get("queue_n") or 0),
            arbeit=int(rs.get("in_arbeit") or 0)) if not rs.get("grund") else ""),
+        *_stufen_zeilen(rs),
         (t("systemstat.rueckstau.fenster"), (f'{rs.get("stunden")} h'
                                              if rs.get("stunden") else ""))))
 

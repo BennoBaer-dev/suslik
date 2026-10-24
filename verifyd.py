@@ -47,6 +47,7 @@ from core import kamerakalib as _kk_ernte             # .514: DAS Sieb (Etappe 3
 from core import cuda_budget as _cuda_budget
 from core import gpubudget as _gpubudget              # E3.2: Speicher-Formel je Karte (Strang-Zahl, Wache-Grenze, Deckel)
 from core import logbuch as _logbuch
+from core import request_timing as _rt                # Bauplan Seiten-Zeitprotokoll SZ1: Zeile je Aufruf
 _log = _logbuch.logger(__name__)
 # Die Config-Schluessel der Log-Schalter (Log-Systematik E9, E11): sie wirken live
 # ohne Neustart ueber core/logbuch.set_switches (config_schreiben, _schalter_spiegeln).
@@ -515,7 +516,106 @@ def _migration_straenge_0535_innen(cfg):
                          f"start")
 
 
-EICH_AUS_MARKE = "migration_eich_aus_0535.json"      # state/, Muster oben
+# Bauplan analysen/bauplan_abfragetakt_wartezeit.md, Stufe TW1 Punkt 2 und 5 (Eigentuemer 23.10.2026 08:49:07, „den
+# Delay auf 5 Sekunden setzen ... und auch den Poll von 20 auf 10 Sekunden zu setzen, auch einmalig"): die alten und
+# die neuen Werkswerte von Abfragetakt und Clip-Wartezeit in Sekunden. Die neuen sind die Werkswerte in load_config,
+# die alten erkennt die einmalige Umstellung (Entscheid E2). Beide Paare sind ungemessen (Bauplan, Grenzen und Risiko).
+TAKT_WERK_ALT = {"poll_interval": 20, "clip_delay": 15}
+TAKT_WERK_NEU = {"poll_interval": 10, "clip_delay": 5}
+TAKT_MIGRATION_MARKE = "migration_takt_wartezeit.json"   # state/, Muster Anker-Umstellung
+
+
+def _migration_takt_wartezeit(cfg):
+    """Stellt Abfragetakt und Clip-Wartezeit beim ersten Start dieser Version einmal von den alten auf die neuen
+    Werkswerte um. -> None; ein Fehler haelt den Start nie auf, der naechste Start entscheidet dann neu.
+
+    Bauform der Anker-Umstellung (_migration_anker_045): Marke unter state/ statt im Store, weil das Zurueckspielen
+    einer Konfig-Sicherung den ganzen Store ersetzt; die Marke haelt auch den Nicht-Eingriff fest. Je Schluessel
+    unabhaengig (Entscheid E2): gilt der alte Werkswert, gleich ob aus YAML, Store oder Werkswert, wird der neue in den
+    Store und die laufende Config geschrieben, mit Audit- und INFO-Zeile; jeder andere Wert bleibt. Steht die Marke,
+    geschieht nichts mehr, auch nach einer Rueckstellung auf die alten Werte. Eine Vollwiederherstellung von vor dieser
+    Version bringt state/ ohne Marke zurueck, dann stellt der naechste Start einmal neu um (Entscheid E4). Ist Store
+    oder Marke unlesbar, bleibt alles, wie es ist, und eine WARNING sagt es."""
+    try:
+        _migration_takt_wartezeit_innen(cfg)
+    except Exception as e:                                     # noqa: BLE001
+        _log.warning(f"poll interval / clip delay migration failed ({type(e).__name__}: {e}) — values "
+                     f"unchanged, retried next start")
+
+
+def _migration_takt_wartezeit_innen(cfg):
+    """Der Rumpf von _migration_takt_wartezeit (dort steht die Begruendung).
+    -> None"""
+    marke = os.path.join(cfg["data_dir"], "state", TAKT_MIGRATION_MARKE)
+    try:
+        with open(marke) as f:
+            json.load(f)
+        return                                   # die Marke steht: nie wieder etwas anfassen
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as e:
+        _log.warning(f"poll interval / clip delay migration skipped: marker state/{TAKT_MIGRATION_MARKE} exists "
+                     f"but is unreadable ({type(e).__name__}: {e}) — values not touched")
+        return
+    store_datei = _config_store_pfad(cfg)
+    vorher, aenderungen = {}, {}
+    with _cfg_lock:
+        store = _lade_config_store(cfg)
+        if not store and os.path.exists(store_datei):
+            _log.warning("poll interval / clip delay migration skipped: config store exists but reads "
+                         "empty/unreadable — not touching it (no marker; retried next start)")
+            return
+        for schluessel, alt in TAKT_WERK_ALT.items():
+            vorher[schluessel] = cfg.get(schluessel)
+            try:
+                trifft = float(vorher[schluessel]) == alt
+            except (TypeError, ValueError):
+                trifft = False                   # kaputter Typ ist kein Werkswert
+            if trifft:
+                aenderungen[schluessel] = TAKT_WERK_NEU[schluessel]
+        if aenderungen:
+            store.update(aenderungen)            # fremde Schluessel und Marker anderer Umstellungen bleiben
+            _store_schreiben(store_datei, store)
+            cfg.update(aenderungen)              # sofort wirksam, kein Neustart noetig
+    info = {"ts": round(time.time(), 1), "version": os.environ.get("SUSLIK_VERSION", "dev"),
+            "vorher": vorher, "nachher": aenderungen, "angewendet": bool(aenderungen),
+            "grund": "one-time factory-value change " + ", ".join(
+                f"{k} {TAKT_WERK_ALT[k]} -> {TAKT_WERK_NEU[k]} s" for k in TAKT_WERK_ALT) + " (2026-10-23)"}
+    if aenderungen:
+        _migration_takt_wartezeit_melden(cfg, info)
+    try:
+        from core import atomar as _at
+        _at.json_schreiben(marke, info)
+    except Exception as e:                                     # noqa: BLE001
+        _log.warning(f"poll interval / clip delay migration: marker not written ({type(e).__name__}: {e}) — "
+                     f"decision is retried next start")
+
+
+def _migration_takt_wartezeit_melden(cfg, info):
+    """Schreibt Audit-Zeile und INFO-Zeile einer vollzogenen Umstellung von Abfragetakt und Clip-Wartezeit.
+    -> None; ein Fehler beim Audit wird als ERROR gemeldet, die Werte stehen dann trotzdem."""
+    aenderungen = info["nachher"]
+    vorher = {k: info["vorher"][k] for k in aenderungen}
+    # AUDIT VOR der Marke (Muster Anker-Umstellung): die Marke ist aus der Audit-Zeile rekonstruierbar.
+    try:
+        audit = os.path.join(cfg["data_dir"], "config", "config_audit.jsonl")
+        os.makedirs(os.path.dirname(audit), exist_ok=True)
+        with open(audit, "a") as f:
+            f.write(json.dumps({"ts": info["ts"], "aenderungen": aenderungen,
+                                "auto": "one-time migration of poll_interval and clip_delay to the new factory "
+                                        "values, change them any time",
+                                "vorher": vorher}, ensure_ascii=False) + "\n")
+            f.flush()
+    except Exception as e:                                     # noqa: BLE001
+        _log.error(f"poll interval / clip delay migration: audit line not written ({type(e).__name__}: {e}) — "
+                   f"values are in place")
+    was = ", ".join(f"{k} {vorher[k]} -> {v} s" for k, v in sorted(aenderungen.items()))
+    _log.info(f"poll interval / clip delay changed ONCE for this install: {was} (old factory values found). "
+              f"Change them in Settings (Expert) any time — they will never be migrated again "
+              f"(marker state/{TAKT_MIGRATION_MARKE})")
+
+
+EICH_AUS_MARKE ="migration_eich_aus_0535.json"      # state/, Muster oben
 EICH_AUS_SCHLUESSEL = ("eich_fenster", "eich_planung")
 EICH_AUS_DATEI = "vram_eichung.json"                 # state/, der Alt-Bestand
 
@@ -1396,7 +1496,10 @@ def load_config(path):
     # freigegeben fuer diese drei Schluessel): die Grenzen der Regel „ähnlich zu P“ stehen EINMAL in
     # core.registry.AEHNLICH_WERK, hier nur gezogen.
     from core.registry import AEHNLICH_WERK as _aw          # noqa: PLC0415
-    for key, default in [("poll_interval", 20), ("clip_delay", 15), ("fps_sample", 3),
+    # Bauplan analysen/bauplan_abfragetakt_wartezeit.md, Stufe TW1 Punkt 2 (ED004, freigegeben fuer diese zwei
+    # Schluessel): Werkswerte aus TAKT_WERK_NEU, die alten Werte stellt _migration_takt_wartezeit einmal um.
+    for key, default in [("poll_interval", TAKT_WERK_NEU["poll_interval"]),
+                         ("clip_delay", TAKT_WERK_NEU["clip_delay"]), ("fps_sample", 3),
                          # .540 K-DECKEL. GEMESSEN, nicht geraten: 240 liegt ueber
                          # dem P95 beider Bestaende (Prod 9659 Ereignisse gemessen:
                          # P95 201 · Feld 50068 abgeleitet: P95 211). Herleitung,
@@ -2155,6 +2258,10 @@ def load_config(path):
     # Hunger-Bremse ihren Gegenstand (Hintergrund-Arbeit hat ihr eigenes Konto)
     # und ihr Schluessel wird EINMAL geraeumt, mit Audit-Zeile und altem Wert.
     _migration_0536(cfg)
+    # Bauplan analysen/bauplan_abfragetakt_wartezeit.md, Stufe TW1 Punkt 5: dieselbe Bauform, derselbe Ort —
+    # Abfragetakt und Clip-Wartezeit werden EINMAL von den alten auf die neuen Werkswerte gestellt, wo der alte
+    # gilt; vor der Klemmung darunter, damit beide Werte ihre Spanne sehen.
+    _migration_takt_wartezeit(cfg)
     # .374 (User-Entscheid 30.08., Fund am Q4-Umbau des Gates): ein Altwert
     # ausserhalb der Whitelist-Spanne (gemessen: lookback_h: 100 aus einer
     # handgepflegten yaml, erlaubt 1-72) machte das GANZE Konfigurations-Blatt
@@ -2590,6 +2697,16 @@ def pruefe_url(u):
     return True, u
 
 
+def kamera_prio(eingabe, gespeichert):
+    """Die Prioritaet einer Kamera fuer einen Speicherweg des Kamera-Blatts (Bauplan Disponent D1 Punkt 2).
+    -> (prio, None) oder (None, eingabe) bei ungueltigem Wert; ohne Eingabe gilt der gespeicherte, sonst Mid"""
+    if eingabe is None:
+        return (gespeichert if gespeichert in _reg.PRIO_STUFEN else _reg.PRIO_WERK), None
+    if eingabe in _reg.PRIO_STUFEN:
+        return eingabe, None
+    return None, eingabe
+
+
 # .341: gemerkter Zustand von Frigates EIGENER Gesichtserkennung (aus /api/config,
 # gefuellt in frigate_cameras). "bekannt" trennt "aus" von "nie gefragt" — ein
 # Hinweis auf Verdacht waere schlimmer als keiner.
@@ -2835,6 +2952,12 @@ def clip_tor_aus_cfg(cfg):
     return n if n > 0 else CLIP_TOR_WERK
 
 
+def clip_erzeugung_deckel_s_aus_cfg(cfg):
+    """DIE eine Lesestelle von `clip_erzeugung_deckel_s` (Bauplan VOD aus, Stufe VA1): Deckel in Sekunden fuer
+    Frigates Clip-Erzeugung, das Tor und, ist VOD an, fuer ffmpeg auf dem VOD-Weg. -> int, Vorgabe 300 wie load_config"""
+    return int(cfg.get("clip_erzeugung_deckel_s") or 300)
+
+
 def clip_tor_deckel_s_aus_cfg(cfg):
     """.509 Review-MUSS: Wie lange darf ein Job HOECHSTENS am Tor warten?
     DIE eine Lesestelle (Lernlauf-Job, Pass-Check-Job, Vorlader; seit .510/J15
@@ -2848,7 +2971,75 @@ def clip_tor_deckel_s_aus_cfg(cfg):
     Streu-Literal mehr; die Zahl kommt aus der Config, nicht aus dem Code.
     Der Koordinator schlaegt denselben Wert auf die JOB-FRIST auf: das
     Warten kann das Analyse-Budget dadurch nicht aufzehren."""
-    return int(cfg.get("clip_erzeugung_deckel_s") or 300)
+    return clip_erzeugung_deckel_s_aus_cfg(cfg)
+
+
+def fixed_filters(cfg, ev, own_write):
+    """Bauplan Disponent D3a Punkt 1: die festen Filter eines Ereignisses (Kamera aus, Zone ohne fremdes `sub_label`,
+    ersatzweise `required_zones`) mit Echo-Bereinigung; gemeinsam fuer `Service.process` und den Disponenten (D3b).
+    -> (Grund "camera_off", "zone", "required_zone" oder None, `sub_label` nach der Echo-Bereinigung oder None)"""
+    sub_label = None if own_write else (ev.get("sub_label") or None)   # unser eigenes Label ist keine Frigate-Wahrheit
+    camera = ev.get("camera", "?")
+    kc = (cfg.get("kameras") or {}).get(camera)     # Kamera-Blatt (Phase 2b) hat Vorrang
+    if isinstance(kc, dict):                         # malformierte Config -> sicherer Fallback
+        # verwenden=False unterdrueckt nur die Entdeckung neuer Gesichter; Frigates EIGENE
+        # Behauptung (sub_label) wird IMMER geprueft (Fremder->Bekannt-Fehlmatch, wie beim Zonen-
+        # Filter). Review 21.07.: ohne "and not f_label" verlor "aus" dieses Sicherheitsnetz.
+        if not kc.get("verwenden", True) and not sub_label:
+            return "camera_off", sub_label
+        z = kc.get("zonen")                          # gegen handeditierte String-Zonen haerten
+        zonen = z if isinstance(z, list) else ([z] if isinstance(z, str) and z else [])
+        if zonen and not sub_label and not set(ev.get("zones") or []) & set(zonen):
+            return "zone", sub_label
+    else:                                           # Fallback: altes required_zones-Verhalten
+        rz = (cfg.get("required_zones") or {}).get(camera)
+        if rz and not sub_label and not set(ev.get("zones") or []) & set(rz):
+            return "required_zone", sub_label
+    return None, sub_label
+
+
+def open_deadline(cfg, ev):
+    """Bauplan Disponent D3a Punkt 2: die Offen-Frist eines Ereignisses ohne Ende (`offen_max_min`, 0 heisst unbegrenzt;
+    ohne `start_time` ist das Alter 0); gemeinsam fuer `Service.process` und den Disponenten (D3b).
+    -> (Alter in Sekunden als float, Frist in Minuten als int, True wenn die Frist abgelaufen ist)"""
+    open_s = max(0.0, time.time() - float(ev.get("start_time") or 0)
+                 ) if ev.get("start_time") else 0.0
+    limit_min = int(cfg.get("offen_max_min") or 0)
+    held_back = not limit_min or open_s < limit_min * 60
+    return open_s, limit_min, not held_back
+
+
+def job_deadline(cfg, timeout_s=None, clip_age_min=None):
+    """Bauplan Disponent D3a Punkt 3: die Job-Frist eines Analyseauftrags beim ersten Versuch (Vorgabe, Zuschlag fuer
+    Frigates Clip-Erzeugung bei alten Ereignissen, Torzuschlag); gemeinsam fuer `run_analyze` und den Disponenten (D3b).
+    -> (Frist in Sekunden als int, True wenn der Clip im Erzeugungs-Modus geholt wird)"""
+    # Watchdog der Live-Analyse aus der Config (analyse_timeout_s, messbasiert —
+    # s. Default-Block; vorher fest 1800 s: am 10.08. hing der Worker exakt diese
+    # 1800 s im Swap-Thrashing und blockierte den Pass 34 min). Nachhol-Laeufe
+    # bekommen weiter ihren eigenen, haerteren Deckel (nachhol_analyse_timeout_s).
+    deadline_s = int(timeout_s or cfg.get("analyse_timeout_s") or 600)
+    # .290 (Task #11): Alt-Event-Weiche auch fuer den Analyze-Weg — der
+    # Nachhol-Lauf zieht Clips ALTER Events (Frigate muss sie erst erzeugen);
+    # ohne Erzeugungs-Modus riss dessen 30-s-Timeout genau in den Serie-E-
+    # Leak (real belegt 18.08. 20:26, e16pp1: 'TimeoutError: timed out').
+    # Dieselbe Config-Quelle wie die Ernte; der Job-/Prozess-Timeout traegt
+    # den Deckel MIT (ein Kill mitten im Warten waere selbst der Leak).
+    clip_generation = (clip_age_min is not None
+                       and float(clip_age_min)
+                       >= float(cfg.get("clip_erzeugung_alter_min") or 30))
+    generation_cap_s = clip_erzeugung_deckel_s_aus_cfg(cfg)
+    if clip_generation:
+        deadline_s += generation_cap_s
+    # .510/J15 CLIP-TOR AUCH FUER DEN EREIGNIS-WEG (Befund 06.09. 23:20 an der
+    # .509 des Feldtesters): das Tor haengt seit .509 nur an den ERNTE-Jobs
+    # (Lernlauf, Pass-Check, Vorlader). Der regulaere Analyse-Job trug es nicht —
+    # mit vier Plaetzen zogen bis zu vier bis fuenf clip.mp4 gleichzeitig gegen
+    # sein Frigate (nginx: max 5 parallel). Der Morgen-Stall kam mit vier
+    # parallelen 75-MB-Clips. Der Warte-Deckel des Tors wird wie bei der Ernte
+    # auf die Job-Frist aufgeschlagen, sonst frisst legitimes Warten das
+    # Analyse-Budget.
+    deadline_s += clip_tor_deckel_s_aus_cfg(cfg)
+    return deadline_s, clip_generation
 
 
 # E3.1: Uebersetzung Latten-Schluessel -> analyze.py-Schalter, NUR fuer den
@@ -2875,6 +3066,19 @@ _ANALYZE_SCHALTER = (
 )
 
 
+def _legacy_cache_missing(log_path):
+    """Did the legacy analyze subprocess stop because its clip was not in the local cache (cache only)?
+    -> True when the tail of its log carries the class of core.frames.ClipCacheMissing, False otherwise"""
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 4096))
+            tail = f.read().decode("utf-8", "replace")
+    except OSError:
+        return False
+    return f"{_frames.ClipCacheMissing.__name__}: {_frames.CACHE_MISSING}:" in tail
+
+
 def _verwurf_melden(info, code):
     """E-P7 (.507): den Verwurfsgrund an den Aufrufer zurueckgeben — ueber
     DASSELBE `info`-dict, das schon die Wartezeit traegt (W7). Ein eigener
@@ -2887,27 +3091,21 @@ def _verwurf_melden(info, code):
 
 def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=None,
                 koerper=False, info=None, clip_quelle="live", clip_alter_min=None,
-                puls=None, personenzahl=None):
+                puls=None, personenzahl=None, ereignis_start=None, cache_only=False):
     # Bauplan K3, Stufe KP3: `personenzahl` (gueltige Zahl oder None, Service.process ueber
     # core.personenzahl) geht als Job-Feld {eid: Zahl} an den Worker; None = kein fruehes Ende.
     # Der Alt-Weg ohne Worker kennt sie nicht.
-    # Watchdog der Live-Analyse aus der Config (analyse_timeout_s, messbasiert —
-    # s. Default-Block; vorher fest 1800 s: am 10.08. hing der Worker exakt diese
-    # 1800 s im Swap-Thrashing und blockierte den Pass 34 min). Nachhol-Laeufe
-    # bekommen weiter ihren eigenen, haerteren Deckel (nachhol_analyse_timeout_s).
-    tmo = int(timeout_s or cfg.get("analyse_timeout_s") or 600)
-    # .290 (Task #11): Alt-Event-Weiche auch fuer den Analyze-Weg — der
-    # Nachhol-Lauf zieht Clips ALTER Events (Frigate muss sie erst erzeugen);
-    # ohne Erzeugungs-Modus riss dessen 30-s-Timeout genau in den Serie-E-
-    # Leak (real belegt 18.08. 20:26, e16pp1: 'TimeoutError: timed out').
-    # Dieselbe Config-Quelle wie die Ernte; der Job-/Prozess-Timeout traegt
-    # den Deckel MIT (ein Kill mitten im Warten waere selbst der Leak).
-    erz = (clip_alter_min is not None
-           and float(clip_alter_min)
-           >= float(cfg.get("clip_erzeugung_alter_min") or 30))
-    erz_deckel = int(cfg.get("clip_erzeugung_deckel_s") or 300)
-    if erz:
-        tmo += erz_deckel
+    # Bauplan analysen/bauplan_unbekannt_zeit.md, Stufe UZ1: `ereignis_start` (start_time des Ereignisses aus
+    # Service.process, derselbe Wert wie `start` der Akte) geht ebenso als Job-Feld {eid: Zeit} an den Worker, der
+    # sie in jeden Satz schreibt; None = Saetze ohne Zeit, kein Ersatzwert. Der Alt-Weg kennt sie nicht.
+    # Bauplan Disponent D3a Punkt 3: die Job-Frist beim ersten Versuch (Vorgabe aus `timeout_s` oder
+    # `analyse_timeout_s`, Erzeugungszuschlag bei alten Ereignissen, Torzuschlag) und die Erzeugungs-Weiche rechnet
+    # die gemeinsame Funktion `job_deadline`; die Verdopplung beim Wiederholversuch bleibt unten an ihren zwei Stellen.
+    # Bauplan Disponent D3b Punkt 8: `cache_only` ist die Kennung „nur Cache" eines Live-Auftrags aus der Schlange des
+    # Disponenten — Job-Feld `clip_cache_only` im Worker, SUSLIK_CLIP_CACHE_ONLY im Legacy-Unterprozess. Findet der
+    # Auftrag seinen Clip nicht im Cache, kommt `info["cache_fehlt"]` zurueck (der Aufrufer gibt das Ereignis zurueck).
+    tmo, erz = job_deadline(cfg, timeout_s, clip_alter_min)
+    erz_deckel = clip_erzeugung_deckel_s_aus_cfg(cfg)      # Job-Feld und Umgebung des Alt-Wegs
     # .510/J15 CLIP-TOR AUCH FUER DEN EREIGNIS-WEG (Befund 06.09. 23:20 an der
     # .509 des Feldtesters): das Tor haengt seit .509 nur an den ERNTE-Jobs
     # (Lernlauf, Pass-Check, Vorlader). Der regulaere Analyse-Job trug es nicht —
@@ -2921,9 +3119,9 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
     # Zettel J15 nennt ausdruecklich „Poll/MQTT/Nachhol". Ohne Tor bleiben die
     # Wege, die KEINEN analyze-Job fahren: der Melde-Weg (core/melden, ein
     # Video fuer eine Meldung), die Einspiel-Uebernahme und der Live-Waechter.
+    # Der Zuschlag des Warte-Deckels auf die Job-Frist steht in `job_deadline`.
     tor_n = clip_tor_aus_cfg(cfg)
     tor_deckel_s = clip_tor_deckel_s_aus_cfg(cfg)
-    tmo += tor_deckel_s
     # ------------------------------------------------------------------
     # DIE URTEILS-LATTEN DIESES JOBS — EINE Quelle (E3.1, 14.09.2026).
     # Bis .526 wurde hier eine analyze-KOMMANDOZEILE gebaut und drueben wieder
@@ -3064,8 +3262,10 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                     # armiert wird im Worker (core.frames.CLIP_TOR_N).
                     "clip_tor": tor_n,
                     "clip_tor_deckel_s": tor_deckel_s,
-                    "clip_vod": cfg.get("clip_vod") is not False,
+                    "clip_vod": _frames.vod_an(cfg.get("clip_vod")),      # VA1: an nur bei true
+                    "clip_cache_only": bool(cache_only),                   # Disponent D3b Punkt 8
                     "personenzahl": {eid: personenzahl},
+                    "ereignis_start": {eid: ereignis_start},     # UZ1: Startzeit in den Satz
                     # E3a-3 (Bauplan Referenz-Quelle einbauen, J4): die Config-Zufuhr des
                     # Satz-Schreibwegs, Herkunftsart worker, ohne Lauf-ID; ohne das Feld
                     # schreibt der Worker keinen Satz (laut).
@@ -3216,6 +3416,14 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                     if info is not None:
                         info["nicht_buchen"] = "clip_tor_deckel"
                     return None
+                # Bauplan Disponent D3b Punkt 8: der Worker meldet `cache_fehlt` strukturiert (verwurf_grund). Kein
+                # Buchungsgrund: der Aufrufer gibt das Ereignis dem Disponenten zurueck oder bucht `cache_verloren`.
+                if antwort.get("verwurf_grund") == _frames.CACHE_MISSING:
+                    lf.write("verifyd: the clip is not in the local cache (cache only) — handed back to the "
+                             "dispatcher\n")
+                    if info is not None:
+                        info["cache_fehlt"] = True
+                    return None
                 # E-P7 (.507): der Worker hat die Ausnahme gesehen und, wo sie
                 # eindeutig war, eingeordnet (core.frames.verwurf_grund) — ohne
                 # dieses Feld war der Feldfall H4 nicht von einem Watchdog-Riss
@@ -3272,12 +3480,14 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
             # deshalb UNABHAENGIG vom debug-Schalter (die [clipdbg]-ENVs
             # darunter sind reine Telemetrie).
             env["SUSLIK_CLIP_ERZEUGUNG"] = "1"
-            env["SUSLIK_CLIP_ERZEUGUNG_DECKEL_S"] = str(erz_deckel)
-        # .292: VOD-Weg-Schalter im Legacy-Subprozess — gilt fuer JEDEN
-        # Clip-Zug, nicht nur den Erzeugungs-Fall (Modul-Default ist AN;
-        # nur explizites False der Config schaltet ab).
-        if cfg.get("clip_vod") is False:
-            env["SUSLIK_CLIP_VOD"] = "0"
+        # Bauplan VOD aus, Stufe VA1: der VOD-Schalter gilt fuer JEDEN Clip-Zug
+        # und geht immer ausdruecklich mit ("1" an, "0" aus, Werkseinstellung
+        # aus), nie geerbt. Der Deckel geht ebenfalls immer mit: ist VOD an, ist
+        # er der Deckel fuer ffmpeg; Erzeugung schaltet allein `erz` oben ein.
+        env["SUSLIK_CLIP_VOD"] = "1" if _frames.vod_an(cfg.get("clip_vod")) else "0"
+        env["SUSLIK_CLIP_ERZEUGUNG_DECKEL_S"] = str(erz_deckel)
+        # Bauplan Disponent D3b Punkt 8: die Kennung „nur Cache" geht immer ausdruecklich mit, nie geerbt.
+        env["SUSLIK_CLIP_CACHE_ONLY"] = "1" if cache_only else "0"
         if cfg.get("debug"):
             # .287 [clipdbg] auch im Legacy-Subprozess-Weg (ohne Worker):
             # core.frames armiert sich beim Import aus diesen ENV-Variablen.
@@ -3366,6 +3576,12 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                         return None
     rp = os.path.join(event_dir, "results.jsonl")
     if not os.path.exists(rp):
+        # Bauplan Disponent D3b Punkt 8, Rueckweg des Legacy-Unterprozesses: er hinterlaesst nur seinen Text, und
+        # ClipCacheMissing traegt seine Klasse vorne darin (wie ClipErzeugungAbbruch).
+        if cache_only and worker is None and _legacy_cache_missing(logpfad):
+            if info is not None:
+                info["cache_fehlt"] = True
+            return None
         _verwurf_melden(info, _registry.VERWURF_ANALYSE_NONE)
         return None
     with open(rp) as f:
@@ -3899,6 +4115,9 @@ def vram_startargumente(v):
     # wiederholt, ist eine zweite Wahrheit.
     if v.get("mem_pattern"):
         argv += ["--mem-pattern", "1"]
+    # KG1: der erlaubte Rueckfall bei ganz unmessbarer Karte; nur gesetzt, wenn er gilt.
+    if v.get("unmeasurable_card"):
+        argv += ["--card-unmeasurable", "1"]
     # .543 (Issue #32): DIE KARTEN-RESERVE REIST MIT. Der Wunsch steht nur dann
     # als Argument da, wenn er GESETZT ist (>= 0) — -1 ist die Vorgabe auf beiden
     # Seiten, und ein Argument, das die Vorgabe wiederholt, waere die zweite
@@ -4284,6 +4503,11 @@ class WorkerDienst:
                      f"({type(e).__name__}: {e}) — start refused")
             return f"card budget unavailable: {type(e).__name__}: {e}"
         if not st:
+            return None
+        if st.get("unmeasurable_card") and not st.get("verweigert"):
+            # KG1 (Eigentuemer 22.10.2026 15:34:14): die Karte ist ganz unmessbar, der Plan startet
+            # einen Strang mit festem Deckel. Auf freien Speicher zu warten, den keine Sonde
+            # sehen kann, hiesse sperren; die Leiter hat den Start schon rot und laut erlaubt.
             return None
         noetig = int(st.get("noetig_mb") or 0)
         if noetig <= 0:
@@ -7016,85 +7240,120 @@ VORLAUF_PARALLEL_WERK = 2
 VORLAUF_PARALLEL_MAX = 3
 VORLAUF_MIN_GRENZE = 200
 VORLAUF_MAX_GRENZE = 500
-# Wie lange die Antwort „dieses Ereignis ist in Frigate noch offen" gilt, bevor
-# erneut gefragt wird. KEIN Budget: ein Ereignis, das Frigate noch nicht
-# abgeschlossen hat, wird durch haeufigeres Fragen nicht schneller fertig — und
-# die Stufe, die Frigate schonen soll, darf es nicht im Sekundentakt befragen
-# (0.18 teilt Clip-Streams und /auth EINEN Thread-Pool).
+# Wie lange eine Antwort von Frigate zu einem Ereignis gilt, bevor erneut gefragt wird: bei einem noch offenen
+# Ereignis und nach einem Abfragefehler (ausser 404). KEIN Budget: ein Ereignis, das Frigate noch nicht abgeschlossen
+# hat, wird durch haeufigeres Fragen nicht schneller fertig — und der Disponent, der Frigate schonen soll, darf es nicht
+# im Sekundentakt befragen (0.18 teilt Clip-Streams und /auth EINEN Thread-Pool). Bauplan analysen/bauplan_disponent.md,
+# Stufe D3b Punkt 2: gemessen ab der letzten Abfrage DIESES Ereignisses (Zeit im Datensatz).
 VORLAUF_OFFEN_TAKT_S = 30.0
-# Wie viele „hier nicht zu holen"-Merker hoechstens mitlaufen. Er ist eine
-# Gedaechtnisstuetze gegen Dauerschleifen, kein Verzeichnis — laeuft er voll,
-# wird er geleert und die Stufe versucht es noch einmal.
-VORLAUF_NICHT_HOLEN_MAX = 500
+# Bauplan Disponent D3b Punkt 3: ein gescheiterter Abrufversuch wird nach dieser Zeit wiederholt, nach so vielen
+# Versuchen ohne Clip ist das Ereignis ohne Clip `abruf_gescheitert`.
+DISPATCH_RETRY_S = 30.0
+DISPATCH_ATTEMPTS_MAX = 3
+# Bauplan Disponent D3b Punkt 8: hoechstens so viele Ruecklaeufe nach `cache_fehlt`, danach `cache_verloren`.
+DISPATCH_RETURNS_MAX = 1
+# Bauplan Disponent D3b Punkt 6, Eigentuemer 22.10.2026 07:08:03 (Befehlsbuch befehle/2026-10-22.md): „High sind 7 von
+# 10 Teile. Medium 2 von 10 Teile und Low ist 1 von 10 Teilen.“ Gleichstand: High vor Mid vor Low, also die Reihenfolge
+# von core/registry.PRIO_STUFEN rueckwaerts.
+DISPATCH_WEIGHTS = {"high": 7, "mid": 2, "low": 1}
+DISPATCH_TIE = {s: i for i, s in enumerate(_reg.PRIO_STUFEN)}
+if set(DISPATCH_WEIGHTS) != set(_reg.PRIO_STUFEN):
+    raise RuntimeError(f"DISPATCH_WEIGHTS {sorted(DISPATCH_WEIGHTS)} do not cover the priorities {_reg.PRIO_STUFEN}")
+# Bauplan Disponent D3b Punkt 1: die Zustaende im Datensatz `_ev_info[eid]["state"]` (Konzept 3.3). Ohne Eintrag ist
+# ein Ereignis neu. Zuteilbar sind bereit und ohne Clip.
+DISPATCH_NEW, DISPATCH_OPEN, DISPATCH_FETCH, DISPATCH_READY, DISPATCH_NO_CLIP = (
+    "new", "open", "fetch", "ready", "no_clip")
+DISPATCH_STATES = (DISPATCH_NEW, DISPATCH_OPEN, DISPATCH_FETCH, DISPATCH_READY, DISPATCH_NO_CLIP)
+DISPATCH_ALLOCATABLE = (DISPATCH_READY, DISPATCH_NO_CLIP)
+# Die Gruende „ohne Clip“ (Punkt 2 und 3); `process()` schliesst je Grund nach der Tabelle in Punkt 7 ab.
+DISPATCH_FAILED = ("abruf_gescheitert", "einspiel_fehlt")
+# Bauplan Disponent D3b Punkt 5: der Name des benannten Halters (core/frames.pin_named), ohne Prozess- und Fadennummer.
+DISPATCHER_PIN = "disponent"
+
+
+def dispatch_round(cur, stages, eligible=None):
+    """One step of the weighted round over `stages` (High 7, Mid 2, Low 1, tie High before Mid before Low; smooth
+    weighted round robin), updating `cur` in place; the pick is the best of `eligible` (default: all stages).
+    -> the chosen stage"""
+    total = sum(DISPATCH_WEIGHTS[s] for s in stages)
+    for s in stages:
+        cur[s] = cur.get(s, 0) + DISPATCH_WEIGHTS[s]
+    pick = max(eligible or stages, key=lambda s: (cur[s], DISPATCH_TIE[s]))
+    cur[pick] -= total
+    return pick
+
+
+def dispatch_order(per_stage, cur):
+    """The order in which the weighted round would hand out the given events, from a copy of the round state.
+    -> list of eids (per_stage: stage -> eids, newest first)"""
+    cur = dict(cur)
+    lists = {s: list(v) for s, v in per_stage.items() if v}
+    out = []
+    while lists:
+        s = dispatch_round(cur, list(lists))
+        out.append(lists[s].pop(0))
+        if not lists[s]:
+            del lists[s]
+    return out
 
 
 class Vorlauf:
-    """DIE ABRUFSTUFE VOR DER VERGABESTELLE (.534 B6c, Inhaber 15.09.:
-    „Hysterese einbauen, bevor wir ausrollen").
+    """DER DISPONENT (Bauplan analysen/bauplan_disponent.md, Stufe D3b; vorher die Abrufstufe .534 B6c, Inhaber
+    15.09.: „Hysterese einbauen, bevor wir ausrollen").
 
-    DAS PROBLEM, gemessen im Lasttest desselben Tages: ein Analyseplatz rechnet
-    nicht nur, er HOLT auch. Je Platz vergingen rund 9 s je Ereignis, davon rund
-    5,5 s Analyse — rund 40 % der Platzzeit waren Abruf und Uebergabe. Solange
-    ein Platz seinen Clip aus Frigate zieht, steht sein Rechenstrang still; die
-    Karte brach auf 4 % ein, waehrend 43 Ereignisse warteten.
+    Fuer die Live-Schlange holt und teilt allein er zu (Eigentuemer 22.10.2026 08:50:11 „Lader holt alles“, 08:51:05
+    der Worker holt nur aus dem lokalen Cache). Er rechnet nicht und belegt keinen Platz. Je Ereignis fuehrt er den
+    Zustand im Datensatz `_ev_info[eid]` (unter `_ev_wecker`): neu, offen, holen, bereit, ohne Clip, dazu Grund, Zeit
+    der letzten Abfrage, Abrufversuche und Ruecklaeufe (Konzept 3.2, 3.3).
 
-    DIE ANTWORT IST NICHT EIN PLATZ MEHR (das haette die Wartezeit nur in den
-    Worker verschoben, wo sie gegen die Job-Frist laeuft), sondern eine EIGENE
-    Stufe davor: dieser Thread haelt einen VORRAT fertiger Clips im bestehenden
-    Clip-Cache, aus dem sich die Plaetze bedienen. Er rechnet nicht und belegt
-    keinen Platz.
+    EINORDNUNG in der Reihenfolge von `process()`: Metadaten (Eingespieltes lokal, sonst Frigate mit 404), offen
+    (Frist ueber `open_deadline`), feste Filter (`fixed_filters`), `has_clip`, sonst holen. Eingeordnet wird entlang
+    der gewichteten Reihenfolge, bis das Ziel an Clip-Kandidaten erreicht ist — nie die ganze Schlange auf einmal.
 
-    HYSTERESE STATT REGELUNG, und das ist der Kern: unter `vorlauf_min` faehrt
-    er nach, bis `vorlauf_max` erreicht ist, dann PAUSIERT er, bis der Vorrat
-    wieder unter `vorlauf_min` faellt. Eine Nachfuehrung ohne Totband haette bei
-    jedem einzelnen abgearbeiteten Ereignis einen neuen Abruf ausgeloest — genau
-    das Dauerfeuer gegen Frigate, das die Threadpool-Klasse aus dem Feld
-    verbietet.
+    HOLEN in der Reihenfolge, in der zugeteilt wird (7/2/1 ueber alle faelligen Ereignisse, in der Stufe das
+    neueste), bis zum Ziel `vorlauf_max` mit Pause bis unter `vorlauf_min` (NZ1); bei Vorrat aus oder Cache an der
+    Grenze ist das Ziel die Zahl der Analyseplaetze. Hoechstens `vorlauf_parallel` Abrufe, alle Torplaetze, je Abruf
+    die Frist der heutigen Job-Frist (`job_deadline`), drei Versuche. Jeder bereite Clip haelt einen benannten Pin;
+    faellt sein Ereignis aus dem Ziel, wird er geloest und das Ereignis ist wieder holen.
 
-    VIER RIEGEL, jeder gegen einen bekannten Fall:
-      * hoechstens `vorlauf_parallel` gleichzeitige Abrufe (Frigate 0.18 teilt
-        Clip-Streams und /auth EINEN Thread-Pool — MEMORY frigate-018-threadpool);
-        darueber liegt unveraendert das Clip-Tor des Hauses.
-      * nur Ereignisse, die Frigate ABGESCHLOSSEN hat (`end_time`, dieselbe
-        Pruefung wie B9a) — ein Ereignis ohne Ende hat keinen brauchbaren Clip,
-        und ihn zu ziehen hiesse, den Fehler vorzuverlegen.
-      * das Clip-Tor gehoert den PLAETZEN: der Vorrat nimmt hoechstens `tor_n-1`
-        Torplaetze und nie den letzten, damit ein Platz — und vor allem ein
-        interaktives Ereignis, hinter dem ein Mensch wartet — nicht hinter dem
-        Auffuellen des Vorrats ansteht (Pruefbericht E-1).
-      * `vorlauf_max = 0` schaltet die Stufe AUS und stellt exakt das Verhalten
-        der .533 her (Abruf im Platz). Der Schalter ist die Feld-Rueckfahrkarte
-        ohne neues Image.
-
-    REIHENFOLGE ist die der Warteschlange; der Interaktiv-Vorrang (Fix 13) wird
-    nicht beruehrt — diese Stufe vergibt keine Plaetze, sie legt nur Dateien
-    bereit. Und sie besitzt nichts: geholt wird mit demselben `clip_holen` in
-    denselben Cache, dessen Grenzen (`clip_cache_max_gb`, Alters-Verfall)
-    unveraendert gelten. Faellt ein Clip vor seiner Analyse wieder heraus, holt
-    ihn der Platz wie bisher selbst.
-    """
+    ZUTEILEN tut der Abholer (`Service._dispatch_pick`) mit derselben Runde ueber die zuteilbaren Ereignisse."""
 
     def __init__(self, svc):
         self.svc = svc
         self._stop = threading.Event()
         self._t = None
         self.pausiert = False
+        self._still_nachladen = False     # NZ1 (Bauplan nachzug_033): Nachladen begann still, die Pause danach DEBUG
         self.geholt = 0
         self.fehler = 0
         self.bereit = 0
+        self.ziel = 0
         self._laeuft = set()              # eids, die gerade geholt werden
         self._mutex = threading.Lock()
-        self._fertig = set()              # eids, die Frigate abgeschlossen hat
-        self._offen_gefragt = {}          # eid -> mono der letzten Frage
-        self._nicht_holen = set()         # eids, die hier nicht zu holen sind
         self.cache_voll_gemeldet = False
         self.fehler_arten = {}
         self.letzter_fehler = None
         self._fehler_gemeldet = set()
+        # Bauplan Disponent D3b Punkt 9: Metadatenfehler und Abrufversuche seit Start, der Grund eines toten Fadens,
+        # die Uebernahme der benannten Pins in der ersten Runde, der Frigate-Ausfall der letzten Runde (Wecken).
+        self.meta_fehler = 0
+        self.versuche = 0
+        self.faden_grund = None
+        self._uebernommen = False
+        self._halt_vorher = False
+        self.wecken = threading.Event()   # ein Abholer weckt den Takt, wenn ein neues Ereignis ansteht
+        # Bauplan analysen/bauplan_vod_und_vorrat.md, Stufe VL1: die Phase „Vorrat haelt nicht Schritt" (ein
+        # Analyseplatz holte seinen Clip selbst, obwohl der Vorrat haette vorholen koennen). `_uhr` ist die monotone
+        # Uhr der Phasendauer (in der Probe eine Attrappe), `_phase` die offene Phase oder None; Zaehler seit Start.
+        self._uhr = time.monotonic
+        self._phase = None
+        self.selbstabruf_phasen = 0
+        self.selbstabrufe = 0
+        self.phase_letzte = None
 
     # ----------------------------------------------------------- Einstellungen
     def _zahlen(self):
-        """(min, max, parallel) aus der Config, geklemmt. max = 0 heisst AUS."""
+        """(min, max, parallel) aus der Config, geklemmt. max = 0 heisst Vorrat aus."""
         cfg = self.svc.cfg
 
         def _z(name, werk, klein, gross):
@@ -7117,22 +7376,55 @@ class Vorlauf:
                  VORLAUF_PARALLEL_MAX)
         return tief, hoch, par
 
+    def _straenge(self):
+        """Die Zahl der Analyseplaetze (Punkt 4: auch im alten Weg ohne Worker), mindestens 1. -> int"""
+        try:
+            return max(1, int(getattr(getattr(self.svc, "_plaetze", None), "kapazitaet", 1) or 1))
+        except (TypeError, ValueError):
+            return 1
+
+    def _wecker(self):
+        """Das Schloss der Schlange oder ein Null-Schloss (Dienst-Attrappen ohne Schlange). -> Kontext-Manager"""
+        return getattr(self.svc, "_ev_wecker", None) or _NULL_LOCK
+
     def zustand(self):
+        """Der Disponenten-Block fuer /health (Punkt 9, ersetzt den Block der Abrufstufe). -> dict"""
         tief, hoch, par = self._zahlen()
+        stufen = {s: {z: 0 for z in DISPATCH_STATES} for s in _reg.PRIO_STUFEN}
+        q = getattr(self.svc, "_ev_q", None)
+        if q is not None:
+            with self._wecker():
+                daten = self.svc._ev_daten()
+                for _f, e, _i in q:
+                    info = daten.get(e) or {}
+                    stufe = info.get("stufe", _reg.PRIO_WERK)
+                    stufen.setdefault(stufe, {z: 0 for z in DISPATCH_STATES})
+                    stufen[stufe][info.get("state", DISPATCH_NEW)] += 1
         with self._mutex:
             laedt = len(self._laeuft)
-        return {"an": bool(hoch), "bereit": self.bereit, "min": tief,
+            # Bauplan VOD2 Punkt 5b: Wege und Rueckfaelle der eigenen Abrufe seit Start (gezaehlt in `_holen`)
+            abruf = {"wege": dict(getattr(self, "abruf_wege", None) or {}),
+                     "rueckfaelle": getattr(self, "abruf_rueckfaelle", 0),
+                     "letzter_rueckfall": getattr(self, "abruf_letzter_rueckfall", None)}
+            # Bauplan VL1 Punkt 4: Selbstabrufe und Phasen seit Start, Beginn der offenen Phase (Wanduhr) oder None,
+            # die letzte beendete Phase (Dauer, Selbstabrufe, Grund des Endes) oder None
+            selbst = {"selbstabruf_phasen": self.selbstabruf_phasen, "selbstabrufe": self.selbstabrufe,
+                      "phase_seit": self._phase["seit"] if self._phase else None,
+                      "phase_letzte": dict(self.phase_letzte) if self.phase_letzte else None}
+        # `an` ist immer wahr: der Disponent laeuft auch bei Vorrat aus (dann holt er fuer die Analyseplaetze).
+        return {"abruf": abruf, "an": True, "ziel": self.ziel, "bereit": self.bereit, "min": tief,
                 "max": hoch, "laedt": laedt, "parallel": par,
                 "pausiert": bool(self.pausiert), "geholt": self.geholt,
                 "fehler": self.fehler,
-                # .534: WOMIT die Abrufe gescheitert sind. Eine Zahl ohne Grund
-                # laesst den Betreiber raten.
+                # .534: WOMIT die Abrufe gescheitert sind. Eine Zahl ohne Grund laesst den Betreiber raten.
                 "fehler_arten": dict(self.fehler_arten),
                 "letzter_fehler": self.letzter_fehler,
-                # .534: der zweite Grund fuers Stillstehen — der Cache ist an
-                # seiner Grenze. Ohne dieses Feld saehe man nur „bereit steigt
-                # nicht" und suchte an der falschen Stelle.
-                "cache_voll": bool(self.cache_voll_gemeldet)}
+                # .534: der zweite Grund fuers Stillstehen — der Cache ist an seiner Grenze.
+                "cache_voll": bool(self.cache_voll_gemeldet),
+                # Punkt 9: Zustandszahlen je Stufe (neu = wartet auf Metadaten), Versuche, Metadatenfehler, Faden.
+                "stufen": stufen, "versuche": self.versuche, "metadaten_fehler": self.meta_fehler,
+                "faden_lebt": self._t.is_alive() if self._t is not None else None,
+                "faden_grund": self.faden_grund, **selbst}
 
     # ----------------------------------------------------------- Lebenszyklus
     def start(self):
@@ -7145,142 +7437,234 @@ class Vorlauf:
 
     def stop(self):
         self._stop.set()
+        self.wecken.set()
 
-    # ------------------------------------------------------------------ Lauf
-    def _warteschlange(self):
-        """Die eids der Warteschlange in ihrer Reihenfolge."""
+    # ------------------------------------------------------------------ Datensatz
+    def _info(self, eid):
+        """Eine Kopie des Datensatzes von eid (leer ohne Schlange oder Datensatz). -> dict"""
+        if not hasattr(self.svc, "_ev_wecker"):
+            return {}
+        with self.svc._ev_wecker:
+            return dict(self.svc._ev_daten().get(eid) or {})
+
+    def _setzen(self, eid, anlegen=False, **felder):
+        """Felder in den Datensatz von eid schreiben und die wartenden Abholer wecken (Zustandswechsel, Punkt 6).
+        -> True, wenn der Datensatz besteht (oder angelegt wurde), sonst False"""
+        if not hasattr(self.svc, "_ev_wecker"):
+            return False
+        with self.svc._ev_wecker:
+            daten = self.svc._ev_daten()
+            info = daten.get(eid)
+            if info is None:
+                if not anlegen:
+                    return False
+                info = daten[eid] = {"kamera": None, "stufe": _reg.PRIO_WERK}
+            info.update(felder)
+            self.svc._ev_wecker.notify_all()
+            return True
+
+    def _lokal_bytes(self, eid):
+        """Groesse des lokalen Clips von eid, -1 wenn keiner liegt. -> int"""
+        try:
+            return os.path.getsize(_frames.cache_pfad(eid, self.svc.cfg["data_dir"]))
+        except OSError:
+            return -1
+
+    def _bereit_pinnen(self, eid, anlegen=False, **felder):
+        """Den benannten Pin setzen und das Ereignis bereit melden (Punkt 5); besteht der Datensatz nicht mehr, wird
+        der Pin gleich wieder geloest. -> None"""
+        dd = self.svc.cfg["data_dir"]
+        _frames.pin_named(eid, DISPATCHER_PIN, dd)
+        if not self._setzen(eid, anlegen, state=DISPATCH_READY, pinned=True, pin_at=time.time(), **felder):
+            _frames.free_named(eid, DISPATCHER_PIN, dd)
+
+    # ------------------------------------------------------------------ Reihenfolge
+    def _frigate_halt(self):
+        """Ist Frigate unten (gesperrter Schoner oder eine Fehlerserie ab `frigate_schoner.schwelle`)? -> bool"""
+        return frigate_schoner.gesperrt() or (
+            getattr(self.svc, "frigate_fehlerserie", 0) >= max(1, int(frigate_schoner.schwelle)))
+
+    def _warteschlange(self, halt=None):
+        """Die faelligen eids in der Reihenfolge der Zuteilung (gewichtete Runde ab dem heutigen Rundenstand, in der
+        Stufe das neueste) und mit der Ausfall-Regel des Abholers (waehrend Frigate unten ist, nur Eingespieltes).
+        -> Liste der eids"""
         q = getattr(self.svc, "_ev_q", None)
-        wecker = getattr(self.svc, "_ev_wecker", None)
         if q is None:
             return []
-        # .534 (Pruefbericht H-3): NUR FAELLIGE Eintraege. Ein Ereignis, dessen
-        # `clip_delay` noch laeuft, ist bei Frigate oft noch gar nicht fertig —
-        # es vorzuziehen hiesse, genau die Wartezeit zu bezahlen, die das Tor
-        # vermeiden soll.
+        # .534 (Pruefbericht H-3): NUR FAELLIGE Eintraege — ein Ereignis, dessen `clip_delay` noch laeuft, ist bei
+        # Frigate oft noch gar nicht fertig.
+        halt = self._frigate_halt() if halt is None else halt
         jetzt = time.time()
-        if wecker is None:
-            return [e for f, e, *_r in list(q) if not f or f <= jetzt]
-        with wecker:
-            return [e for f, e, *_r in list(q) if not f or f <= jetzt]
+        je_stufe = {}
+        with self._wecker():
+            daten = self.svc._ev_daten() if hasattr(self.svc, "_ev_daten") else {}
+            for f, e, *_r in reversed(list(q)):
+                if (not f or f <= jetzt) and (not halt or _einspiel.ist_einspiel(e)):
+                    je_stufe.setdefault((daten.get(e) or {}).get("stufe", _reg.PRIO_WERK), []).append(e)
+            runde = dict(getattr(self.svc, "_ev_runde", None) or {})
+        return dispatch_order(je_stufe, runde)
 
-    def _liegt(self, eid):
-        try:
-            return os.path.exists(_frames.cache_pfad(eid, self.svc.cfg["data_dir"]))
-        except Exception:                                 # noqa: BLE001
-            _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
-            return False
-
-    def _fertig_in_frigate(self, eid):
-        """Hat Frigate dieses Ereignis abgeschlossen? Dieselbe Frage wie B9a.
-
-        EINMAL gefragt und gemerkt: ein abgeschlossenes Ereignis wird nicht
-        wieder offen. Ein offenes wird beim naechsten Takt erneut gefragt — es
-        kann jederzeit zugehen."""
-        if eid in self._fertig:
-            return True
-        # .534 (Pruefbericht H-2): beide Merker sind Arbeits-Gedaechtnis, kein
-        # Verzeichnis. Auf einer Anlage mit Dauerbetrieb wuechsen sie sonst
-        # unbegrenzt — dieselbe Klasse wie der schon behobene `_nicht_holen`.
-        if len(self._fertig) >= VORLAUF_NICHT_HOLEN_MAX:
-            self._fertig.clear()
-        if len(self._offen_gefragt) >= VORLAUF_NICHT_HOLEN_MAX:
-            self._offen_gefragt.clear()
+    # ------------------------------------------------------------------ Einordnung
+    def _einordnen(self, eid):
+        """Ein Ereignis einordnen (Punkt 2, Reihenfolge von `process()`); fragt Frigate, also nie unter einem Schloss.
+        -> False nach einem Abfragefehler ausser 404 (die Runde fragt dann nicht weiter), sonst True"""
         if _einspiel.ist_einspiel(eid):
-            # Eingespielte Ereignisse haben kein Frigate dahinter; ihr Clip
-            # liegt ohnehin schon unter data_dir.
-            return False
-        # NICHT IM TAKT DER STUFE FRAGEN. Ein offenes Ereignis wird durch
-        # haeufigeres Fragen nicht fertig; im Feld lagen drei davon in der
-        # Schlange, und bei 2 s Takt waeren das 1,5 Anfragen je Sekunde gegen
-        # genau den Engpass, den diese Stufe entlasten soll.
-        jetzt = time.monotonic()
-        if jetzt - self._offen_gefragt.get(eid, -1e18) < VORLAUF_OFFEN_TAKT_S:
-            return False
-        self._offen_gefragt[eid] = jetzt
-        try:
-            ev = api(self.svc.cfg, f"/api/events/{eid}")
-        except Exception:                                 # noqa: BLE001
-            _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
-            return False
-        if (ev or {}).get("end_time"):
-            self._fertig.add(eid)
-            self._offen_gefragt.pop(eid, None)
+            self._einordnen_einspiel(eid)
             return True
-        return False
-
-    def _holen(self, eid):
-        """EIN Clip in den Cache. Laeuft in einem eigenen kurzen Thread."""
-        cfg = self.svc.cfg
-        t0 = time.monotonic()
+        cfg, jetzt = self.svc.cfg, time.monotonic()
         try:
-            # .534 (Pruefbericht E-1): DAS TOR GEHOERT DEN PLAETZEN, nicht dem
-            # Vorrat. Die Vorratsstufe und die Analyse-Plaetze ziehen durch
-            # DASSELBE flock-Tor (`core/frames.tor_nehmen`); mit Werkswert 2 und
-            # `vorlauf_parallel` 2 konnte der Vorrat beide Torplaetze halten,
-            # waehrend er von 20 auf 50 auffuellt. Ein Platz mit Cache-Fehlschlag
-            # — besonders ein INTERAKTIVES Ereignis, hinter dem ein Mensch wartet
-            # — haette dann bis zum Tor-Deckel gewartet und waere ungebucht
-            # herausgefallen. Der Vorrat nimmt deshalb NIE den letzten Torplatz:
-            # `tor_n - 1`, mindestens 1. Bei einem Tor von 1 laeuft er damit
-            # ungedrosselt durch das Tor, aber sein eigener Deckel
-            # (`vorlauf_parallel`) gilt unveraendert — und ein Tor von 1 heisst
-            # ohnehin, dass hier nur einer zieht.
-            _tor = clip_tor_aus_cfg(cfg)
-            _frames.clip_holen(
-                eid, data_dir=cfg["data_dir"],
-                frigate_url=cfg.get("frigate_url") or "",
-                quelle="vorlauf",
-                tor_n=(max(1, _tor - 1) if _tor else 0),
-                tor_deckel_s=clip_tor_deckel_s_aus_cfg(cfg),
-                vod=bool(cfg.get("clip_vod", True)))
-            # Bauplan Feldstau Stufe 3 (Fund 3): nach jeder Ablage den Aufraeum-Faden
-            # anstupsen (zusammenfallend wie aus process()). Sein Lauf eicht den
-            # Groessen-Stand, auf dem die Bremse `_cache_voll` faehrt — solange geholt
-            # wird, wird also geeicht. Rest-Grenze: bis der Lauf endet, kann der Cache
-            # um die inzwischen geholten Clips ueber der Grenze liegen; der Size-Cap
-            # desselben Laufs raeumt zurueck.
-            self.svc.aufraeumen_anstossen()
-            try:
-                groesse = os.path.getsize(_frames.cache_pfad(eid, cfg["data_dir"]))
-            except OSError:
-                groesse = 0
-            self.geholt += 1
-            self.svc.log.debug(f"vorlauf: {eid} fetched in "
-                           f"{time.monotonic() - t0:.1f}s "
-                           f"({groesse / 1048576.0:.1f} MB)")
+            ev = api(cfg, f"/api/events/{eid}") or {}
         except Exception as e:                            # noqa: BLE001
+            if getattr(e, "code", None) == 404:
+                self._setzen(eid, True, state=DISPATCH_NO_CLIP, reason="event_weg", asked_at=jetzt)
+                return True
+            # Fehler ausser 404: bleibt neu und wird 30 s nach dieser Abfrage wieder gefragt; gedrosselte WARNING wie
+            # bisher beim Lader, gezaehlt fuer /health.
+            with self._mutex:
+                self.meta_fehler += 1
+            self._setzen(eid, True, state=DISPATCH_NEW, asked_at=jetzt, error=f"{type(e).__name__}: {str(e)[:200]}")
+            _logbuch.swallowed(self.svc.log, _logbuch.WARNING,
+                               f"event metadata not available, asked again in {VORLAUF_OFFEN_TAKT_S:g} s")
+            return False
+        zeiten = {"asked_at": jetzt, "end_time": ev.get("end_time"), "start_time": ev.get("start_time")}
+        if not ev.get("end_time"):
+            abgelaufen = open_deadline(cfg, ev)[2]
+            self._setzen(eid, True, state=DISPATCH_NO_CLIP if abgelaufen else DISPATCH_OPEN,
+                         reason="offen" if abgelaufen else None, **zeiten)
+        elif fixed_filters(cfg, ev, eid in getattr(self.svc, "own_writes", ()))[0] is not None:
+            self._setzen(eid, True, state=DISPATCH_NO_CLIP, reason="filter", **zeiten)
+        elif ev.get("has_clip") is False and self._lokal_bytes(eid) <= 0:
+            self._setzen(eid, True, state=DISPATCH_NO_CLIP, reason="clip_weg", **zeiten)
+        elif ev.get("has_clip") is False:
+            self._bereit_pinnen(eid, True, **zeiten)          # Frigate hat ihn nicht mehr, hier liegt er noch
+        else:
+            self._setzen(eid, True, state=DISPATCH_FETCH, **zeiten)
+        return True
+
+    def _einordnen_einspiel(self, eid):
+        """Ein eingespieltes Ereignis lokal einordnen, ohne Frigate (Punkt 2 a): Metadaten und brauchbarer Cache ->
+        bereit; sonst Vorlage -> lokal bereitstellen -> bereit; fehlt beides oder fehlen die Metadaten -> ohne Clip
+        `einspiel_fehlt`. -> None"""
+        dd = self.svc.cfg["data_dir"]
+        meta = _einspiel.meta_lesen(dd, eid)
+        if meta is None:
+            self._setzen(eid, True, state=DISPATCH_NO_CLIP, reason="einspiel_fehlt", asked_at=time.monotonic())
+            return None
+        zeiten = {"asked_at": time.monotonic(), "end_time": meta.get("end_time"), "start_time": meta.get("start_time")}
+        if self._lokal_bytes(eid) > 0:
+            self._bereit_pinnen(eid, True, **zeiten)
+            return None
+        self._setzen(eid, True, state=DISPATCH_FETCH, **zeiten)
+        try:
+            pfad = _frames.clip_holen(eid, data_dir=dd, quelle="vorlauf")    # Einspiel-Zweig: nur lokal
+        except FileNotFoundError as e:
+            self._setzen(eid, state=DISPATCH_NO_CLIP, reason="einspiel_fehlt",
+                         discard=_frames.verwurf_grund(e) or _reg.VERWURF_ANALYSE_NONE, error=f"{type(e).__name__}: {e}")
+            return None
+        except Exception as e:                            # noqa: BLE001
+            self._versuch_gescheitert(eid, e)
+            return None
+        finally:
+            _frames.frei(eid, dd)
+        if os.path.getsize(pfad) > 0:
+            self._bereit_pinnen(eid)
+        else:
+            self._versuch_gescheitert(eid, RuntimeError(f"injected clip of {eid} staged with 0 bytes"))
+        return None
+
+    # ------------------------------------------------------------------ Versuche
+    def _versuch_gescheitert(self, eid, e):
+        """Ein Abrufversuch scheiterte (Fehler oder Datei mit 0 Byte, Punkt 3): eigenen Halter loesen, eine leere
+        Datei ohne anderen Halter verwerfen, 30 s spaeter neu; nach drei Versuchen ohne Clip `abruf_gescheitert`.
+        -> None"""
+        dd = self.svc.cfg["data_dir"]
+        art = type(e).__name__
+        with self._mutex:
             self.fehler += 1
-            # .534 (Abnahme-Befund 15.09.): DER GRUND MUSS SICHTBAR SEIN. Er
-            # stand nur in `debug`, und das ist werksseitig aus — im Feld sah
-            # man „7 von 61 Abrufen fehler" und hatte keine Ahnung, woran. Eine
-            # gezaehlte Stoerung ohne Grund ist eine luegende Diagnose.
-            art = type(e).__name__
             self.fehler_arten[art] = self.fehler_arten.get(art, 0) + 1
             self.letzter_fehler = f"{art}: {str(e)[:200]}"
-            if art not in self._fehler_gemeldet:
-                self._fehler_gemeldet.add(art)
-                self.svc.log.error(f"vorlauf: a clip could not be fetched ahead "
-                             f"({self.letzter_fehler}) — the analysis slot "
-                             f"fetches it itself when its turn comes; further "
-                             f"errors of this kind are counted, not logged")
-            # Nicht wieder und wieder: ein Ereignis, dessen Clip sich nicht
-            # holen laesst, blockiert sonst den Vorrat. Der Platz versucht es
-            # spaeter ohnehin selbst — dort ist es ein Urteil wert, hier nicht.
-            if len(self._nicht_holen) >= VORLAUF_NICHT_HOLEN_MAX:
-                # Gedaechtnisstuetze, kein Verzeichnis: laeuft sie voll, wird sie
-                # geleert und die Stufe versucht es noch einmal.
-                self._nicht_holen.clear()
-            self._nicht_holen.add(eid)
-            self.svc.log.debug(f"vorlauf: {eid} not fetched "
-                           f"({type(e).__name__}: {e}) — the analysis slot "
-                           f"tries it itself")
+            erste = art not in self._fehler_gemeldet
+            self._fehler_gemeldet.add(art)
+        if erste:
+            # .534 (Abnahme-Befund 15.09.): DER GRUND MUSS SICHTBAR SEIN; je Art eine Zeile, danach gezaehlt.
+            self.svc.log.error(f"vorlauf: a clip could not be fetched ahead ({self.letzter_fehler}) — tried again in "
+                               f"{DISPATCH_RETRY_S:g} s, after {DISPATCH_ATTEMPTS_MAX} attempts the event is booked "
+                               f"as failed; further errors of this kind are counted, not logged")
+        _frames.free_named(eid, DISPATCHER_PIN, dd)
+        pfad = _frames.cache_pfad(eid, dd)
+        if self._lokal_bytes(eid) == 0 and not _frames.gepinnt(pfad):
+            try:
+                os.remove(pfad)
+            except OSError:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "empty clip kept")
+        n = int(self._info(eid).get("attempts") or 0) + 1
+        if n >= DISPATCH_ATTEMPTS_MAX:
+            self._setzen(eid, state=DISPATCH_NO_CLIP, reason="abruf_gescheitert", attempts=n, pinned=False,
+                         discard=_frames.verwurf_grund(e) or _reg.VERWURF_ANALYSE_NONE, error=self.letzter_fehler)
+        else:
+            self._setzen(eid, state=DISPATCH_FETCH, attempts=n, pinned=False,
+                         retry_at=time.monotonic() + DISPATCH_RETRY_S, error=self.letzter_fehler)
+        self.svc.log.debug(f"vorlauf: {eid} not fetched ({self.letzter_fehler}), attempt {n} of "
+                           f"{DISPATCH_ATTEMPTS_MAX}")
+
+    def _holen(self, eid):
+        """EIN Clip in den Cache, mit Frist und benanntem Pin (Punkt 3, 5). Laeuft in einem eigenen kurzen Faden.
+        -> None"""
+        cfg = self.svc.cfg
+        dd = cfg["data_dir"]
+        info = self._info(eid)
+        alter = (_clip_alter_min(info.get("end_time"), info.get("start_time"))
+                 if info.get("end_time") or info.get("start_time") else None)
+        frist, erzeugung = job_deadline(cfg, clip_age_min=alter)
+        with self._mutex:
+            self.versuche += 1
+        t0 = time.monotonic()
+        try:
+            _frames.pin_named(eid, DISPATCHER_PIN, dd)      # vor dem Abruf (Punkt 5)
+            _frames.clip_holen(
+                eid, data_dir=dd, frigate_url=cfg.get("frigate_url") or "", quelle="vorlauf", alter_min=alter,
+                # E2: alle Torplaetze bis `vorlauf_parallel`, keine Torreserve mehr — die Live-Analysen holen nicht
+                # mehr selbst (Bauplan Disponent D3b Punkt 4).
+                tor_n=clip_tor_aus_cfg(cfg), tor_deckel_s=clip_tor_deckel_s_aus_cfg(cfg),
+                # Bauplan VOD aus, Stufe VA1: Schalter ueber die eine Auslegung, und ist VOD an, der Deckel fuer ffmpeg
+                # aus der Config statt 30 s.
+                vod=_frames.vod_an(cfg.get("clip_vod")),
+                erzeugung=erzeugung, erzeugung_deckel_s=clip_erzeugung_deckel_s_aus_cfg(cfg),
+                deadline_s=frist)                                # D3b Punkt 3: die heutige Job-Frist
+            _frames.frei(eid, dd)                       # Fadenpin nach dem Abruf loesen, danach haelt nur der benannte
+            self._abruf_zaehlen()
+            # Bauplan Feldstau Stufe 3 (Fund 3): nach jeder Ablage den Aufraeum-Faden anstupsen; sein Lauf eicht den
+            # Groessen-Stand, auf dem die Bremse `_cache_voll` faehrt.
+            self.svc.aufraeumen_anstossen()
+            groesse = self._lokal_bytes(eid)
+            if groesse <= 0:
+                raise RuntimeError(f"empty clip in the cache for {eid} (0 bytes)")
+            self.geholt += 1
+            self._bereit_pinnen(eid)
+            self.svc.log.debug(f"vorlauf: {eid} fetched in {time.monotonic() - t0:.1f}s "
+                               f"({groesse / 1048576.0:.1f} MB)")
+        except Exception as e:                            # noqa: BLE001
+            self._versuch_gescheitert(eid, e)
         finally:
             try:
-                _frames.frei(eid, cfg["data_dir"])
+                _frames.frei(eid, dd)                     # auf dem Fehlerweg hat clip_holen ihn schon geloest
             except Exception:                             # noqa: BLE001
                 _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             with self._mutex:
                 self._laeuft.discard(eid)
+
+    def _abruf_zaehlen(self):
+        """Bauplan VOD2 Punkt 5b: den Weg des letzten Abrufs dieses Fadens und einen Rueckfall von VOD auf clip.mp4
+        zaehlen (core/frames.abrufstand); `zustand` gibt die Zaehler aus. -> None"""
+        _stand = _frames.abrufstand()
+        with self._mutex:
+            if getattr(self, "abruf_wege", None) is None:
+                self.abruf_wege, self.abruf_rueckfaelle, self.abruf_letzter_rueckfall = {}, 0, None
+            if _stand.get("weg"):
+                self.abruf_wege[_stand["weg"]] = self.abruf_wege.get(_stand["weg"], 0) + 1
+            if _stand.get("rueckfall_grund"):
+                self.abruf_rueckfaelle += 1
+                self.abruf_letzter_rueckfall = {"grund": _stand["rueckfall_grund"], "zeit": time.time()}
 
     def _cache_voll(self):
         """Ist der Clip-Cache an seiner eigenen Grenze? -> bool
@@ -7288,9 +7672,10 @@ class Vorlauf:
         .534 (Pruefbericht E-5): der Vorrat wird in STUECK gezaehlt, der Cache in
         BYTES — und im Feld reicht eine Clipdauer bis 780 s. Stiesse der Vorrat
         den Cache ueber seine Grenze, raeumte der Aufraeumer AELTEST ZUERST; das
-        ist genau der Clip, der als naechstes gebraucht wird (geholt wird in
-        Warteschlangen-Reihenfolge). Ergebnis waere ein Hol-Raeum-Hol-Kreis gegen
-        dasselbe Frigate, das diese Stufe schonen soll.
+        sind die frueher vorgeholten Clips, und deren Ereignisse koennen noch
+        warten (seit LZ1, Bauplan analysen/bauplan_neueste_zuerst.md, rueckt jeder
+        neu eingereihte Eintrag vor sie). Ergebnis waere ein Hol-Raeum-Hol-Kreis
+        gegen dasselbe Frigate, das diese Stufe schonen soll.
         KEINE NEUE ZAHL: gefragt wird die Grenze, die der Cache ohnehin hat.
         Bauplan Feldstau Stufe 3: die Groesse kommt aus dem gepflegten Stand, den jeder
         Aufraeum-Lauf eicht (und jede Ablage in `_holen` stoesst einen an). Fehlt der Stand
@@ -7304,44 +7689,234 @@ class Vorlauf:
             _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
             return False
 
+    def job_quelle_melden(self, quelle=None):
+        """Die Abruf-Quelle eines uebernommenen Analyse-Jobs melden und die Phase „Vorrat haelt nicht Schritt" fuehren
+        (Bauplan VL1: WARNING beim Beginn, INFO am Ende); ohne Quelle (aus `_takt`) nur das Phasenende pruefen. -> None
+
+        Selbstabruf heisst: der Platz holte bei Frigate (`vod`, `clip.mp4`), waehrend der Vorrat an ist, der Cache nicht
+        an seiner Grenze und mindestens T faellige Ereignisse warten, T = laufende Strangzahl. Keine neue Zahl: wartet je
+        Strang ein Ereignis, haette der Vorrat vorholen koennen. Keine Frigate-Abfrage, kein Abschlusswissen noetig."""
+        try:
+            hoch = self._zahlen()[1]
+            with self._mutex:
+                offen = self._phase is not None
+            if quelle is None and not offen:
+                return
+            # T ohne Nebenwirkung lesen (nie `svc.worker_dienst()`, das legt das Objekt an); fehlt der Worker oder
+            # laeuft kein Strang, gibt es keine Meldung, und eine offene Phase bleibt bis zum naechsten Blick offen
+            d = getattr(self.svc, "_dienst_obj", None)
+            t = int(getattr(d, "straenge_laufend", 0) or 0) if d is not None else 0
+            if t <= 0:
+                return
+            # Die Warteschlange vor dem eigenen Schloss lesen (dieselbe Reihenfolge wie `_takt`); der Cache-Stand ist
+            # der Merker des letzten Takts, `_cache_voll` koennte beim ersten Gebrauch den Cache zaehlen
+            n = len(self._warteschlange()) if hoch else 0
+            selbst = quelle in ("vod", "clip.mp4") and bool(hoch) and not self.cache_voll_gemeldet and n >= t
+            beginn = ende = None
+            with self._mutex:
+                ph = self._phase
+                if selbst:
+                    self.selbstabrufe += 1
+                    if ph is None:
+                        self.selbstabruf_phasen += 1
+                        ph = self._phase = {"start": self._uhr(), "seit": time.time(), "selbstabrufe": 0,
+                                            "cache_folge": 0}
+                        beginn = n
+                    ph["selbstabrufe"] += 1
+                    ph["cache_folge"] = 0
+                elif ph is not None:
+                    grund = None
+                    if not hoch:
+                        grund = "stock off"
+                    elif n < t:
+                        grund = "fewer events waiting than compute threads"
+                    elif quelle == "cache":
+                        ph["cache_folge"] += 1
+                        if ph["cache_folge"] >= t:
+                            grund = "cache hits in a row"
+                    elif quelle is not None:
+                        ph["cache_folge"] = 0
+                    if grund:
+                        self._phase = None
+                        ende = self.phase_letzte = {"dauer_s": round(self._uhr() - ph["start"], 1),
+                                                    "selbstabrufe": ph["selbstabrufe"], "grund": grund}
+            if beginn is not None:
+                self.svc.log.warning(
+                    f"vorlauf: the stock is not keeping up — an analysis slot fetched its clip from Frigate itself "
+                    f"({quelle}) while {beginn} event(s) are waiting for {t} compute thread(s); the GPU can wait on "
+                    f"the download. Check clip_download_parallel (the shared download gate) and vorlauf_parallel; "
+                    f"further self-fetches in this phase are counted (/health vorlauf.selbstabrufe), not logged")
+            if ende is not None:
+                self.svc.log.info(f"vorlauf: the stock is keeping up again ({ende['grund']}) — the phase lasted "
+                                  f"{ende['dauer_s']:.1f}s with {ende['selbstabrufe']} self-fetch(es)")
+        except Exception:                                 # noqa: BLE001
+            # Eine Meldung darf weder den Takt des Vorrats noch die Uebernahme der Job-Antwort mitnehmen.
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
+
+    # ------------------------------------------------------------------ Takt
     def _takt(self):
+        """Eine Runde des Disponenten: Pins uebernehmen (erste Runde), Ziel, Einordnung und Fenster, Zielverlust,
+        Auffrischen, Vorrat mit Hysterese (NZ1), Abrufe starten. -> None"""
         tief, hoch, par = self._zahlen()
-        if not hoch:
-            self.bereit, self.pausiert = 0, False
-            return
-        if self._cache_voll():
-            if not self.cache_voll_gemeldet:
-                self.cache_voll_gemeldet = True
-                self.svc.log.warning("vorlauf: the clip cache is at its limit — not "
-                             "fetching ahead (the cleaner drops the oldest clip, "
-                             "and that is the one needed next)")
-            return
-        self.cache_voll_gemeldet = False
-        warte = self._warteschlange()
-        bereit = sum(1 for e in warte if self._liegt(e))
+        # Bauplan VL1 Punkt 2: das Ende einer offenen Phase „Vorrat haelt nicht Schritt" VOR jeder fruehen Rueckgabe
+        # pruefen; ohne offene Phase kehrt die Pruefung sofort zurueck
+        self.job_quelle_melden()
+        if not self._uebernommen:
+            self._pins_uebernehmen()
+            self._uebernommen = True
+        halt = self._frigate_halt()
+        if self._halt_vorher and not halt and hasattr(self.svc, "_ev_wecker"):
+            with self.svc._ev_wecker:                    # Frigates Rueckkehr weckt die Abholer (Punkt 6)
+                self.svc._ev_wecker.notify_all()
+        self._halt_vorher = halt
+        voll = self._cache_voll()
+        if voll and not self.cache_voll_gemeldet:
+            self.svc.log.warning("vorlauf: the clip cache is at its limit — fetching only for the compute threads "
+                                 "(the cleaner drops the oldest clips first, and their events may still be waiting)")
+        self.cache_voll_gemeldet = voll
+        # Punkt 4: bei Vorrat aus oder Cache an der Grenze ist das Ziel die Zahl der Analyseplaetze — es wird nur
+        # geholt, was gleich gebraucht wird, nie gar nichts.
+        knapp = not hoch or voll
+        self.ziel = self._straenge() if knapp else hoch
+        fenster = self._fenster(self._warteschlange(halt), self.ziel)
+        self._ziel_verlust(fenster, halt)
+        self._auffrischen()
+        self._vorgefunden(fenster)
+        info = self._infos(fenster)
+        bereit = 0
+        for e in fenster:
+            if info.get(e, {}).get("state") != DISPATCH_READY:
+                break
+            bereit += 1
         self.bereit = bereit
-        if self.pausiert and bereit < tief:
+        if knapp:
             self.pausiert = False
-            self.svc.log.warning(f"vorlauf: stock down to {bereit} clip(s) (below "
-                         f"{tief}) — fetching again up to {hoch}")
+        elif self._hysterese(fenster, info, bereit, tief, hoch):
+            return
+        self._abrufe_starten(fenster, par, halt)
+
+    def _hysterese(self, warte, info, bereit, tief, hoch):
+        """Pause und Wiederaufnahme des Vorrats (LZ1, NZ1): Vorrat ist der zusammenhaengende bereite Anfang des
+        Fensters; fehlt der vorderste Clip, endet die Pause. -> True, wenn der Vorrat pausiert"""
+        if self.pausiert and (bereit < tief or (warte and not bereit)):
+            self.pausiert = False
+            # Bauplan analysen/bauplan_nachzug_033.md, Stufe NZ1 Punkt 1: die Logstufe nach dem Grund. Liegen im
+            # ganzen Fenster weniger als vorlauf_min bereit, ist es echter Mangel (WARNING); fehlen nur vorne Clips (ein
+            # neuer Spitzenreiter), DEBUG mit Grund, und die Pause danach ebenso.
+            im_fenster = bereit + sum(1 for e in warte[bereit + 1:]
+                                      if info.get(e, {}).get("state") == DISPATCH_READY)
+            self._still_nachladen = im_fenster >= tief
+            if self._still_nachladen:
+                self.svc.log.debug(f"vorlauf: the front clip is missing while {im_fenster} clip(s) are ready in "
+                                   f"the window (lower mark {tief}) — fetching again up to {hoch}")
+            else:
+                self.svc.log.warning(f"vorlauf: stock down to {bereit} clip(s) (below "
+                                     f"{tief}) — fetching again up to {hoch}")
         elif not self.pausiert and bereit >= hoch:
             self.pausiert = True
-            self.svc.log.warning(f"vorlauf: {bereit} clip(s) ready (limit {hoch}) — "
-                         f"pausing until the stock falls below {tief}")
-        if self.pausiert:
+            if self._still_nachladen:
+                self.svc.log.debug(f"vorlauf: {bereit} clip(s) ready (limit {hoch}) after fetching the missing front "
+                                   f"clip(s) — pausing until the stock falls below {tief}")
+            else:
+                self.svc.log.warning(f"vorlauf: {bereit} clip(s) ready (limit {hoch}) — "
+                                     f"pausing until the stock falls below {tief}")
+        return self.pausiert
+
+    def _infos(self, eids):
+        """Kopien der Datensaetze der genannten eids. -> dict eid -> dict"""
+        if not hasattr(self.svc, "_ev_wecker"):
+            return {}
+        with self.svc._ev_wecker:
+            daten = self.svc._ev_daten()
+            return {e: dict(daten.get(e) or {}) for e in eids}
+
+    def _fenster(self, reihenfolge, ziel):
+        """Entlang der Reihenfolge einordnen, was neu oder offen ist und gefragt werden darf, bis `ziel` Ereignisse mit
+        Clip (holen oder bereit) im Fenster stehen (Punkt 2 und 4). Nach einem Abfragefehler fragt die Runde Frigate
+        nicht weiter (ein Frigate, das nicht antwortet, wird nicht Ereignis fuer Ereignis befragt); Eingespieltes, das
+        Frigate nicht braucht, ordnet sie weiter lokal ein (Nachbesserung 22.10.2026 19:34 (c)).
+        -> Liste der eids im Fenster"""
+        fenster, fragen = [], True
+        for eid in reihenfolge:
+            if self._stop.is_set() or len(fenster) >= ziel:
+                break
+            info = self._info(eid)
+            if info.get("state", DISPATCH_NEW) in (DISPATCH_NEW, DISPATCH_OPEN):
+                gefragt = info.get("asked_at")
+                if ((fragen or _einspiel.ist_einspiel(eid))
+                        and (gefragt is None or time.monotonic() - gefragt >= VORLAUF_OFFEN_TAKT_S)):
+                    fragen = self._einordnen(eid) and fragen
+                    info = self._info(eid)
+            if info.get("state") in (DISPATCH_FETCH, DISPATCH_READY):
+                fenster.append(eid)
+        return fenster
+
+    def _ziel_verlust(self, fenster, halt):
+        """Punkt 5: faellt ein faelliges Ereignis der Schlange aus dem Ziel, wird sein Pin geloest und es ist wieder
+        holen. Waehrend Frigate unten ist, behalten Frigate-Ereignisse ihren Pin (sie liessen sich nicht neu holen).
+        -> None"""
+        q = getattr(self.svc, "_ev_q", None)
+        if q is None:
             return
+        drin, jetzt, los = set(fenster), time.time(), []
+        with self.svc._ev_wecker:
+            daten = self.svc._ev_daten()
+            for f, e, _i in q:
+                info = daten.get(e)
+                if (info is None or not info.get("pinned") or e in drin or (f and f > jetzt)
+                        or (halt and not _einspiel.ist_einspiel(e))):
+                    continue
+                info["pinned"] = False
+                if info.get("state") == DISPATCH_READY:
+                    info["state"] = DISPATCH_FETCH
+                los.append(e)
+        for e in los:
+            _frames.free_named(e, DISPATCHER_PIN, self.svc.cfg["data_dir"])
+
+    def _auffrischen(self):
+        """Punkt 5: jeden eigenen Pin spaetestens nach der Haelfte von PIN_ABGESTANDEN_S auffrischen (auch die der
+        gerade zugeteilten Ereignisse; ihr Datensatz lebt bis zum Abschluss). -> None"""
+        if not hasattr(self.svc, "_ev_wecker"):
+            return
+        jetzt, faellig = time.time(), []
+        with self.svc._ev_wecker:
+            for e, info in self.svc._ev_daten().items():
+                if info.get("pinned") and jetzt - float(info.get("pin_at") or 0) >= _frames.PIN_ABGESTANDEN_S / 2:
+                    info["pin_at"] = jetzt
+                    faellig.append(e)
+        for e in faellig:
+            _frames.refresh_named(e, DISPATCHER_PIN, self.svc.cfg["data_dir"])
+
+    def _vorgefunden(self, fenster):
+        """Liegt fuer ein Ereignis holen im Fenster die Datei schon (Wiederkehr ins Ziel, Neustart, Cache-Treffer),
+        wird sie gepinnt und das Ereignis ist ohne Abruf bereit; eine vorgefundene leere Datei ist ein gescheiterter
+        Versuch (Punkt 3). -> None"""
+        with self._mutex:
+            laeuft = set(self._laeuft)
+        jetzt = time.monotonic()
+        for e, info in self._infos(fenster).items():
+            if info.get("state") != DISPATCH_FETCH or e in laeuft:
+                continue
+            n = self._lokal_bytes(e)
+            if n > 0:
+                self._bereit_pinnen(e)
+            elif n == 0 and jetzt >= float(info.get("retry_at") or 0):
+                self._versuch_gescheitert(e, RuntimeError(f"empty clip found in the cache for {e} (0 bytes)"))
+
+    def _abrufe_starten(self, fenster, par, halt):
+        """Die naechsten fehlenden Clips des Fensters holen, hoechstens `par` gleichzeitig, eine Anforderung je eid,
+        ein gescheiterter Versuch erst nach DISPATCH_RETRY_S; waehrend Frigate unten ist, nur Eingespieltes. -> None"""
         with self._mutex:
             frei = par - len(self._laeuft)
             laeuft = set(self._laeuft)
-        if frei <= 0:
-            return
-        for eid in warte:
+        jetzt = time.monotonic()
+        for eid, info in self._infos(fenster).items():
             if frei <= 0 or self._stop.is_set():
                 return
-            if eid in laeuft or eid in self._nicht_holen or self._liegt(eid):
+            if (info.get("state") != DISPATCH_FETCH or eid in laeuft
+                    or jetzt < float(info.get("retry_at") or 0)
+                    or (halt and not _einspiel.ist_einspiel(eid))):
                 continue
-            if not self._fertig_in_frigate(eid):
-                continue                  # noch offen -> zurueckgestellt (B9a)
             with self._mutex:
                 if len(self._laeuft) >= par:
                     return
@@ -7350,13 +7925,52 @@ class Vorlauf:
             threading.Thread(target=self._holen, args=(eid,), daemon=True,
                              name=f"vorlauf-{eid}").start()
 
-    def _lauf(self):
-        while not self._stop.wait(VORLAUF_TAKT_S):
+    def _pins_uebernehmen(self):
+        """Punkt 5, nach einem Neustart in der ersten Runde: die benannten Pins der Ereignisse in der Schlange
+        uebernehmen (aufgefrischt, im Datensatz vermerkt), alle uebrigen loesen. -> None"""
+        dd = self.svc.cfg["data_dir"]
+        q = getattr(self.svc, "_ev_q", None)
+        behalten = {}
+        if q is not None:
+            with self.svc._ev_wecker:
+                daten = self.svc._ev_daten()
+                for _f, e, _i in q:
+                    if e in daten:
+                        behalten[_frames.named_pin_path(e, DISPATCHER_PIN, dd)] = e
+        n_ueber, n_los = 0, 0
+        for p in _frames.named_pins(DISPATCHER_PIN, dd):
+            e = behalten.get(p)
+            if e is not None and _frames.refresh_named(e, DISPATCHER_PIN, dd):
+                self._setzen(e, pinned=True, pin_at=time.time())
+                n_ueber += 1
+                continue
             try:
-                self._takt()
-            except Exception as e:                        # noqa: BLE001
-                # Eine Vorrats-Stufe darf den Dienst nie mitnehmen.
-                self.svc.log.debug(f"vorlauf: {type(e).__name__}: {e}")
+                os.remove(p)
+                n_los += 1
+            except OSError:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "stale dispatcher pin kept")
+        if n_ueber or n_los:
+            self.svc.log.info(f"vorlauf: took over {n_ueber} pin(s) of queued events from before the restart, "
+                              f"released {n_los} other(s)")
+
+    def _lauf(self):
+        try:
+            while not self._stop.is_set():
+                self.wecken.wait(VORLAUF_TAKT_S)
+                self.wecken.clear()
+                if self._stop.is_set():
+                    break
+                try:
+                    self._takt()
+                except Exception as e:                    # noqa: BLE001
+                    # Eine Runde darf den Dienst nie mitnehmen.
+                    self.svc.log.debug(f"vorlauf: {type(e).__name__}: {e}")
+        except BaseException as e:
+            # Punkt 9: stirbt der Faden doch, ist /health rot (health_ok), und hier steht der Grund.
+            self.faden_grund = f"{type(e).__name__}: {str(e)[:200]}"
+            self.svc.log.error(f"vorlauf: the dispatcher thread died ({self.faden_grund}) — no clip is classified "
+                               f"or fetched any more; /health ok is red")
+            raise
 
 
 # ------------------------------------------------------------------ Feinmessung (.534 B7)
@@ -7569,7 +8183,17 @@ class Service:
         # .292: VOD-Weg-Schalter des DIENST-Prozesses (Melden-Video, direkte
         # Zuege) — beim Start aus der Config; der Vorlader armiert je Zug
         # zusaetzlich frisch, Worker-Jobs tragen ihn als Job-Feld.
-        _frames.CLIP_VOD = cfg.get("clip_vod") is not False
+        # Bauplan VOD aus, Stufe VA1: VOR dieser Zeile einmal ausschalten (Merker
+        # im Store), dann setzt der Dienst Prozess-Global UND Umgebung aus derselben
+        # Config (Werkseinstellung aus). Jeder Kindprozess erbt den Schalter
+        # (Alt-Unterprozess, Worker-Dienst, Wanduhr-Roundtrip); nach einem Neustart
+        # ueber os.execv liest das neu geladene Modul zuerst den vorigen Wert, hier
+        # wird er neu gesetzt. Den Deckel setzt der Dienst bewusst NICHT in seine
+        # Umgebung: als Modul-Vorgabe ersetzte er einen fehlenden Deckel und
+        # hebelte die Schutzregel fuer Erzeugung ohne Deckel aus (core/frames).
+        self._clip_vod_einmal_aus()
+        _frames.CLIP_VOD = _frames.vod_an(cfg.get("clip_vod"))
+        os.environ["SUSLIK_CLIP_VOD"] = "1" if _frames.CLIP_VOD else "0"
         if cfg.get("cpu_threads"):
             # N9: EIN Knopf fuer beide Prozesse — ENV erbt der Worker-Subprozess; face_audit
             # liest es beim ersten Session-Bau (_so_mit_threads), Transcode je Kommando.
@@ -7734,6 +8358,7 @@ class Service:
         self._cleanup_lock = threading.Lock()     # Aufraeum-Faden, Platten-Wache und Knopf raeumen nie gleichzeitig
         self._aufraeum_zeichen = threading.Event()   # Anstups-Zeichen des Aufraeum-Fadens (start_aufraeumer)
         self._groessen_stand = None               # Feldstau Stufe 3: (Bytes, monotonic der Eichung) des Clip-Caches
+        self._cache_clear_on_restart()            # Bauplan Clip-Cache leeren CL1: vorgefundenes „laeuft“ -> „abgebrochen“
         # .264 Frigate-Schoner: Config-Werte + lauter Log-Kanal verdrahten.
         frigate_schoner.schwelle = int(self.cfg.get("frigate_schoner_fehler") or 3)
         frigate_schoner.pause_s = float(self.cfg.get("frigate_schoner_pause_s") or 180)
@@ -9239,6 +9864,12 @@ class Service:
         # dass die Marke davon irgendwo gebraucht wuerde. Lebt unter DEMSELBEN
         # `_ev_wecker` und faellt in derselben Klammer wieder weg.
         self._ev_marken = {}
+        # Bauplan Disponent Stufe D1 Punkt 3: je eid genau EIN Datensatz mit Kamera, Stufe und
+        # Besitzkennung, unter DEMSELBEN `_ev_wecker`. Er entsteht mit der Aufnahme in
+        # `event_einreihen` und endet im `finally` des Abholers (ohne Rueckstellung, eigene
+        # Kennung) oder beim Platzwaechter mit `haenger` (Punkt 6). Die Schlange selbst behaelt ihre
+        # Drei-Tupel (Begruendung bei `_ev_marken` oben).
+        self._ev_info = {}
         # .510/J16: laeuft die Schlange gerade im HALT (Frigate unten)? Dient nur
         # der EINEN Sammelzeile je Ausfall — der Halt selbst wird jede Runde neu
         # aus Protector und Fehlerserie beantwortet, nie aus diesem Merker.
@@ -9250,8 +9881,10 @@ class Service:
         Timer-Herde. Bis .398 startete on_msg je Event einen threading.Timer,
         alle Timer-Threads stauten sich UNFAIR und UNSICHTBAR am Analyse-Lock
         (kein Deckel, keine Reihenfolge — CPython-Locks sind nicht FIFO).
-        Jetzt: EIN Abarbeiter, FIFO nach Faelligkeit (clip_delay ab
-        Event-Ende), Deckel EV_QUEUE_MAX (seit B2 wird bei voller Schlange das
+        Jetzt: ein Abarbeiter je Platz, „last in, first out" nach
+        Einreihposition (Bauplan analysen/bauplan_neueste_zuerst.md, Stufe LZ1:
+        das zuletzt eingereihte FAELLIGE Element zuerst, Faelligkeit = clip_delay
+        ab Event-Ende; bis 0.1.1.032 FIFO), Deckel EV_QUEUE_MAX (seit B2 wird bei voller Schlange das
         NEUE abgewiesen statt das aelteste verdraengt — s. `event_einreihen`;
         das Nachhol-Netz holt Abgewiesene spaeter nach, jenseits des
         lookback-Fensters haelt sie der Merkzettel), Laenge und Alter sichtbar
@@ -9269,15 +9902,16 @@ class Service:
                 with self._ev_wecker:
                     while not self._ev_q:
                         self._ev_wecker.wait(timeout=30)
-                    # C2-T0 (05.09.2026, bauplan_0505.md §2 Gruppe C, Befund aus
-                    # B1): das ERSTE FAELLIGE Element, nicht der Kopf. Alle Abholer
-                    # warteten bisher auf `_ev_q[0]`; ein Eintrag mit noch offener
-                    # clip_delay-Faelligkeit hielt damit ALLE `sofort`-Eintraege
-                    # hinter sich auf — bis zu einem vollen clip_delay, obwohl
-                    # Plaetze frei waren. Auftreten kann das, sobald beide Wege
-                    # einreihen (MQTT-Ereignis mit Frist vor einem Reconnect-Sweep
-                    # mit `sofort=True`); es loest sich von selbst, kostet aber
-                    # genau die Latenz, gegen die .505 gebaut ist. Die Suche ist
+                    # C2-T0 (05.09.2026, bauplan_0505.md §2 Gruppe C), seit LZ1
+                    # (Bauplan analysen/bauplan_neueste_zuerst.md) von hinten: das
+                    # ZULETZT EINGEREIHTE FAELLIGE Element, nicht blind das Ende.
+                    # Die Suche laeuft vom Ende zum Kopf und nimmt den ersten
+                    # faelligen Treffer; ein Eintrag mit noch offener
+                    # clip_delay-Faelligkeit wird uebersprungen und haelt die
+                    # faelligen vor ihm nicht auf (bis .504 warteten alle Abholer
+                    # auf `_ev_q[0]`, und ein unfaelliger Kopf hielt jeden
+                    # `sofort`-Eintrag bis zu einem vollen clip_delay auf). Gleiche
+                    # Regel im Vorlader (`Vorlauf._warteschlange`). Die Suche ist
                     # linear und laeuft unter `_ev_wecker`: bei EV_QUEUE_MAX = 5000
                     # sind das im schlimmsten Fall 5000 Zahlenvergleiche, also
                     # Mikrosekunden, und nur dann, wenn wirklich nichts faellig ist.
@@ -9307,18 +9941,19 @@ class Service:
                         getattr(self, "frigate_fehlerserie", 0)
                         >= max(1, int(frigate_schoner.schwelle)))
                     jetzt = time.time()
-                    treffer, frueheste = None, None
-                    for _k, (_f, _e, _i) in enumerate(self._ev_q):
-                        # Eingespielte Ereignisse brauchen Frigate nicht (ihre
-                        # Metadaten und ihr Clip liegen lokal) — sie laufen auch
-                        # waehrend eines Ausfalls weiter.
-                        if _halt and not _einspiel.ist_einspiel(_e):
-                            continue
-                        if _f <= jetzt:
-                            treffer = _k
-                            break
-                        if frueheste is None or _f < frueheste:
-                            frueheste = _f
+                    # Bauplan Disponent D3b Punkt 6: die ZUTEILUNG — eine gewichtete
+                    # Runde ueber die Stufen mit einem zuteilbaren (bereit oder ohne
+                    # Clip) faelligen Ereignis, aus der Stufe das neueste, unter
+                    # DIESEM Schloss (`_dispatch_pick`). Eingespielte Ereignisse
+                    # brauchen Frigate nicht — sie laufen auch waehrend eines
+                    # Ausfalls weiter. Dieses Warten liegt vor dem Platzerwerb: der
+                    # Drain wartet nie darauf.
+                    treffer, frueheste, _neu = self._dispatch_pick(_halt, jetzt)
+                    _letzter = len(self._ev_q) - 1
+                    if treffer is None and _neu:
+                        # Ein faelliges Ereignis wartet auf seine erste Einordnung: den
+                        # Disponenten wecken statt bis zu seinem naechsten Takt zu warten.
+                        self._disponent_wecken()
                     if treffer is None and _halt and frueheste is None:
                         # Nichts zu tun, solange Frigate unten ist. EINE Zeile je
                         # Ausfall (der Zustand steht am Dienst, nicht am Thread —
@@ -9337,24 +9972,32 @@ class Service:
                     if treffer is None:
                         # Schlafen bis zum FRUEHESTEN faelligen Eintrag, nicht bis
                         # zum Kopf: der Kopf kann der spaeteste von allen sein.
+                        # D3b Punkt 6: hoechstens VORLAUF_TAKT_S; geweckt wird bei
+                        # jeder Ablage, jedem Zustandswechsel und Frigates Rueckkehr.
                         self._ev_wecker.wait(
-                            timeout=min(max(frueheste - jetzt, 0.05), 5.0))
+                            timeout=min(max(frueheste - jetzt, 0.05), VORLAUF_TAKT_S)
+                            if frueheste is not None else VORLAUF_TAKT_S)
                         continue
-                    if treffer == 0:
-                        _faellig, eid, _einge = self._ev_q.popleft()
+                    if treffer == _letzter:
+                        _faellig, eid, _einge = self._ev_q.pop()
                     else:
                         _faellig, eid, _einge = self._ev_q[treffer]
                         del self._ev_q[treffer]
                     # H1 (.507): die Marke reist MIT diesem Eintrag und wird
                     # hier mit ihm herausgenommen — unter derselben Klammer
-                    # wie das popleft, damit kein zweiter Abholer sie erbt.
+                    # wie die Entnahme, damit kein zweiter Abholer sie erbt.
                     _marke = self._ev_marken.pop(eid, None)
+                    # Bauplan Disponent D1 Punkt 4: die Entnahme setzt eine NEUE
+                    # Besitzkennung in den Datensatz, in derselben Klammer. Dieser
+                    # Abholer merkt sie sich und reicht sie bis zur Rueckstellung
+                    # durch; nur mit ihr darf er spaeter abschliessen.
+                    _kennung = self._ev_kennung_neu(eid)
                 try:
                     # .534 (B5): der Einreih-Zeitpunkt reist MIT dem Eintrag und
                     # wird hier mit ihm herausgenommen — daraus wird die Spalte
                     # „warte" des Zeitprotokolls. Er kostet nichts: die Queue
                     # fuehrt ihn seit B1 ohnehin.
-                    self.process_safe(eid, marke=_marke, einge_ts=_einge)
+                    self.process_safe(eid, marke=_marke, einge_ts=_einge, kennung=_kennung)
                 finally:
                     # B1/T2 (05.09.2026, Widerleger-Befund W-A3 "Queue-Fenster"):
                     # der Vermerk faellt ERST HIER, nicht schon beim popleft.
@@ -9371,35 +10014,36 @@ class Service:
                     # ebenfalls — genau das machte den Vermerk fuer den Support-Weg
                     # blind und erzeugte Doppel-Eintraege. Es fragt ihn jetzt, statt
                     # ihn zu loeschen (Begruendung dort).
+                    # Bauplan Disponent D1 Punkt 4 und 6: alles Folgende NUR mit
+                    # eigener Kennung. Hat der Platzwaechter diesen Abholer
+                    # eingezogen (neue Kennung, Ereignis wieder in der Schlange
+                    # oder schon beim Nachfolger), tut dieses `finally` nichts:
+                    # Datensatz, Vermerk und Rueckstellwunsch gehoeren dem
+                    # Nachfolger.
+                    _ende = False
                     with self._ev_wecker:
-                        self._ev_gesehen.discard(eid)
-                        # .544 M3b: WIEDER EINREIHEN, UND ZWAR ERST HIER. Der
-                        # Lauf hat das Ereignis zurueckgestellt (der Worker war
-                        # nicht bereit) und den Wunsch abgelegt; ausgefuehrt wird
-                        # er NACH dem `discard`, sonst haenge der neue Eintrag an
-                        # einer eid, die noch als „gesehen" vermerkt ist — der
-                        # Dedup liesse ihn entweder fallen oder (ohne Vermerk)
-                        # doppelt zu. Genau dieses Fenster ist der E6/N1-Befund
-                        # vom 05.09. Unter DERSELBEN `_ev_wecker`-Klammer wie
-                        # Vermerk und Schlange, damit dazwischen niemand
-                        # dieselbe eid neu einreiht.
-                        _vz = getattr(self, "_ev_zurueck", {}).pop(eid, None)
-                        _voll = _vz is not None and len(self._ev_q) >= self.EV_QUEUE_MAX
-                        if _vz is not None and not _voll:
-                            self._ev_gesehen.add(eid)
-                            _j = time.time()
-                            self._ev_q.append((_j + float(_vz), eid, _j))
-                            self._ev_wecker.notify()
-                    if _voll:
-                        # Die Schlange steht am Anschlag. Verloren ist das
-                        # Ereignis trotzdem nicht: es ist NICHT als verarbeitet
-                        # vermerkt, der naechste Sweep reiht es innerhalb von
-                        # `lookback_h` wieder ein. Gesagt wird es trotzdem —
-                        # still waere hier genau die Klasse Fehler, gegen die
-                        # dieser ganze Zug geschrieben ist.
-                        self.log.error(f"{eid}: could not be put back (queue at its "
-                                 f"{self.EV_QUEUE_MAX} cap) — the next sweep "
-                                 f"will pick it up again")
+                        _info = self._ev_daten().get(eid)
+                        if _info is not None and _info.get("kennung") == _kennung:
+                            self._ev_gesehen.discard(eid)
+                            # .544 M3b: WIEDER EINREIHEN, UND ZWAR ERST HIER. Der
+                            # Lauf hat das Ereignis zurueckgestellt und den Wunsch
+                            # abgelegt; ausgefuehrt wird er NACH dem `discard`, unter
+                            # DERSELBEN Klammer wie Vermerk und Schlange (E6/N1 vom
+                            # 05.09.). D1: nur ein Wunsch mit DIESER Kennung zaehlt,
+                            # und die Stufengrenze gilt hier nicht (Punkt 7).
+                            _wunsch = getattr(self, "_ev_zurueck", {}).pop(eid, None)
+                            if _wunsch is not None and _wunsch[1] == _kennung:
+                                self._ev_gesehen.add(eid)
+                                _j = time.time()
+                                self._ev_q.append((_j + float(_wunsch[0]), eid, _j))
+                                self._ev_wecker.notify()
+                            else:
+                                # Ende des Datensatzes ohne Rueckstellung (Punkt 6).
+                                del self._ev_daten()[eid]
+                                _ende = True
+                    if _ende:
+                        # D3b Punkt 5: mit dem Datensatz endet der Pin des Disponenten.
+                        self._dispatch_unpin(eid)
         # E2b (gemessen 04.09.): EIN Abarbeiter je Analyse-Platz, nicht einer insgesamt.
         # Ohne das ist die Platz-Vergabe wirkungslos — der eine Thread ruft process_safe
         # SYNCHRON auf und holt das naechste Ereignis erst, wenn die Analyse fertig ist.
@@ -9412,15 +10056,19 @@ class Service:
         for _i in range(max(1, self._plaetze.kapazitaet)):
             threading.Thread(target=lauf, daemon=True,
                              name=f"event-queue-{_i + 1}").start()
-        # .534 (B6c): die Abrufstufe haengt an derselben Warteschlange und
-        # startet mit ihr. Sie rechnet nicht und nimmt keinen Platz — sie legt
-        # fertige Clips bereit, damit die Rechenstraenge nicht auf Frigate
-        # warten. Ausgeschaltet (vorlauf_max = 0) tut ihr Takt nichts.
+        # .534 (B6c), seit Bauplan Disponent D3b der DISPONENT: er haengt an
+        # derselben Warteschlange und startet mit ihr. Er rechnet nicht und nimmt
+        # keinen Platz — er ordnet ein, holt und stellt bereit; ohne ihn wird
+        # kein Live-Ereignis zuteilbar. Bei Vorrat aus (vorlauf_max = 0) holt er
+        # fuer die Analyseplaetze.
         self.vorlauf().start()
 
-    def rueckstau_zahlen(self):
+    def rueckstau_zahlen(self, stufen=False):
         """(wartend, in_arbeit) — die EINE Quelle fuer Banner, Kachel, /health
-        und den Doppelstart-Riegel.
+        und den Doppelstart-Riegel. Mit `stufen=True` (Bauplan Disponent D1
+        Punkt 8) als drittes Feld der Stand je Prioritaetsstufe aus DERSELBEN
+        Lesung der Schlange: {stufe: {"n", "aeltester_s"}}; `wartend` bleibt die
+        Summe.
 
         B1 (05.09.2026, bauplan_0505.md): bis .504 zaehlte der Sweep selbst mit
         (`_sweep_stand["fertig"]`), weil er seine todo-Liste synchron abarbeitete.
@@ -9439,11 +10087,14 @@ class Service:
         noch kurzer Akte-Mutex — dort wird gesperrt wie bei jedem anderen Leser.
         """
         wartend = 0
+        je_stufe = {s: {"n": 0, "aeltester_s": 0.0} for s in _reg.PRIO_STUFEN}
         try:
             q = getattr(self, "_ev_q", None)
             if q is not None:
                 with self._ev_wecker:
                     wartend = len(q)
+                    if stufen:
+                        je_stufe = self._stufen_stand(q)
         except Exception:                                 # noqa: BLE001
             _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         arbeit = 0
@@ -9458,7 +10109,25 @@ class Service:
                     arbeit = len(_l)
         except Exception:                                 # noqa: BLE001
             _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
+        if stufen:
+            return wartend, arbeit, je_stufe
         return wartend, arbeit
+
+    def _stufen_stand(self, q):
+        """Anzahl und Alter des aeltesten wartenden Ereignisses je Stufe; nur unter `_ev_wecker`.
+        -> {stufe: {"n": int, "aeltester_s": float}} in der Reihenfolge von PRIO_STUFEN"""
+        daten = self._ev_daten()
+        jetzt = time.time()
+        aeltest = {}
+        aus = {s: {"n": 0, "aeltester_s": 0.0} for s in _reg.PRIO_STUFEN}
+        for _f, e, eingereiht in q:
+            s = (daten.get(e) or {}).get("stufe", _reg.PRIO_WERK)
+            aus[s]["n"] += 1
+            if s not in aeltest or eingereiht < aeltest[s]:
+                aeltest[s] = eingereiht
+        for s, ts in aeltest.items():
+            aus[s]["aeltester_s"] = round(max(0.0, jetzt - ts), 1)
+        return aus
 
     def rueckstau_aktiv(self, zahlen=None):
         """Steht ueberhaupt noch Analyse-Arbeit aus? (Schlange oder Platz belegt)
@@ -9538,10 +10207,18 @@ class Service:
     # cfg, und ein Deckel, den man erst mit Config kennt, waere dort blind.
     EV_QUEUE_MAX = 5000
 
-    def event_einreihen(self, eid, sofort=False, marke=None):
+    def event_einreihen(self, eid, sofort=False, marke=None, kamera=None):
         """Ein Event faellig in clip_delay Sekunden einreihen (Dedup je eid,
         Deckel mit lautem Verwerfen). Ohne gestartete Queue (Alt-Tests)
         Rueckfall auf den alten Timer-Weg.
+
+        `kamera` (Bauplan Disponent D1 Punkt 3 und 7): mit der Aufnahme entsteht
+        der Datensatz `_ev_info[eid]` mit Kamera, Stufe (aus dem Kamera-Blatt,
+        ohne Kamera der Werkswert) und Besitzkennung. Der Deckel EV_QUEUE_MAX gilt
+        JE STUFE und nur fuer ein NEUES Ereignis: abgewiesen wird nur, wenn seine
+        eigene Stufe voll ist, und dann entsteht kein Datensatz. Hat die eid schon
+        einen Datensatz (Einzug des Platzwaechters, der ihn in derselben Klammer
+        erneuert), ist sie nicht neu: keine Grenze, der Datensatz bleibt.
 
         `marke` (H1/.507, Feldbefund 05.09.): ein kleines dict, das MIT DIESEM
         EINTRAG reist und beim Abholen an `process()` weitergereicht wird —
@@ -9609,9 +10286,14 @@ class Service:
         with self._ev_wecker:
             if eid in self._ev_gesehen:
                 return False
-            if len(self._ev_q) >= self.EV_QUEUE_MAX:
-                self._ev_abgewiesen = getattr(self, "_ev_abgewiesen", 0) + 1
-                return False
+            daten = self._ev_daten()
+            if eid not in daten:
+                stufe = self._kamera_stufe(kamera)
+                if self._stufe_voll(stufe):
+                    self._ev_abgewiesen = getattr(self, "_ev_abgewiesen", 0) + 1
+                    return False
+                daten[eid] = {"kamera": kamera, "stufe": stufe,
+                              "kennung": self._ev_kennung_ziehen()}
             self._ev_gesehen.add(eid)
             if marke:
                 self._ev_marken[eid] = marke
@@ -9622,9 +10304,169 @@ class Service:
             self._ev_wecker.notify()
             return True
 
-    def _zurueck_stand(self, eid):
+    def _ev_daten(self):
+        """Die Ablage der Datensaetze je eid (Bauplan Disponent D1 Punkt 3); nur unter `_ev_wecker`.
+        -> dict eid -> {"kamera", "stufe", "kennung"}, angelegt, wo eine Dienst-Attrappe sie nicht mitbringt"""
+        daten = getattr(self, "_ev_info", None)
+        if daten is None:
+            daten = self._ev_info = {}
+        return daten
+
+    def _kamera_stufe(self, kamera):
+        """Die Prioritaetsstufe einer Kamera aus dem Kamera-Blatt (Feld `prio`).
+        -> eine Stufe aus core/registry.PRIO_STUFEN; ohne Kamera oder ohne gueltiges Feld der Werkswert"""
+        blatt = (getattr(self, "cfg", None) or {}).get("kameras") or {}
+        eintrag = blatt.get(kamera) if kamera is not None else None
+        prio = eintrag.get("prio") if isinstance(eintrag, dict) else None
+        return prio if prio in _reg.PRIO_STUFEN else _reg.PRIO_WERK
+
+    def _stufe_voll(self, stufe):
+        """Steht diese Stufe an ihrer Aufnahmegrenze EV_QUEUE_MAX (D1 Punkt 7)? Nur unter `_ev_wecker`.
+        -> bool; gezaehlt wird nur, wenn die ganze Schlange die Grenze erreicht (vorher kann keine Stufe voll sein)"""
+        if len(self._ev_q) < self.EV_QUEUE_MAX:
+            return False
+        daten = self._ev_daten()
+        n = sum(1 for _f, e, _i in self._ev_q
+                if (daten.get(e) or {}).get("stufe", _reg.PRIO_WERK) == stufe)
+        return n >= self.EV_QUEUE_MAX
+
+    def _ev_kennung_ziehen(self):
+        """Die naechste Besitzkennung aus dem dienstweiten Zaehler (Muster `_laufend_zaehler`); nur unter `_ev_wecker`.
+        -> int ab 1, ueber jede Neuanlage eines Datensatzes hinweg eindeutig"""
+        kennung = getattr(self, "_ev_kennung_zaehler", 0) + 1
+        self._ev_kennung_zaehler = kennung
+        return kennung
+
+    def _ev_kennung_neu(self, eid):
+        """Neue Besitzkennung in den Datensatz von eid (Entnahme durch einen Abholer, Einzug); nur unter `_ev_wecker`.
+        -> die neue Kennung; fehlt der Datensatz (Nachhol-Lauf beim Einzug, Attrappe), entsteht er mit Werkswert"""
+        daten = self._ev_daten()
+        info = daten.get(eid)
+        if info is None:
+            info = daten[eid] = {"kamera": None, "stufe": _reg.PRIO_WERK}
+        info["kennung"] = self._ev_kennung_ziehen()
+        return info["kennung"]
+
+    def kamera_unbekannt_melden(self, eid, grund):
+        """Support-Einzelweg ohne Kamera (D1 Punkt 3): eine INFO-Zeile je Ereignis und der Zaehler in /health.
+        -> None; das Ereignis zaehlt danach als Mid (Werkswert), weil `event_einreihen` keine Kamera bekommt"""
+        with getattr(self, "_ev_wecker", None) or _NULL_LOCK:
+            self._ev_kamera_unbekannt = getattr(self, "_ev_kamera_unbekannt", 0) + 1
+        self.log.info(f"{eid}: camera unknown, counted as {_reg.PRIO_WERK} ({grund})")
+
+    def _dispatch_pick(self, halt, jetzt):
+        """Bauplan Disponent D3b Punkt 6: die Zuteilung an einen freien Abholer, nur unter `_ev_wecker`. Eine
+        gewichtete Runde ueber die Stufen mit einem faelligen zuteilbaren Ereignis (bereit oder ohne Clip; waehrend
+        Frigate unten ist, nur Eingespieltes), aus der Stufe das neueste; der Rundenstand aendert sich nur hier.
+        -> (Index in `_ev_q` oder None, fruehester noch nicht faelliger Zeitpunkt oder None, True wenn ein faelliges
+        Ereignis noch nie eingeordnet wurde)"""
+        daten = self._ev_daten()
+        beste, frueheste, neu, unterwegs = {}, None, False, set()
+        for k in range(len(self._ev_q) - 1, -1, -1):
+            f, e, _i = self._ev_q[k]
+            if halt and not _einspiel.ist_einspiel(e):
+                continue
+            if f > jetzt:
+                frueheste = f if frueheste is None or f < frueheste else frueheste
+                continue
+            info = daten.get(e) or {}
+            if info.get("state") in DISPATCH_ALLOCATABLE:
+                beste.setdefault(info.get("stufe", _reg.PRIO_WERK), k)
+            elif info.get("state") == DISPATCH_FETCH:
+                unterwegs.add(info.get("stufe", _reg.PRIO_WERK))
+            elif info.get("asked_at") is None and info.get("state", DISPATCH_NEW) == DISPATCH_NEW:
+                neu = True
+                unterwegs.add(info.get("stufe", _reg.PRIO_WERK))
+        if not beste:
+            return None, frueheste, neu
+        runde = getattr(self, "_ev_runde", None)
+        if runde is None:
+            runde = self._ev_runde = {}
+        # Eine Stufe, deren naechster Clip noch geholt wird (holen, oder neu und noch nie gefragt), laeuft in der
+        # Runde mit, ohne zugeteilt zu werden: so
+        # rueckt sie in der Reihenfolge des Holens nach vorn, und bei kleinem Ziel (Vorrat aus, Cache voll) wird
+        # sie nicht von einer Stufe mit bereitem Clip ausgehungert.
+        return beste[dispatch_round(runde, sorted(set(beste) | unterwegs), list(beste))], frueheste, neu
+
+    def _dispatch_failure(self, eid):
+        """Bauplan Disponent D3b Punkt 7: hat der Disponent fuer dieses Ereignis keinen Clip beschaffen koennen
+        (`abruf_gescheitert`, `einspiel_fehlt` mit fehlender Vorlage)? -> (Verwurfgrund, Fehlertext) oder None"""
+        if not hasattr(self, "_ev_wecker"):
+            return None
+        with self._ev_wecker:
+            info = dict(self._ev_daten().get(eid) or {})
+        if (info.get("state") != DISPATCH_NO_CLIP or info.get("reason") not in DISPATCH_FAILED
+                or not info.get("discard")):
+            return None
+        return info["discard"], info.get("error")
+
+    def _cache_missing_back(self, eid, camera, kennung):
+        """Bauplan Disponent D3b Punkt 8: das erste `cache_fehlt` gibt das Ereignis dem Disponenten zurueck (holen,
+        ueber die Rueckstellung des Abholers ohne Verzug, also vorn in seiner Stufe), nur mit eigener Kennung.
+        -> True = zurueckgegeben oder nicht der eigene Eintrag (nichts buchen), False = Ruecklauf verbraucht (buchen)"""
+        if not hasattr(self, "_ev_q"):
+            return False
+        with self._ev_wecker:
+            eigen = self._ev_eigen(eid, kennung)
+            n = int((self._ev_daten().get(eid) or {}).get("returns") or 0)
+            zurueck = eigen and n < DISPATCH_RETURNS_MAX
+            if zurueck:
+                self._ev_daten()[eid].update(returns=n + 1, state=DISPATCH_FETCH, pinned=False)
+                if not hasattr(self, "_ev_zurueck"):
+                    self._ev_zurueck = {}
+                self._ev_zurueck[str(eid)] = (0.0, kennung)
+        if not eigen:
+            self.log.info(f"{eid} ({camera}): the clip was not in the local cache, but this run does not hold the "
+                          f"queue entry — nothing handed back, nothing booked")
+            return True
+        if not zurueck:
+            self.log.warning(f"{eid} ({camera}): the clip was missing from the local cache again after "
+                             f"{n} return(s) to the dispatcher — booked as failed (cache_verloren)")
+            return False
+        self._dispatch_unpin(eid)
+        self.log.warning(f"{eid} ({camera}): the clip was not in the local cache although the dispatcher had "
+                         f"provided it — handed back to the dispatcher (return {n + 1} of {DISPATCH_RETURNS_MAX}), "
+                         f"nothing booked")
+        return True
+
+    def _dispatch_unpin(self, eid):
+        """Den benannten Pin des Disponenten fuer eid loesen (Ende des Datensatzes, Ruecklauf). -> None"""
+        dd = (getattr(self, "cfg", None) or {}).get("data_dir")
+        if not dd:
+            return
+        try:
+            _frames.free_named(eid, DISPATCHER_PIN, dd)
+        except OSError as e:
+            self.log.warning(f"{eid}: the dispatcher pin could not be released ({type(e).__name__}: {e}) — it "
+                             f"expires after {_frames.PIN_ABGESTANDEN_S} s")
+
+    def _disponent_wecken(self):
+        """Den Disponenten vor seinem naechsten Takt wecken (ein Abholer fand ein noch nie eingeordnetes Ereignis).
+        -> None"""
+        wecken = getattr(getattr(self, "_vorlauf_obj", None), "wecken", None)
+        if wecken is not None:
+            wecken.set()
+
+    def _disponent_faden_lebt(self):
+        """Lebt der Faden des Disponenten (Bauplan Disponent D3b Punkt 9, ED008)? -> True, False (gestartet und tot)
+        oder None (nicht gestartet: Proben, --once, die Startsekunden)"""
+        t = getattr(getattr(self, "_vorlauf_obj", None), "_t", None)
+        return t.is_alive() if t is not None else None
+
+    def _ev_eigen(self, eid, kennung):
+        """Ist `kennung` noch die Besitzkennung im Datensatz von eid (D1 Punkt 4)? Nur unter `_ev_wecker`.
+        -> bool; ohne Kennung (Nachhol-Lauf, Timer-Weg) oder ohne Datensatz False"""
+        info = self._ev_daten().get(eid)
+        return kennung is not None and info is not None and info.get("kennung") == kennung
+
+    def _zurueck_stand(self, eid, kennung=None):
         """Wie oft dieses Ereignis schon zurueckgestellt war — GELESEN UND
         GELOESCHT (.544 M3b).
+
+        Bauplan Disponent D1 Punkt 4: nur mit eigener `kennung` (der des
+        Datensatzes). Ein fremder Lauf, etwa ein eingezogener alter Halter nach
+        seinem Nachfolger, bekommt 0 und laesst den Zaehler des Nachfolgers
+        stehen. Pruefung und Zaehler stehen dafuer gemeinsam unter `_ev_wecker`.
 
         Read-and-clear, weil dieser Griff genau EINMAL je `process()`-Lauf
         gerufen wird, direkt an der Entscheidungsstelle: wird zurueckgestellt,
@@ -9638,15 +10480,19 @@ class Service:
         Rueckstellung von vorgestern wuerde einem gesunden Lauf ein
         Versuchsbudget wegnehmen. EHRLICHE GRENZE, benannt: ein Ereignis, das
         einen Dienst-Neustart ueberlebt, beginnt seine Zaehlung neu."""
-        with getattr(self, "_zustand_lock", _NULL_LOCK):
+        if not hasattr(self, "_ev_wecker"):
+            return 0
+        with self._ev_wecker:
             merk = getattr(self, "_zurueck_n", None)
-            if not merk:
+            if not merk or not self._ev_eigen(eid, kennung):
                 return 0
             return int(merk.pop(str(eid), 0) or 0)
 
-    def _zurueckstellen(self, eid, camera, bisher, ainfo=None):
+    def _zurueckstellen(self, eid, camera, bisher, ainfo=None, kennung=None):
         """EIN FREMDVERSCHULDETES EREIGNIS IN DIE SCHLANGE ZURUECK (.544 M3b).
-        -> True = zurueckgestellt, der Aufrufer bucht NICHTS.
+        -> True = zurueckgestellt, der Aufrufer bucht NICHTS. True auch, wenn
+        `kennung` nicht (mehr) die des Datensatzes ist (D1): dann wird nichts
+        geschrieben und nichts gebucht, das Ereignis gehoert seinem Besitzer.
 
         DER BEFUND (Feldtester-Anlage, Werktag 21.09.2026): jeder Prozess-
         Ausstieg riss rund 20 Jobs mit. Die kamen als `fremdverschuldet`
@@ -9694,14 +10540,27 @@ class Service:
                      f"({(ainfo or {}).get('fehler_text') or 'no worker text'})")
             return False
         verzug = float(_gpubudget.KARTE_WARTE_FRIST_S)
-        with getattr(self, "_zustand_lock", _NULL_LOCK):
-            if not hasattr(self, "_zurueck_n"):
-                self._zurueck_n = {}
-            self._zurueck_n[str(eid)] = n
+        # Bauplan Disponent D1 Punkt 4: Zaehler und Wunsch nur mit eigener
+        # `kennung`, Pruefung und beide Schreibvorgaenge in EINER Klammer. Der
+        # Wunsch traegt die Kennung; ausgefuehrt wird er im `finally` des Abholers
+        # nur von genau diesem Besitzer.
         with self._ev_wecker:
-            if not hasattr(self, "_ev_zurueck"):
-                self._ev_zurueck = {}
-            self._ev_zurueck[str(eid)] = verzug
+            eigen = self._ev_eigen(eid, kennung)
+            if eigen:
+                if not hasattr(self, "_zurueck_n"):
+                    self._zurueck_n = {}
+                self._zurueck_n[str(eid)] = n
+                if not hasattr(self, "_ev_zurueck"):
+                    self._ev_zurueck = {}
+                self._ev_zurueck[str(eid)] = (verzug, kennung)
+        if not eigen:
+            # Dieser Lauf haelt den Eintrag nicht (eingezogen und abgeloest, oder
+            # gar nicht aus der Schlange): nichts zurueckgestellt, nichts gebucht —
+            # das Ereignis gehoert dem, der die Kennung haelt.
+            self.log.info(f"{eid} ({camera}): the worker was not ready, but this run does "
+                          f"not hold the queue entry (taken over by a newer run, or not "
+                          f"from the queue) — nothing put back, nothing booked")
+            return True
         self.log.warning(f"{eid} ({camera}): the worker was not ready (not this event's "
                  f"fault) — event put BACK into the queue, attempt {n} of "
                  f"{kappe} in {int(verzug)}s. Nothing booked, nothing lost")
@@ -9737,7 +10596,7 @@ class Service:
             self.log.error(f"{eid}: could not set previous results aside "
                      f"({type(_e).__name__}: {_e}) — analyze may resume the old file")
 
-    def event_neu_einreihen(self, eid, marke=None):
+    def event_neu_einreihen(self, eid, marke=None, kamera=None):
         """Support-Einspielung heisst 'JETZT (erneut) analysieren': die
         processed-Merkung und der Queue-Dedup werden geloest, dann laeuft der
         normale Weg. Ohne das griffe der Guard in process() — ein Event, das
@@ -9746,7 +10605,8 @@ class Service:
         Befund 03.09.: Fenster-Einspielung traf den Start-Sweep, 3/3 Events
         kamen nie zur Analyse). Die Akte wird regulaer ueberschrieben.
 
-        `marke` (H1/.507): reicht die Queue-Marke durch (s. `event_einreihen`).
+        `marke` (H1/.507): reicht die Queue-Marke durch (s. `event_einreihen`),
+        `kamera` (Bauplan Disponent D1 Punkt 3) die Kamera fuer Datensatz und Stufe.
         Der Fenster- und der Einzel-Event-Weg der Support-API geben hier
         `core.einspielen.reanalyse_marke()` mit, damit der Worker das Ereignis
         auch dann rechnet, wenn ein Live-Waechter seine Kamera deckt.
@@ -9864,11 +10724,12 @@ class Service:
         # Abholern (gemessen 15,00 s Stillstand fuer 4 Abholer bei 20 faelligen
         # Ereignissen). C2-T0 hat den Kopf-Riegel entschaerft, die unnoetige
         # Frist selbst gehoert trotzdem weg.
-        if self.event_einreihen(eid, sofort=True, marke=marke):
+        # D1 Punkt 3: die Kamera reist mit (Stufe und Grenze je Stufe).
+        if self.event_einreihen(eid, sofort=True, marke=marke, kamera=kamera):
             return True
         self.log.warning(f"{eid}: re-analysis could NOT be queued — the event queue is "
-                 f"at its limit ({self.EV_QUEUE_MAX}); nothing is waiting for "
-                 f"this event, please retry later")
+                 f"at its limit for this event's priority ({self.EV_QUEUE_MAX} per "
+                 f"priority); nothing is waiting for this event, please retry later")
         return False
 
     def _spur(self, beschreibung, fn):
@@ -10193,27 +11054,6 @@ class Service:
                 self.processed.discard(eid)
                 if _laufend is not None:
                     _laufend.pop(eid, None)
-            # B1/T2 (05.09.2026): der Queue-Vermerk faellt seit B1 erst NACH
-            # `process_safe`. Der eingezogene Halter steckt aber genau dort noch
-            # fest — sein `finally` kommt nie oder erst spaeter. Ohne diesen
-            # ausdruecklichen Griff liefe die Neu-Einreihung in den eigenen Dedup
-            # und das Ereignis waere STILL verloren (derselbe Weg, den auch
-            # `event_neu_einreihen` fuer die Support-Einspielung nimmt).
-            if hasattr(self, "_ev_wecker"):
-                with self._ev_wecker:
-                    self._ev_gesehen.discard(eid)
-            # `sofort=True`: eine tote Analyse hat ihr clip_delay laengst hinter
-            # sich, ein zweites Warten waere reine Verzoegerung.
-            #
-            # C3 (05.09.2026, B2-Bericht „Offene Punkte", Nachzug N1): den
-            # Rueckgabewert PRUEFEN. Seit B2 weist `event_einreihen` bei voller
-            # Schlange ab (statt das aelteste zu verdraengen) — die Zeile „dead
-            # analysis X re-queued" war dann eine Unwahrheit, und das eingezogene
-            # Ereignis lag nirgends mehr: nicht in der Schlange, nicht in
-            # `processed`, nicht in `_laufend`. Genau der stille Verlust, den der
-            # Waechter verhindern soll. Er kann ihn hier nicht heilen (die
-            # Schlange ist voll), aber er muss ihn SAGEN — der naechste Sweep holt
-            # es innerhalb `lookback_h` zurueck, darueber hinaus der Merkzettel.
             # .534 (B9b) — DER VERSUCHSZAEHLER. Feldbefund 15.09.: ein Ereignis,
             # das Frigate nie abgeschlossen hatte, liess die Job-Frist reissen,
             # der Waechter schoss den EINEN Worker-Prozess und reihte dasselbe
@@ -10233,6 +11073,15 @@ class Service:
             _merk[eid] = _v
             if _v >= HAENGER_VERSUCHE_MAX:
                 _merk.pop(eid, None)
+                # Bauplan Disponent D1 Punkt 6: mit `haenger` endet der Datensatz
+                # hier, zusammen mit dem Queue-Vermerk. Kehrt der alte Halter
+                # spaeter zurueck, findet sein `finally` keinen Datensatz mit
+                # seiner Kennung und tut nichts.
+                if hasattr(self, "_ev_wecker"):
+                    with self._ev_wecker:
+                        self._ev_gesehen.discard(eid)
+                        self._ev_daten().pop(eid, None)
+                    self._dispatch_unpin(eid)        # D3b Punkt 5: mit dem Datensatz endet der Pin
                 self._uebersprungen_zaehlen()
                 self._uebersprungen_buchen(
                     eid, etikett if isinstance(etikett, str) else "?", None,
@@ -10242,7 +11091,34 @@ class Service:
                     f"worker process")
                 self.log.error(f"slot {nr}: dead analysis {eid} NOT re-queued — "
                          f"{_v}. collection, skipped for good (see record)")
-            elif self.event_einreihen(eid, sofort=True):
+                return urteil
+            # B1/T2 (05.09.2026): der Queue-Vermerk faellt seit B1 erst NACH
+            # `process_safe`. Der eingezogene Halter steckt aber genau dort noch
+            # fest — sein `finally` kommt nie oder erst spaeter. Ohne diesen
+            # ausdruecklichen Griff liefe die Neu-Einreihung in den eigenen Dedup
+            # und das Ereignis waere STILL verloren.
+            # Bauplan Disponent D1 Punkt 5: der EINZUG IN EINER KLAMMER — Kennung
+            # erneuern (der alte Halter verliert damit sein Abschlussrecht, auch
+            # wenn er vor der naechsten Entnahme zurueckkehrt), Vermerk loesen und
+            # wieder aufnehmen, ohne dass sich eine fremde Aufnahme derselben eid
+            # dazwischenschiebt. `_ev_wecker` ist eine `threading.Condition` mit
+            # RLock: `event_einreihen` nimmt dieselbe Klammer darin noch einmal.
+            # Der Datensatz besteht (die Kennung legt ihn notfalls an), also ist
+            # die eid dort nicht neu: keine Stufengrenze, keine Abweisung.
+            # `sofort=True`: eine tote Analyse hat ihr clip_delay laengst hinter
+            # sich, ein zweites Warten waere reine Verzoegerung.
+            if hasattr(self, "_ev_wecker"):
+                with self._ev_wecker:
+                    self._ev_kennung_neu(eid)
+                    self._ev_gesehen.discard(eid)
+                    _wieder = self.event_einreihen(eid, sofort=True)
+            else:
+                _wieder = self.event_einreihen(eid, sofort=True)
+            # C3 (05.09.2026, B2-Bericht „Offene Punkte", Nachzug N1): den
+            # Rueckgabewert PRUEFEN. Mit Warteschlange kann die Wiederaufnahme seit
+            # D1 nicht mehr abgewiesen werden; ohne sie (Timer-Weg, Attrappen) bleibt
+            # die laute Zeile, falls der Einreihweg doch absagt.
+            if _wieder:
                 # WORTLAUT UNVERAENDERT: an dieser Zeile haengt eine Zusicherung
                 # der S11-Proben. Die Versuchszahl bekommt ihre eigene Zeile, und
                 # nur, wenn es wirklich schon einmal passiert ist.
@@ -10537,6 +11413,18 @@ class Service:
         # halben Tag auf einer Anlage mit vielen Kameras passt sonst nicht in
         # einen Sweep. Der Werkswert bleibt 200.
         "sweep_limit": (int, 50, 5000, "how many events one Frigate sweep may fetch (default 200, up to 5000). On a busy site (many cameras) the last-2-hours sweep hits this ceiling permanently and older events in the window can be missed — one field installation with 31 cameras logged the ceiling warning 196 times in six hours. Raise it there; the cost is one larger Frigate API response per sweep"),
+        # Bauplan analysen/bauplan_abfragetakt_wartezeit.md, Stufe TW1 Punkt 1, Grenzen nach Entscheid E1 (ED004,
+        # freigegeben fuer diese zwei Schluessel); beide wirken ohne Neustart (_live_keys in config_schreiben).
+        "poll_interval": (int, 5, 300,
+                          f"seconds between two Frigate queries for new events, in poll mode only (trigger: poll; "
+                          f"with MQTT this value has no effect). Default {TAKT_WERK_NEU['poll_interval']}. A shorter "
+                          f"interval picks up finished events sooner and asks Frigate more often. Applies from the "
+                          f"next query on, no restart"),
+        "clip_delay": (int, 0, 120,
+                       f"seconds to wait before the clip is fetched, so Frigate can finish the recording: in poll "
+                       f"mode counted from the end of the event, with MQTT from the end message. Default "
+                       f"{TAKT_WERK_NEU['clip_delay']}. Raise it if clips often arrive incomplete or need a second "
+                       f"attempt. Applies to events queued after saving, no restart"),
         "clip_retention_d": (int, 1, 60, "how long downloaded clips are kept as a cache, in days. They are only a cache — suslik fetches a clip from Frigate again whenever it needs one, so a short time costs nothing except a second download. The cache exists because Frigate's clip generation can stall, which is worth avoiding for the last hours, not for the last week: measured on the development system, 1212 of 1542 cached clips were older than two days and none of them was ever read again"),
         "live_verworfen_speichern": (bool, None, None, "keep the pictures the live watchers threw away (no human in frame): off by default — they are pure diagnostics, the interface never shows them, and they were the single largest item under the data folder (61 GB in nine days on the development system). They are still counted, so you can see how often the pose gate rejected something. Turn on only while chasing a bug"),
         "clip_cache_max_gb": (int, 0, 500, "clip cache size cap in GB, oldest evicted first (age eviction stays). 0 = derive it from the disk (15 % of its size), which is the sensible default because disks differ wildly — a fixed cap larger than the disk can never take effect, and that is exactly how one installation filled up (issue #25). Set a number only if you want a fixed cap; keep it well below the size of the disk — a cap larger than the disk can never take effect, and the cache will fill the disk before it is reached (issue #25). suslik warns at startup if the two do not fit together"),
@@ -10621,7 +11509,7 @@ class Service:
         "clip_erzeugung_alter_min": (int, 5, 1440, "harvest: events older than this (minutes) count as ARCHIVED — Frigate has to rebuild their clip from recording segments before a single byte arrives, which takes far longer than a live download. For those the fetch waits patiently (see the cap below) instead of aborting; a measured abort during that rebuild permanently leaks one API thread and one ffmpeg inside Frigate until Frigate is restarted"),
         "clip_erzeugung_deckel_s": (int, 60, 1800, "harvest: absolute cap (seconds) on waiting for Frigate to rebuild an archived event's clip. While waiting, a cheap probe checks every stall that Frigate itself still answers — if it does, the wait continues up to this cap; if not, the fetch stops immediately. Events hitting the cap stay unbooked and are retried in a later run"),
         "clip_download_parallel": (int, 1, 8, "how many event clips may be downloaded from Frigate at the same time — for the learning run, the pass check AND the regular event analysis. This is a limit on the DOWNLOADS only: all analysis slots stay in use, they just take turns fetching, because once a clip is here Frigate is out of the picture. Raise it on a fast local link with small clips; leave it low (1-2) if Frigate sits behind a slow line, records 4K, or serves several live streams: parallel clip streaming is what makes a Frigate API stall (measured at a user's site, where four parallel 4K fetches pushed a trivial event query from 0.01 s to 13.4 s and the harvest stopped after 19 of 672 events)"),
-        "clip_vod": (bool, None, None, "harvest: fetch archived events' clips via Frigate's VOD playlist (/vod/event/.../master.m3u8) and merge the segments locally instead of asking Frigate to rebuild the clip server-side. Frigate's clip generation can stall for minutes and leak a worker thread plus an ffmpeg process per request until its whole API freezes (reported upstream); the VOD route bypasses that code path entirely. On any failure (older Frigate without the endpoint, local ffmpeg error) the fetch falls back to the classic clip.mp4 path with all its safeguards"),
+        "clip_vod": (bool, None, None, "fetch clips via Frigate's VOD playlist (/vod/event/.../master.m3u8) and merge the segments locally instead of asking Frigate for clip.mp4. Off by default: on Frigate 0.17.1 to 0.18 the VOD route rebuilds its mapping on every request for events that ended less than an hour ago, which slows down both the clip fetch and Frigate's API (frigate#24029). Switch it on only if clip.mp4 stalls on your Frigate (its clip generation can hang and keep a worker thread plus an ffmpeg process per request). When on, ffmpeg gets clip_erzeugung_deckel_s as its time limit, and on any failure the fetch falls back to clip.mp4 with all its safeguards"),
         # .374 (Widerleger-Fund 30.08.): "ask" steht hier NICHT mehr zur Wahl,
         # solange der Nachhol-Knopf ausgehaengt ist (webui/__init__.py). Wer den
         # Wert waehlte, bekam beim naechsten Start einen zurueckgehaltenen Stapel,
@@ -10665,9 +11553,9 @@ class Service:
         "vorrang": (list, ["erkennung", "wache"], None, "who wins when the accelerator cannot carry both: erkennung (default) = event recognition has priority, wache = the live watchers do. This only ever matters when the card is too small for both at the same time; on a card with room, nothing here changes anything. With erkennung the service first falls back to a minimum mode (one compute thread, one clip geometry — a second resolution then costs a rebuild each time instead of being kept ready), and if even that does not fit it takes live watchers off the net, the most recently started one first, only as many as the minimum needs. It says so in the log and in /health, and it switches them back on by itself once the card carries the full price again. With wache the analysis worker stays off in that situation, exactly as it did before 0.1.0.544 — but the log then says that recognition is off BECAUSE the watchers have priority, instead of asking you to edit config.json. A machine whose card cannot even carry the minimum gets neither: nothing is switched off for a recognition that would not run afterwards anyway"),
         "worker_vram_reserve_mb": (int, -1, 65536, f"unassigned card memory in MiB. -1 (default) uses one absolute {_cuda_budget.PROFILE['reserve_mb']} MiB safety reserve per CUDA worker process, independent of threads, geometries and repeated planning. Other backends retain their existing reserve rules. 0 explicitly disables the reserve; a positive value overrides it and is clamped to card size. CUDA uses native free memory and measured own states, with separate allowances for pending allocations and processing peaks. The shared arena is bounded, but its limit is distinct from total worker PID and decoder memory. The source is shown in the log and /health; the same configured wish is passed to the worker's runtime guards"),
         "bg_platz_getrennt": (int, 0, 1, "1 gives background work (collecting, harvesting, your clicks, the live body judgment, the wall-clock measurement) its own slot instead of one of the analysis slots. It is computed in a separate thread of the worker anyway, so a background job that holds an analysis slot blocks a compute thread for nothing — measured on 15.09.2026: a collection run held one of two analysis slots for eight minutes while events were waiting. Since 0.1.0.536 WHEN it starts changed too: with its own slot it takes its turn right away instead of waiting for an idle moment that never comes on a busy installation (46 postponed collection runs in one morning). 0 restores the behaviour of 0.1.0.533 and is load-bearing: every class then sits on the analysis slots again, the old idle rule and the rule that keeps one slot free for events apply word for word, and a collection run can take an analysis slot again"),
-        "vorlauf_max": (int, 0, VORLAUF_MAX_GRENZE, "how many finished clips the service keeps ready on disk ahead of the analysis. An analysis slot does not only compute, it also fetches: while it pulls a clip from Frigate its compute thread stands still. With a stock of clips already on disk the threads keep working. The service fetches until this many are ready, then pauses until the stock falls below vorlauf_min. 50 is the default, derived from a field measurement: about 20 events per minute on two compute threads and about 3 s per fetch, so 50 gives short refill bursts instead of one long pull. 0 switches the whole stage off — then each slot fetches its own clip as before. The clips go into the normal clip cache and obey its size cap"),
-        "vorlauf_min": (int, 0, VORLAUF_MIN_GRENZE, "the lower mark of the stock (see vorlauf_max): once fewer than this many clips are ready, the service fetches again until vorlauf_max is reached. 20 is the default, about one minute of stock at the measured rate. The gap between the two marks is what keeps the service from asking Frigate for a new clip after every single event"),
-        "vorlauf_parallel": (int, 1, 3, "how many clips the service fetches from Frigate at the same time while filling the stock. 2 is the default. Frigate 0.18 serves clip streams and authentication from one thread pool, so more parallel pulls make the whole installation slower, not faster; the normal clip gate applies on top of this"),
+        "vorlauf_max": (int, 0, VORLAUF_MAX_GRENZE, "how many finished clips the service keeps ready on disk ahead of the analysis. Live analyses read their clip only from the local clip cache; the service's dispatcher fetches all of them from Frigate, so no compute thread stands still while a clip is pulled. The dispatcher fetches in the order the clips will be needed: weighted by camera priority (High 7, Mid 2, Low 1 out of every ten), and within one priority the newest event first. It fetches until vorlauf_max clips are ready, then pauses until fewer than vorlauf_min are ready; a newer event without a clip is fetched right away. 50 is the default, derived from a field measurement: about 20 events per minute on two compute threads and about 3 s per fetch, so 50 gives short refill bursts instead of one long pull. 0 switches the stock off: the dispatcher then fetches only as many clips as there are compute threads, and it does the same while the clip cache is at its size cap. The clips go into the normal clip cache and obey its size cap"),
+        "vorlauf_min": (int, 0, VORLAUF_MIN_GRENZE, "the lower mark of the stock (see vorlauf_max): once fewer than this many clips are ready, the dispatcher fetches again until vorlauf_max is reached; a newer event without a clip is fetched right away in any case. 20 is the default, about one minute of stock at the measured rate. The gap between the two marks keeps the service from asking Frigate for a new clip after every single analysed event"),
+        "vorlauf_parallel": (int, 1, 3, "how many clips the dispatcher fetches from Frigate at the same time. 2 is the default. Frigate 0.18 serves clip streams and authentication from one thread pool, so more parallel pulls make the whole installation slower, not faster. Up to this number the dispatcher may use every place of the clip gate; none is kept free for live analyses any more, because they no longer fetch their own clips"),
         "zeitprotokoll": (int, 0, 1, "1 writes one balance line per event to the log and keeps the same figures in the record and in /health: how long the event waited in the queue, how long its clip took to fetch (with size), how long the handover to the worker took, how long until the first decoded frame (and which decoder), the analysis itself, writing the record, and the total time the analysis slot was busy. It costs one line per event and answers the question the record cannot: where the time goes when the accelerator sits idle while events are waiting. 0 turns the line off"),
         "api_event_max_min": (int, 1, 1440, "how long one of suslik's OWN Frigate events may stay open before the service closes it after the fact, in minutes. 30 is the default. The live watchers can create their own events in Frigate (per camera switch) and close them when the appearance is over; if that close is lost — Frigate creates API events asynchronously and can answer the close with a 404 — the event would stay open for ever, and an event without an end has no usable clip. The service keeps a list of its own open events, retries the close, and checks afterwards that the end really arrived"),
         "offen_max_min": (int, 0, 1440, "how long an event that Frigate never finished (no end_time) is held back before it is skipped for good, in minutes. 60 is the default. Such an event has no end, so the analysis reads its clip until the job deadline expires and the worker is shot — one of them can stall the whole queue. While it is held back nothing is computed and nothing is written; after this many minutes the record gets one honest line (\"skipped, event never ended in Frigate\") and the event is done. 0 keeps holding it back for ever"),
@@ -10879,7 +11767,10 @@ class Service:
         # Bauplan analysen/bauplan_aehnlich.md Entscheide 6, 11 und 17: die drei Grenzen der Regel „ähnlich zu P“ liest
         # der Verbraucher-Faden aus cfg (seine Wache sieht eine Aenderung binnen einer Minute); Namen aus der einen
         # Quelle core.registry.AEHNLICH_WERK.
-        _live_keys = {*LOG_SWITCH_KEYS, *_kk_ernte.ACHSE_GLOBAL.values(), *_reg.AEHNLICH_WERK}
+        # Bauplan analysen/bauplan_abfragetakt_wartezeit.md, Stufe TW1 Punkt 3: Abfragetakt und Clip-Wartezeit lesen
+        # poll_loop (vor jedem Schlaf), sweep (je Kandidat) und event_einreihen (je neuem Eintrag) aus cfg; ein
+        # laufender Schlaf und schon eingereihte Faelligkeiten bleiben. Namen aus TAKT_WERK_NEU.
+        _live_keys = {*LOG_SWITCH_KEYS, *_kk_ernte.ACHSE_GLOBAL.values(), *_reg.AEHNLICH_WERK, *TAKT_WERK_NEU}
         if not geaendert and not _fa_geaendert:
             # .378: kein Wert weicht von der laufenden Config ab — ein Neustart
             # haette nichts zu laden. Wichtig fuer das Kalibrier-Uebernehmen
@@ -10931,6 +11822,55 @@ class Service:
 
     def _kette_auto_hinweise(self):
         return _kette.auto_hinweise(self.cfg)
+
+    # Bauplan analysen/bauplan_vod_aus.md, Stufe VA1: VOD ist an oder aus, Werkseinstellung aus.
+    # Auf Frigate 0.17.1 bis 0.18 baut VOD bei Ereignissen unter einer Stunde die Zuordnung je
+    # Anfrage neu und bremst Abruf und API (frigate#24029). Diese Version schaltet clip_vod beim
+    # Start EINMAL aus; der Merker im Store haelt fest, dass es geschah, ein danach bewusst
+    # gespeichertes „on“ bleibt. Der Merker clip_vod_einmal_an aus 0.1.1.031 bleibt unberuehrt.
+    # Store-Schutz wie core/kette.auto_default: ein leerer oder unlesbarer Store wird nicht
+    # angefasst, VOD ist dann nur fuer diesen Lauf aus (Ausnahme im Ziel des Bauplans, O748).
+    def _clip_vod_einmal_aus(self):
+        """Schaltet clip_vod beim ersten Start dieser Version einmalig aus (Merker im Store).
+        -> None; setzt self.cfg["clip_vod"] auf False, ausser der Merker steht."""
+        p = _config_store_pfad(self.cfg)
+        store = _lade_config_store(self.cfg)
+        if not store and os.path.exists(p):
+            self.cfg["clip_vod"] = False
+            self.log.warning(f"clip_vod one-time switch-off not stored: config store {p} exists but "
+                             f"reads empty/unreadable — not touching it (no marker; retried next start); "
+                             f"VOD is off for this run")
+            return
+        if "clip_vod_einmal_aus" in store:
+            return
+        hatte = "clip_vod" in store
+        vorher = store["clip_vod"] if hatte else "fehlt"
+        vorher_text = json.dumps(vorher) if hatte else "not set"
+        store["clip_vod"] = False
+        store["clip_vod_einmal_aus"] = {"version": os.environ.get("SUSLIK_VERSION", "dev"),
+                                        "ts": round(time.time(), 1), "vorher": vorher}
+        try:
+            _store_schreiben(p, store)
+        except Exception as e:                            # noqa: BLE001
+            self.cfg["clip_vod"] = False
+            self.log.error(f"clip_vod one-time switch-off: config store not written "
+                           f"({type(e).__name__}: {e}) — VOD is off for this run only, no marker; "
+                           f"the next start tries again")
+            return
+        self.cfg["clip_vod"] = False
+        self.log.info(f"clip_vod switched off once by this version (previous value: {vorher_text}): "
+                      f"on Frigate 0.17.1 to 0.18 the VOD route rebuilds its mapping on every request "
+                      f"for events that ended less than an hour ago and slows down both the clip fetch "
+                      f"and Frigate's API (frigate#24029), so clips are fetched via clip.mp4 now. To use "
+                      f"VOD anyway, switch clip_vod on in Settings — it stays on from then on")
+        try:
+            with open(os.path.join(self.cfg["data_dir"], "config", "config_audit.jsonl"), "a") as f:
+                f.write(json.dumps({"ts": round(time.time(), 1), "aenderungen": {"clip_vod": False}},
+                                   ensure_ascii=False) + "\n")
+                f.flush()
+        except Exception as e:                            # noqa: BLE001
+            self.log.warning(f"clip_vod one-time switch-off: audit line not written "
+                             f"({type(e).__name__}: {e}) — store and marker are in place, the switch-off stands")
 
 
     # Modulumbau R3: Notifications-Settings (Store-Schreiber + Kanal-Tests) leben
@@ -13897,7 +14837,13 @@ class Service:
         _env = {**os.environ,
                 "FRIGATE_URL": self.cfg.get("frigate_url") or "",
                 "SCRATCH_DIR": os.path.join(self.cfg["data_dir"], "clips"),
-                "OV_DEVICE": str(self.cfg.get("ov_device") or "")}
+                "OV_DEVICE": str(self.cfg.get("ov_device") or ""),
+                # Bauplan VOD aus, Stufe VA1: der Job des Roundtrips traegt weder
+                # clip_vod noch den Deckel. Den Schalter erbt der Kindprozess aus der
+                # Umgebung des Dienstes (beim Start gesetzt), den Deckel fuer ffmpeg
+                # bei VOD an bekommt nur diese Kindumgebung; Erzeugung ist im
+                # Roundtrip aus, die Schutzregel greift dort also nicht anders.
+                "SUSLIK_CLIP_ERZEUGUNG_DECKEL_S": str(clip_erzeugung_deckel_s_aus_cfg(self.cfg))}
         # Deckel je Roundtrip aus der Config statt hart 1800 (Nachbesserung W6):
         # ein Roundtrip = kalter + warmer Lauf in EINEM Subprozess, also 2 Analysen
         # + Kaltstart-Luft -> 3 x analyse_timeout_s (Default 3*600 = die bisherigen
@@ -14075,20 +15021,61 @@ class Service:
         auf den gemessenen Durchsatz-Wert zurueck.
 
         Die Zahl wird EINMAL je Prozess geholt: die Karte waechst nicht, und ein
-        nvidia-smi-Aufruf in der Job-Absetz-Klammer waere eine Bremse."""
+        nvidia-smi-Aufruf in der Job-Absetz-Klammer waere eine Bremse.
+
+        AUF CUDA NUR GUELTIGE WERTE (Bauplan Kartengroesse KG1, Issue #33): bis 0.1.1.033
+        wurde auch ein Fehlschlag der ersten Abfrage als 0 bis zum Neustart gemerkt, still,
+        und die Startsperre seit MS1 galt damit fuer immer. Jetzt wird nur ein Wert > 0
+        gemerkt. Fehlt er, kommt die Groesse aus dem Merker der letzten gueltigen
+        Freimessung (`_karte_frei_mb` legt sie dort ab, dieselbe Sondenantwort, kein
+        zusaetzlicher nvidia-smi-Aufruf); gibt es noch keine, fragt diese Methode die Sonde
+        hoechstens einmal je Fehlerfolge selbst. Der erste Fehlschlag steht als ERROR mit
+        dem Grund der Sonde im Log, die Uebernahme als INFO. Pruefen, Uebernehmen und
+        Merken laufen unter `_messpaar_sperre`. Andere Backends wie bisher."""
         merk = getattr(self, "_maschine_mb_merk", None)
-        if merk and merk[0] == kind:
+        if merk and merk[0] == kind and (kind != "cuda" or merk[1] > 0):
             return merk[1], merk[2]
         mb, quelle = 0, "unbekannt"
+        if kind == "cuda":
+            with self._messpaar_sperre():
+                merk = getattr(self, "_maschine_mb_merk", None)
+                if merk and merk[0] == kind and merk[1] > 0:
+                    return merk[1], merk[2]
+                failure = getattr(self, "_card_total_failure", None)
+                total = (getattr(self, "_karte_merk", None) or {}).get("total_mb")
+                if type(total) is int and total > 0:
+                    self._maschine_mb_merk = (kind, total, "nvidia-smi")
+                    self._card_total_failure = None
+                    if failure:
+                        self.log.info(f"card size {total} MiB taken from the free-memory "
+                                      f"measurement of the same probe (nvidia-smi), "
+                                      f"{time.monotonic() - failure['ts']:.0f} s after the "
+                                      f"failed card size query")
+                    return total, "nvidia-smi"
+                if failure:
+                    return 0, "unbekannt"
+                try:
+                    from core import systemstat as _st
+                    d = (_st.SONDEN.get(kind) or (lambda: {}))() or {}
+                    mb = int(d.get("speicher_max_mb") or 0) if d.get("grund") is None else 0
+                    reason = (f"grund={d.get('grund')}, messgrund={d.get('messgrund')}"
+                              if d.get("grund") is not None else "card size 0")
+                except Exception as e:                    # noqa: BLE001
+                    mb, reason = 0, f"{type(e).__name__}: {e}"
+                if mb > 0:
+                    self._maschine_mb_merk = (kind, mb, "nvidia-smi")
+                    return mb, "nvidia-smi"
+                self._card_total_failure = {"ts": time.monotonic(), "reason": reason}
+                self.log.error(f"card size not readable ({reason}) — the CUDA plan has no card "
+                               f"size; it is taken from the next valid free-memory measurement "
+                               f"of the same probe. Until then the worker start waits for it, "
+                               f"or runs with one thread and the fixed profile cap if the card "
+                               f"stays not measurable")
+                return 0, "unbekannt"
         try:
             from core import systemstat as _st
-            if kind == "cuda":
-                d = (_st.SONDEN.get(kind) or (lambda: {}))()
-                mb = int((d or {}).get("speicher_max_mb") or 0)
-                quelle = "nvidia-smi" if mb > 0 else "unbekannt"
-            else:
-                mb = int((_st.ram_messen() or {}).get("limit_mb") or 0)
-                quelle = "cgroup" if mb > 0 else "unbekannt"
+            mb = int((_st.ram_messen() or {}).get("limit_mb") or 0)
+            quelle = "cgroup" if mb > 0 else "unbekannt"
         except Exception as e:                            # noqa: BLE001
             self.log.error(f"machine memory not readable ({type(e).__name__}: {e})")
             mb, quelle = 0, "unbekannt"
@@ -14204,8 +15191,10 @@ class Service:
             except Exception as e:                            # noqa: BLE001
                 grund = f"sonde_fehler: {type(e).__name__}"
             if grund is None:
+                # KG1 Punkt 1: die Kartengroesse derselben Sondenantwort reist mit; aus ihr
+                # nimmt `_maschine_speicher_mb` die Groesse, wenn deren erste Abfrage scheiterte.
                 merk.update({"mb": mb, "ts": jetzt, "ende": time.monotonic(),
-                             "worker": identity, "fehl": 0, "grund": None})
+                             "worker": identity, "fehl": 0, "grund": None, "total_mb": gesamt})
                 return mb, 0.0, None
             merk["fehl"] += 1
             alter = round(jetzt - merk["ts"], 2) if merk["ts"] else 0.0
@@ -14493,8 +15482,11 @@ class Service:
                                  getattr(worker, "_starts", None)),
                          alive=getattr(worker, "p", None) is process and process.poll() is None)
                     if alive and _paar and _paar.get("messung") else None)
+        # KG1: fehlen auf CUDA Kartengroesse UND gueltige Freimessung, geht „Freimessung fehlt"
+        # als None in die Planung (nicht als 0 = „Karte voll"); dort entsteht der Rueckfallplan.
         st = _gb.straenge(gesamt, n_wae, kind, vor, nutzer_n=max(0, _nutzer),
-                          frei_gemessen_mb=_frei_gem,
+                          frei_gemessen_mb=(None if kind == "cuda" and _frei_grund
+                                            and gesamt <= 0 else _frei_gem),
                           engine_alter_s=_eng_alter,
                           laufend_eigen_mb=_eig_mb,
                           reserve_wunsch=_res_wunsch,
@@ -14509,12 +15501,14 @@ class Service:
                           # ohne sie stuende in /health eine Zahl, von der
                           # niemand wuesste, ob sie ein Band oder ein Moment ist.
                           frei_band=_band, measured=measured)
-        if kind == "cuda" and _frei_grund:
+        # KG1: der Rueckfall bei ganz unmessbarer Karte ist ein erlaubter Plan und wird hier
+        # nicht zur Sperre; fehlt nur die Freimessung, bleibt die Sperre und nennt den Teil.
+        if kind == "cuda" and _frei_grund and not st.get("unmeasurable_card"):
             st.update(verweigert=True, zustand="rot", cuda_messgrund=_frei_grund,
                       hinweis=(f"CUDA memory planning unavailable for running worker: "
                                f"native card memory {_frei_grund}" if running_n else
                                f"CUDA worker start blocked: native card memory "
-                               f"unavailable ({_frei_grund})"))
+                               f"unavailable (free memory not measured: {_frei_grund})"))
         if kind == "cuda" and st.get("cuda_messgrund"):
             _diag = self._messpaar_diagnose(measured)
             if _diag:
@@ -14544,6 +15538,22 @@ class Service:
             st["deckel_quelle"] = "config"
             st["rechenweg"] = (f"{st['rechenweg']}; worker_vram_mb={_vram_cfg} "
                                f"overrides the computed arena cap")
+        # KG1 Punkt 5: der Start ohne Kartenmessung steht EINMAL je Folge als ERROR im Log, mit
+        # dem wirksamen Deckel (Profil oder Config) und, wenn gesetzt, der Kuerzung eines
+        # worker_straenge ueber 1 auf einen Strang (ED001: laut, nie still).
+        with self._messpaar_sperre():
+            if not st.get("unmeasurable_card"):
+                self._card_fallback_reported = False
+            elif not getattr(self, "_card_fallback_reported", False):
+                self._card_fallback_reported = True
+                failure = getattr(self, "_card_total_failure", None) or {}
+                self.log.error(
+                    f"card memory not measurable — starting one thread with the fixed profile "
+                    f"cap; out-of-memory is possible (arena cap {st.get('arena_deckel_mb')} MiB "
+                    f"from {st.get('deckel_quelle')}; card size: "
+                    f"{failure.get('reason') or 'unknown'}, free memory: {_frei_grund})"
+                    + (f"; worker_straenge={_nutzer} is cut to one thread while the card "
+                       f"cannot be measured" if _nutzer > 1 else ""))
         # Die Grenze der Speicher-Wache aus derselben Rechnung (E3.1-Rest R2:
         # bis hierher hatte der Dienst gar keine Politik-Grenze und sagte das
         # laut). `worker_rss_max_mb` reist als KONFIGURIERTES JE-WORKER-BUDGET
@@ -14851,6 +15861,13 @@ class Service:
         — und der Normalfall ist die Frage."""
         ring = list(getattr(self, "_zeiten_ring", ()) or ())
         aus = {"n": len(ring), "median": {}, "summe": {}}
+        # Bauplan VOD2 Punkt 5a: Abrufwege und Rueckfaelle seit Start, gezaehlt in process() bei der Uebernahme
+        # der Job-Antwort — unabhaengig vom Ring und vom Schalter `zeitprotokoll`.
+        with getattr(self, "_zustand_lock", _NULL_LOCK):
+            _az = getattr(self, "_abruf_zaehler", None) or {}
+            aus["abruf"] = {"wege": dict(_az.get("wege") or {}), "rueckfaelle": int(_az.get("rueckfaelle") or 0),
+                            "letzter_rueckfall": (dict(_az["letzter_rueckfall"])
+                                                  if _az.get("letzter_rueckfall") else None)}
         if not ring:
             return aus
         for feld in ("warte_s", "abruf_s", "uebergabe_s", "erstes_bild_s",
@@ -15383,7 +16400,8 @@ class Service:
         Leiter noch einen Schalter an."""
         if not isinstance(st, dict) or st.get("mass") != "vram":
             return st
-        if kind == "cuda" and st.get("cuda_messgrund"):
+        # KG1: der Rueckfall bei ganz unmessbarer Karte bekommt nicht den Modus „aus".
+        if kind == "cuda" and st.get("cuda_messgrund") and not st.get("unmeasurable_card"):
             st.update(modus="aus", modus_text=st.get("hinweis"), warten_lohnt=False)
             return st
         vorrang = str(self.cfg.get("vorrang") or "erkennung").strip().lower()
@@ -16217,6 +17235,9 @@ class Service:
                 "mem_pattern": bool(_mempat),
                 "neustart_gedeckelt": gedeckelt,
                 "verweigert": bool(st.get("verweigert")),
+                # KG1: der erlaubte Rueckfall bei ganz unmessbarer Karte reist mit, damit das
+                # Start-Tor denselben Plan liest (kein Warten auf eine Freimessung, die es nicht gibt).
+                "unmeasurable_card": bool(st.get("unmeasurable_card")),
                 # ... und die LAGE, fuer den Karten-Check vor dem Absetzen. Aus
                 # DERSELBEN Rechnung — keine zweite Zahlenquelle fuer dieselbe
                 # Frage.
@@ -18291,7 +19312,11 @@ class Service:
                         "ts": ts, "fps_sample": cfg.get("fps_sample"),
                         "schwellen": schwellen, "lauf_dir": lauf_dir,
                         "clip_quelle": "kalib",
-                        "clip_vod": cfg.get("clip_vod") is not False,
+                        "clip_vod": _frames.vod_an(cfg.get("clip_vod")),
+                        # Bauplan VOD aus, Stufe VA1: ist VOD an, der Deckel fuer
+                        # ffmpeg aus der Config statt 30 s (der Alt-Worker armiert
+                        # sein Global aus diesem Feld, worker.py).
+                        "clip_erzeugung_deckel_s": clip_erzeugung_deckel_s_aus_cfg(cfg),
                         # .509: auch dieser Auffueller zieht echte Clips von
                         # Frigate. Ohne das Tor waere er der Zug, der neben
                         # dem Deckel des Lernlaufs herlaeuft — die Zusage
@@ -18569,7 +19594,9 @@ class Service:
                             # Der Zettel vom .518-Zug („die Bruecke verliert die
                             # Norm-Achse", offener Punkt 1) ist damit eingeloest.
                             "nachmess": True,
-                            "clip_vod": self.cfg.get("clip_vod") is not False,
+                            "clip_vod": _frames.vod_an(self.cfg.get("clip_vod")),
+                            # VA1: Deckel fuer ffmpeg bei VOD an (s. Kalibrier-Ernte)
+                            "clip_erzeugung_deckel_s": clip_erzeugung_deckel_s_aus_cfg(self.cfg),
                             "clip_tor": tor_n,          # .509, s. oben
                             "clip_tor_deckel_s": tor_deckel_s,
                             # E3a-1b (Bauplan Referenz-Quelle einbauen, J4):
@@ -19626,7 +20653,7 @@ class Service:
             # .288 (Task #11): Schwelle + Deckel des Erzeugungs-Modus EINMAL
             # aus der Config (Default-Paar in load_config, kein Hardcode).
             erz_alter_min = float(self.cfg.get("clip_erzeugung_alter_min") or 30)
-            erz_deckel_s = int(self.cfg.get("clip_erzeugung_deckel_s") or 300)
+            erz_deckel_s = clip_erzeugung_deckel_s_aus_cfg(self.cfg)
             # .509 Clip-Download-Tor: EINMAL gelesen (clip_tor_aus_cfg), dann als
             # Job-Feld an jeden Ernte-Job und an den Vorlade-Thread. Es deckelt
             # die gleichzeitigen FRIGATE-ZUEGE — die K Abholer und ihre Plaetze
@@ -19809,8 +20836,8 @@ class Service:
                         from core import frames as _fr
                         # .292: VOD-Schalter fuer den DIENST-Prozess je Zug frisch
                         # aus der Config armieren (Worker-Jobs bekommen ihn als
-                        # Job-Feld).
-                        _fr.CLIP_VOD = (self.cfg.get("clip_vod") is not False)
+                        # Job-Feld); VA1: ueber die eine Auslegung, an nur bei true.
+                        _fr.CLIP_VOD = _fr.vod_an(self.cfg.get("clip_vod"))
                         try:
                             _fr.clip_holen(
                                 _ne, data_dir=dd,
@@ -20120,12 +21147,12 @@ class Service:
                             # nichts selbst).
                             "clip_erzeugung": alt_ev,
                             "clip_erzeugung_deckel_s": erz_deckel_s,
-                            # .292: VOD-Weg-Schalter (clip_vod, Default
-                            # AN) — Alt-Clips kommen zuerst ueber
-                            # Frigates nginx-vod + lokalen Remux, der
-                            # kranke Erzeugungspfad (frigateUser24029)
-                            # wird nur noch als Fallback betreten.
-                            "clip_vod": self.cfg.get("clip_vod") is not False,
+                            # .292: VOD-Weg-Schalter (clip_vod); seit
+                            # Bauplan VOD aus (VA1) an nur bei true,
+                            # Werkseinstellung aus. Ist er an, kommen
+                            # Clips zuerst ueber Frigates nginx-vod +
+                            # lokalen Remux, clip.mp4 ist der Rueckfall.
+                            "clip_vod": _frames.vod_an(self.cfg.get("clip_vod")),
                             # .509: das Clip-Download-Tor reist als Job-Feld
                             # mit (Muster clip_erzeugung_deckel_s) — der
                             # Download passiert im Worker-Subprozess, das Tor
@@ -21512,7 +22539,8 @@ class Service:
         endete seine letzte Runde mit Fehler (Stufe V1b, W24, ED008), und Frigate ist im MQTT-Betrieb
         nicht stumm (Bauplan MQTT-Stummwache, Entscheid 2, ED008), und der Aufraeum-Schritt „ähnlich zu P“ des Verbrauchers
         scheiterte nicht zuletzt (Bauplan analysen/bauplan_aehnlich.md Entscheide 9 und 17, ED008; rot bis ein Lauf wieder
-        gelingt). -> bool"""
+        gelingt), und der Faden des Disponenten lebt (Bauplan Disponent D3b Punkt 9, ED008; der Grund steht im Block
+        `vorlauf` unter `faden_grund` und als ERROR im Log). -> bool"""
         serie = serie if serie is not None else self.analyse_serie_stand()
         # `getattr` wie in `_worker_warm`: die Proben stellen den Dienst ohne Worker auf.
         haenger_offen = getattr(getattr(self, "_dienst_obj", None), "haenger_offen", None)
@@ -21533,7 +22561,8 @@ class Service:
                 and not self._kompilat_stopp_grund()
                 and not self._unbekannt_rot()
                 and not self._frigate_mqtt_rot()
-                and not _aeh_ok.SPEICHER.rot())
+                and not _aeh_ok.SPEICHER.rot()
+                and self._disponent_faden_lebt() is not False)
 
     def stillstand_stand(self):
         """Der Grund `stillstand` des Stoerungswaechters (Feldbefunde Punkt 2), rein lesend.
@@ -21947,7 +22976,7 @@ class Service:
                 f"frame {nl.get('abbruch_bei')}: {grund} — {ausgang}")
 
     def process(self, eid, nachhol=0, koerper=False, marke=None, lauf_info=None,
-                einge_ts=None):
+                einge_ts=None, kennung=None):
         """nachhol=N (N>=1): Wiederholung einer frueher mit 'fehler' geendeten Analyse.
         Ein Nachhol-Lauf ist STUMM (kein Alert/Push/Telegram/MQTT, s. _nachhol_runde) und
         fasst die Live-Gesundheitssignale nicht an — er repariert nur die Akte.
@@ -21967,7 +22996,11 @@ class Service:
         Akte-Zeile: die Akte beschreibt das EREIGNIS, nicht den Zustand des
         Rechners. Genau ein Leser braucht ihn, und fuer den ist er entscheidend —
         `_nachhol_runde` darf einen fremdverschuldeten Versuch nicht als Versuch
-        buchen (W2-B4/B5). `None` (jeder andere Aufrufer) tut nichts."""
+        buchen (W2-B4/B5). `None` (jeder andere Aufrufer) tut nichts.
+        kennung (Bauplan Disponent D1 Punkt 4, optional): die Besitzkennung des
+        Abholers aus der Warteschlange. Nur mit ihr liest dieser Lauf den
+        Rueckstellzaehler und legt einen Rueckstellwunsch ab; ohne sie (Nachhol,
+        Nachanalyse, Timer-Weg) hat er an der Schlange nichts zu sagen."""
         cfg = self.cfg
         # .536 B4.3: HIER STAND DIE HUNGER-BREMSE — bis zu 120 s Stillstand des
         # Ereignis-Stroms VOR jeder Analyse, damit ein wartender
@@ -22072,13 +23105,13 @@ class Service:
             # Eingespielte Ereignisse (Testbett) haben per Bauart kein Frigate
             # dahinter und sind davon ausgenommen.
             if not ev.get("end_time") and not _einspiel.ist_einspiel(eid):
-                _offen_s = max(0.0, time.time() - float(ev.get("start_time") or 0)
-                               ) if ev.get("start_time") else 0.0
-                _deckel_min = int(cfg.get("offen_max_min") or 0)
+                # Bauplan Disponent D3a Punkt 2: die Frist rechnet die gemeinsame Funktion `open_deadline`;
+                # Log und Merker `_offen_gemeldet` bleiben hier.
+                _offen_s, _deckel_min, _expired = open_deadline(cfg, ev)
                 _gem = getattr(self, "_offen_gemeldet", None)
                 if _gem is None:
                     _gem = self._offen_gemeldet = set()
-                if not _deckel_min or _offen_s < _deckel_min * 60:
+                if not _expired:
                     if eid not in _gem:
                         _gem.add(eid)
                         self.log.info(f"{eid} ({camera}): Frigate has not finished this "
@@ -22104,34 +23137,24 @@ class Service:
                 if _g:
                     _g.discard(eid)
             eigen = eid in self.own_writes          # Echo-Freiheit: unser eigenes Label ist
-            f_label = None if eigen else (ev.get("sub_label") or None)   # keine Frigate-Wahrheit
-            f_score = None if eigen else (ev.get("data") or {}).get("sub_label_score")
+            f_score = None if eigen else (ev.get("data") or {}).get("sub_label_score")   # keine Frigate-Wahrheit
             # S2-Backtest-Fund (ROT, 28.07.): fuer no_person zaehlt Frigates OBJEKT-Score
             # (data.top_score/score, in 2228/2234 Events vorhanden), NICHT der sub_label_score
             # (nur 77/2234, davon 0 mit faces==0 — S1 und S3 schlossen sich strukturell aus).
             _d = ev.get("data") or {}
             obj_score = _d.get("top_score", _d.get("score", ev.get("top_score")))
-            kc = (cfg.get("kameras") or {}).get(camera)     # Kamera-Blatt (Phase 2b) hat Vorrang
-            if isinstance(kc, dict):                         # malformierte Config -> sicherer Fallback
-                # verwenden=False unterdrueckt nur die Entdeckung neuer Gesichter; Frigates EIGENE
-                # Behauptung (sub_label) wird IMMER geprueft (Fremder->Bekannt-Fehlmatch, wie beim Zonen-
-                # Filter). Review 21.07.: ohne "and not f_label" verlor "aus" dieses Sicherheitsnetz.
-                if not kc.get("verwenden", True) and not f_label:
-                    with self.lock: self.processed.add(eid)
+            # Bauplan Disponent D3a Punkt 1: Echo-Bereinigung und feste Filter in der gemeinsamen Funktion
+            # `fixed_filters`; Buchung und Log je Filter bleiben hier.
+            _filter_reason, f_label = fixed_filters(cfg, ev, eigen)
+            if _filter_reason is not None:
+                with self.lock: self.processed.add(eid)      # nur in-memory, kein deckung-Eintrag; nach Neustart
+                if _filter_reason == "camera_off":           # prueft der Sweep das billig erneut (nur API-Call)
                     self.log.warning(f"{eid} ({camera}): skipped (camera off, no sub_label)")
-                    return None
-                z = kc.get("zonen")                          # gegen handeditierte String-Zonen haerten
-                zonen = z if isinstance(z, list) else ([z] if isinstance(z, str) and z else [])
-                if zonen and not f_label and not set(ev.get("zones") or []) & set(zonen):
-                    with self.lock: self.processed.add(eid)
+                elif _filter_reason == "zone":
                     self.log.warning(f"{eid} ({camera}): skipped (not in a selected zone, no sub_label)")
-                    return None
-            else:                                           # Fallback: altes required_zones-Verhalten
-                rz = (cfg.get("required_zones") or {}).get(camera)
-                if rz and not f_label and not set(ev.get("zones") or []) & set(rz):
-                    with self.lock: self.processed.add(eid)  # nur in-memory, kein deckung-Eintrag; nach Neustart
+                else:
                     self.log.warning(f"{eid} ({camera}): skipped (no required_zone, no sub_label)")
-                    return None              # prueft der Sweep das billig erneut (nur API-Call)
+                return None
             # .407 LIVE ERSETZT DIE EREIGNIS-ANALYSE (User-Spezifikation):
             # Sieht der Live-Waechter dieser Kamera ohnehin zu, ist die
             # Event-Analyse desselben Feeds Doppelarbeit — dieselbe Person
@@ -22234,6 +23257,23 @@ class Service:
                         self.log.debug(f"{eid} ({camera}): skipped (live watcher "
                                    f"covers this camera)")
                         return None
+            # Bauplan Disponent D2 Punkt 1: Frigate sagt ausdruecklich, die Aufnahme ist weg (`has_clip` genau False),
+            # und hier liegt kein lokaler Clip mit Inhalt. Nach allen Filtern und vor dem Analyseauftrag endgueltig als
+            # `uebersprungen` mit Grund `clip_weg` abschliessen statt eines Abrufs, der nur scheitern kann; nicht in
+            # der Fehlerserie. Fehlt das Feld, bleibt es beim Versuch. Nur Live-Laeufe: das Nachholen hat dafuer seinen
+            # eigenen Weg (`_nachhol_vorpruefung`); ein eingespieltes Ereignis hat kein Frigate dahinter.
+            if not nachhol and ev.get("has_clip") is False and not _einspiel.ist_einspiel(eid):
+                try:
+                    _lokal_bytes = os.path.getsize(_frames.cache_pfad(eid, cfg["data_dir"]))
+                except OSError:
+                    _lokal_bytes = 0
+                if _lokal_bytes <= 0:
+                    self._uebersprungen_zaehlen()
+                    self._uebersprungen_buchen(
+                        eid, camera, ev, "clip_weg",
+                        "Frigate reports no recording for this event any more (has_clip false) and "
+                        "there is no local clip — nothing to analyse")
+                    return None
             _t_namen = time.monotonic()        # Bauplan Vorlauf-Diagnose D1: Ende Stempel 5, Anfang Stempel 1
             persons = master_persons(cfg)    # AP1: aus dem Master, nicht mehr /api/faces
             _t_namen_ende = time.monotonic()   # D1: Ende Stempel 1 (Namensliste samt Logzeile und sorted)
@@ -22290,7 +23330,13 @@ class Service:
             # KP3 Punkt 5 (Gesammelte Befunde 13): die Abfrage ist keine Analysezeit, sie faellt aus
             # dauer_s heraus wie die Wartezeit am Platz (_warte_s, unten)
             _pz_s = 0.0
-            if _wk is not None:
+            # Bauplan Disponent D3b Punkt 7 und 8: ein Live-Auftrag aus der Schlange des Disponenten (eigene
+            # Besitzkennung, kein Nachholen) liest seinen Clip nur aus dem lokalen Cache. Hat der Disponent fuer dieses
+            # Ereignis keinen Clip beschaffen koennen (`abruf_gescheitert`, `einspiel_fehlt` mit fehlender Vorlage),
+            # laeuft keine Analyse: der heutige Fehlerweg bucht `fehler` mit dem Verwurfgrund seiner letzten Ausnahme.
+            _cache_only = kennung is not None and not nachhol
+            _fail = self._dispatch_failure(eid) if _cache_only else None
+            if _wk is not None and _fail is None:
                 _t_pz = time.time()
                 if _einspiel.ist_einspiel(eid):
                     _pzahl, _pz_grund = _einspiel.personenzahl_lesen(ev)
@@ -22310,40 +23356,76 @@ class Service:
                         self.log.warning(f"{eid} ({camera}): person count unusable ({_pz_grund}) — this event "
                                          f"runs without the early end")
                     _personenzahl.ohne_fruehes_ende_zaehlen(_pz_grund)
-            res = run_analyze(cfg, eid, camera, persons, event_dir,
-                              timeout_s=(int(cfg["nachhol_analyse_timeout_s"]) if nachhol else None),
-                              worker=_wk,
-                              personenzahl=_pzahl,
-                              # P1: solange dieser Thread lebendig wartet, setzt er das
-                              # Lebenszeichen seines Platzes. Der Waechter unten kann
-                              # damit einen langen, gesunden Lauf von einem haengenden
-                              # Thread unterscheiden — genau die .415-Klasse, die heute
-                              # niemand bemerkt (keine Logzeile, /health gruen).
-                              # A3: an die BELEGUNG gebunden, nicht an die
-                              # Platznummer — ein eingezogener Zombie darf den
-                              # Nachfolger auf demselben Platz nicht kuenstlich
-                              # lebendig pulsen (Maskierung des Waechters).
-                              puls=self._plaetze.puls_fuer(_platz_nr),
-                              # Z5: EINMAL vor dem Job entschieden — waehrend
-                              # der Analyse ist der Scharf-Zustand nicht mehr
-                              # abfragbar (anderer Prozess). Nur Live-Laeufe:
-                              # nur sie rufen unten _person_live.
-                              koerper=(_koerper_will and kette_person != "aus"),
-                              info=_ainfo,
-                              # .287 [clipdbg]: Quelle + Event-Alter (jetzt
-                              # minus ENDEzeit) fuer die Clip-Debug-Zeilen.
-                              clip_quelle=("nachhol" if nachhol else "live"),
-                              clip_alter_min=_clip_alter_min(
-                                  ev.get("end_time"), ev.get("start_time")))
-            _z_analyse = time.monotonic()      # Feldstau 5.4: Rueckkehr aus run_analyze
+            if _fail is None:
+                res = run_analyze(cfg, eid, camera, persons, event_dir,
+                                  timeout_s=(int(cfg["nachhol_analyse_timeout_s"]) if nachhol else None),
+                                  worker=_wk,
+                                  personenzahl=_pzahl,
+                                  # Bauplan Unbekannt-Zeit UZ1: derselbe Wert wie `start` der Akte
+                                  ereignis_start=ev.get("start_time"),
+                                  # P1: solange dieser Thread lebendig wartet, setzt er das
+                                  # Lebenszeichen seines Platzes. Der Waechter unten kann
+                                  # damit einen langen, gesunden Lauf von einem haengenden
+                                  # Thread unterscheiden — genau die .415-Klasse, die heute
+                                  # niemand bemerkt (keine Logzeile, /health gruen).
+                                  # A3: an die BELEGUNG gebunden, nicht an die
+                                  # Platznummer — ein eingezogener Zombie darf den
+                                  # Nachfolger auf demselben Platz nicht kuenstlich
+                                  # lebendig pulsen (Maskierung des Waechters).
+                                  puls=self._plaetze.puls_fuer(_platz_nr),
+                                  # Z5: EINMAL vor dem Job entschieden — waehrend
+                                  # der Analyse ist der Scharf-Zustand nicht mehr
+                                  # abfragbar (anderer Prozess). Nur Live-Laeufe:
+                                  # nur sie rufen unten _person_live.
+                                  koerper=(_koerper_will and kette_person != "aus"),
+                                  info=_ainfo,
+                                  # .287 [clipdbg]: Quelle + Event-Alter (jetzt
+                                  # minus ENDEzeit) fuer die Clip-Debug-Zeilen.
+                                  clip_quelle=("nachhol" if nachhol else "live"),
+                                  clip_alter_min=_clip_alter_min(
+                                      ev.get("end_time"), ev.get("start_time")),
+                                  cache_only=_cache_only)
+                _z_analyse = time.monotonic()      # Feldstau 5.4: Rueckkehr aus run_analyze
+            else:
+                res = None
+                _ainfo["verwurf_grund"], _ainfo["fehler_text"] = _fail
+                _z_analyse = time.monotonic()
             _m7 = [("analysis", _z_analyse)]   # Bauplan Vorlauf-Diagnose D1, Stempel 7: Marken der Nacharbeit
             _warte_s = float(_ainfo.get("wartezeit_s") or 0.0)
+            # Bauplan analysen/bauplan_vod_und_vorrat.md, Stufe VOD2 Punkt 5a: die Antwort des Analyse-Jobs
+            # sagt, woher der Clip kam und ob VOD auf clip.mp4 zurueckfiel. Gezaehlt wird HIER, bei der
+            # Uebernahme, unabhaengig vom Schalter `zeitprotokoll` (der Ring fuer /health bleibt dann leer);
+            # `zeiten_zustand` gibt die Zaehler seit Start als Block `abruf` aus.
+            _zt_abruf = _ainfo.get("zeiten") or {}
+            if _zt_abruf:
+                with getattr(self, "_zustand_lock", _NULL_LOCK):
+                    _az = getattr(self, "_abruf_zaehler", None)
+                    if _az is None:
+                        _az = self._abruf_zaehler = {"wege": {}, "rueckfaelle": 0, "letzter_rueckfall": None}
+                    if _zt_abruf.get("abruf_quelle"):
+                        _az["wege"][_zt_abruf["abruf_quelle"]] = _az["wege"].get(_zt_abruf["abruf_quelle"], 0) + 1
+                    if _zt_abruf.get("rueckfall_grund"):
+                        _az["rueckfaelle"] += 1
+                        _az["letzter_rueckfall"] = {"grund": _zt_abruf["rueckfall_grund"], "zeit": time.time()}
+            # Bauplan analysen/bauplan_vod_und_vorrat.md, Stufe VL1 Punkt 1: dem Vorrat die Quelle dieses Jobs melden;
+            # holte der Platz selbst bei Frigate, obwohl der Vorrat haette vorholen koennen, beginnt dort eine Phase
+            # „Vorrat haelt nicht Schritt" (WARNING). Nur ein vorhandener Vorrat: `vorlauf()` legte ihn sonst an.
+            _vl = getattr(self, "_vorlauf_obj", None)
+            if _vl is not None and _zt_abruf.get("abruf_quelle"):
+                _vl.job_quelle_melden(_zt_abruf["abruf_quelle"])
             # E3.3 (W2-B4/B5): den Rueckweg SOFORT bedienen, vor jedem anderen
             # Zweig. Jeder Ausgang unter dieser Zeile kann `return` sein, und der
             # Aufrufer muss auch dann wissen, dass der Prozess unter dem Lauf
             # weggegangen ist.
             if lauf_info is not None and _ainfo.get("fremdverschuldet"):
                 lauf_info["fremdverschuldet"] = True
+            # Bauplan Disponent D3b Punkt 8: der Clip fehlte im Cache. Beim ersten Mal geht das Ereignis ungebucht an
+            # den Disponenten zurueck (holen, vorn in seiner Stufe, ueber die Rueckstellung des Abholers, nur mit eigener
+            # Kennung), der Platz wird mit der Rueckkehr frei; danach `fehler` mit Grund `cache_verloren`.
+            if res is None and _ainfo.get("cache_fehlt"):
+                if self._cache_missing_back(eid, camera, kennung):
+                    return None
+                _ainfo["verwurf_grund"] = _reg.VERWURF_CACHE_VERLOREN
             # .544 M3b: ZURUECKSTELLEN STATT WEGWERFEN. Ein fremdverschuldeter
             # Abgang heisst: der Worker ging unter dem Job weg (geordnetes Ende,
             # Tod, Start-Tor-Absage) — das Ereignis hat nichts falsch gemacht.
@@ -22357,13 +23439,14 @@ class Service:
             # kommt nach einem Backoff wieder — hoechstens `nachhol_versuche` mal.
             # Erst danach steht hier eine ehrliche `fehler`-Zeile MIT der Zahl
             # der Rueckstellungen.
-            _zurueck_n = self._zurueck_stand(eid)
+            _zurueck_n = self._zurueck_stand(eid, kennung=kennung)
             # .547: `_zurueck_n` ist der ZAEHLER (so oft stand dieses Ereignis schon
             # zurueck) und gehoert an die Stelle `bisher`. Seit 5e2a680e (.544 M3b)
             # stand dort `_ainfo`: int(dict) warf, das Ereignis kreiste ohne
             # Backoff (Feldbefund AU 23.09.: 296 578 Zeilen an einem Tag).
             if res is None and _ainfo.get("fremdverschuldet") \
-                    and self._zurueckstellen(eid, camera, _zurueck_n, _ainfo):
+                    and self._zurueckstellen(eid, camera, _zurueck_n, _ainfo,
+                                             kennung=kennung):
                 return None
             # .539 — DIE GIFTPILLE BEKOMMT IHREN VERSUCH ANGESCHRIEBEN.
             # Diese Analyse sass auf einem Rechenstrang, als der Job-Watchdog den
@@ -23068,13 +24151,14 @@ class Service:
         return True
 
     def process_safe(self, eid, nachhol=0, koerper=False, marke=None,
-                     einge_ts=None):
+                     einge_ts=None, kennung=None):
         """process() fuer Timer-/Sweep-Threads: Exception darf nie einen Thread still toeten.
         `marke` reicht die Queue-Marke dieses Eintrags durch (H1/.507),
-        `einge_ts` den Einreih-Zeitpunkt fuer das Zeitprotokoll (.534)."""
+        `einge_ts` den Einreih-Zeitpunkt fuer das Zeitprotokoll (.534),
+        `kennung` die Besitzkennung des Abholers bis zur Rueckstellung (Bauplan Disponent D1 Punkt 4)."""
         try:
             self.process(eid, nachhol=nachhol, koerper=koerper, marke=marke,
-                         einge_ts=einge_ts)
+                         einge_ts=einge_ts, kennung=kennung)
         except Exception as e:
             self.log.error(f"{eid}: unexpected error in the processing thread: {e}")
 
@@ -23436,6 +24520,235 @@ class Service:
                 f"clips/ {mess['clips_gesehen']} entries seen, "
                 f"{mess['clips_geloescht']} clips deleted | live/ {live}")
 
+    # Bauplan analysen/bauplan_cache_leeren.md, Stufe CL1 (Eigentuemer 22.10.2026 10:17:08: „einen API-Aufruf …,
+    # der den lokalen Cache bei ihm einmal löscht“). Der Support-Aufruf POST /support/cache_leeren loescht einmal jede
+    # .mp4 im Clip-Ordner, deren ctime strikt vor der ctime einer beim Start angelegten Merkdatei liegt (dieselbe Uhr
+    # wie die Clips) und die beim Verzeichnislauf weder gepinnt noch eingespeist ist. `.part`, Pin-Dateien und alles
+    # ausserhalb von clips/ fasst er nicht an. Er laeuft unter `_cleanup_lock`, also nie gleichzeitig mit einem
+    # normalen Aufraeumlauf; der Merker haelt einen zweiten Support-Lauf ab, auch solange der erste noch am Schloss
+    # wartet. Das Ergebnis steht unter einer Auftragskennung in state/cache_leeren.json (lesbar ueber
+    # /support/data/). Ehrliche Grenzen (Bauplan, Abschnitt Grenzen): ein Pin, der erst nach dem Verzeichnislauf
+    # entsteht, schuetzt nicht; ein blockierender Dateizugriff (NFS) haelt den Lauf und seine Minutenzeilen auf.
+    # Stufe CL1b: englische Python-Bezeichner (AGENTS.md Abschnitt 4); Route, Schluessel und Werte der Antwort und der
+    # Ergebnisdatei, Name der Merkdatei, Fadenname und Logtexte bleiben wie in CL1.
+    _cache_clear_lock = threading.Lock()      # haelt nur Pruefen und Setzen des Merkers zusammen
+    _cache_clear_job = None                   # der Merker: Kennung des laufenden Auftrags, None = frei
+    CACHE_CLEAR_MARKER_FILE = ".cache_leeren.start"
+    CACHE_CLEAR_TICK_S = 60                   # Abstand der Zwischenstand-Zeilen (Bauplan: je Minute)
+
+    def cache_clear_path(self):
+        """Ort der Ergebnisdatei des Support-Aufrufs POST /support/cache_leeren.
+        -> Pfad <data_dir>/state/cache_leeren.json"""
+        return os.path.join(self.cfg["data_dir"], "state", "cache_leeren.json")
+
+    def cache_clear_accept(self):
+        """Belegt den Lauf, schreibt den Anfangsstand atomar und startet erst dann den Faden des Loeschlaufs.
+        -> (HTTP-Code, Antwort als dict)"""
+        from core import atomar as _at
+        with self._cache_clear_lock:
+            if self._cache_clear_job is not None:
+                return 200, {"ok": True, "laeuft_schon": True, "auftrag": self._cache_clear_job}
+            job_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{os.urandom(3).hex()}"
+            self._cache_clear_job = job_id
+        state = {"auftrag": job_id, "status": "laeuft",
+                 "start": datetime.datetime.now().isoformat(timespec="seconds")}
+        try:
+            _at.json_schreiben(self.cache_clear_path(), state)
+        except Exception as e:                    # noqa: BLE001  jeder Schreibfehler: nichts laeuft
+            self.log.error(f"SUPPORT: cache_leeren {job_id} not started — result file not writable "
+                           f"({type(e).__name__}: {e})")
+            self._cache_clear_release(job_id)
+            return 500, {"ok": False, "msg": f"result file not writable: {type(e).__name__}: {e}"}
+        try:
+            self._cache_clear_start_thread(job_id, state)
+        except Exception as e:                    # noqa: BLE001  jeder Startfehler: abgebrochen, Merker frei
+            self.log.error(f"SUPPORT: cache_leeren {job_id} not started — thread start failed "
+                           f"({type(e).__name__}: {e})")
+            self._cache_clear_write_result(dict(state, status="abgebrochen", grund="fadenstart"))
+            self._cache_clear_release(job_id)
+            return 500, {"ok": False, "msg": f"thread start failed: {type(e).__name__}: {e}"}
+        self.log.info(f"SUPPORT: cache_leeren {job_id} started via support API")
+        return 200, {"ok": True, "gestartet": True, "auftrag": job_id}
+
+    def _cache_clear_start_thread(self, job_id, state):
+        """Startet den Faden des Loeschlaufs (eine eigene Stelle, an der die Probe e3_58 ein Scheitern nachstellt).
+        -> None; wirft, wenn der Faden nicht startet"""
+        threading.Thread(target=self._cache_clear_thread, args=(job_id, state),
+                         name="cache-leeren", daemon=True).start()
+
+    def _cache_clear_release(self, job_id):
+        """Gibt den Merker frei, wenn er noch diesen Auftrag traegt.
+        -> None"""
+        with self._cache_clear_lock:
+            if self._cache_clear_job == job_id:
+                self._cache_clear_job = None
+
+    def _cache_clear_thread(self, job_id, state):
+        """Faden des Support-Aufrufs: Loeschlauf, Endstand in die Ergebnisdatei, danach Merker frei.
+        -> None"""
+        try:
+            try:
+                counts = self.cache_clear_run(job_id)
+                final = dict(state, **counts, status="fertig_mit_fehlern" if counts["fehler"] else "fertig")
+            except Exception as e:                # noqa: BLE001  jede Ausnahme beendet den Auftrag als abgebrochen
+                self.log.error(f"cache_leeren {job_id}: run aborted — {type(e).__name__}: {e}")
+                final = dict(state, status="abgebrochen", grund=f"{type(e).__name__}: {e}")
+            final["ende"] = datetime.datetime.now().isoformat(timespec="seconds")
+            self._cache_clear_write_result(final)
+        finally:
+            self._cache_clear_release(job_id)
+
+    def _cache_clear_write_result(self, state):
+        """Schreibt einen Endstand atomar in die Ergebnisdatei; scheitert das, bleibt der vorige Stand stehen und
+        gilt als unbestaetigt (ERROR). -> None"""
+        from core import atomar as _at
+        try:
+            _at.json_schreiben(self.cache_clear_path(), state)
+        except Exception as e:                    # noqa: BLE001  laut, der Aufrufer macht weiter
+            self.log.error(f"cache_leeren {state.get('auftrag')}: result '{state.get('status')}' not written "
+                           f"({type(e).__name__}: {e}) — the result file still shows the previous state, unconfirmed")
+
+    def _cache_clear_on_restart(self):
+        """Beim Dienststart: ein vorgefundener Stand „laeuft“ wird „abgebrochen“ mit Grund „neustart“ (der Faden des
+        vorigen Prozesses lebt nicht mehr). -> None"""
+        try:
+            with open(self.cache_clear_path(), encoding="utf-8") as f:
+                state = json.load(f)
+        except FileNotFoundError:
+            return                                # nie aufgerufen: nichts zu tun
+        except (OSError, ValueError) as e:
+            self.log.warning(f"cache_leeren: result file not readable at start ({type(e).__name__}: {e})")
+            return
+        if not isinstance(state, dict) or state.get("status") != "laeuft":
+            return
+        self.log.warning(f"cache_leeren {state.get('auftrag')}: interrupted by a restart — marked as aborted")
+        self._cache_clear_write_result(dict(state, status="abgebrochen", grund="neustart"))
+
+    def cache_clear_run(self, job_id):
+        """Loescht unter `_cleanup_lock` jede .mp4 in clips/, deren ctime vor der Merkdatei liegt und die weder
+        gepinnt noch eingespeist ist, und eicht danach den Groessenstand. -> dict mit den Zahlen des Laufs"""
+        from core import frames as _fr
+        cache = os.path.join(self.cfg["data_dir"], "clips")
+        marker = os.path.join(cache, self.CACHE_CLEAR_MARKER_FILE)
+        tally = {"geloescht": 0, "geloescht_bytes": 0, "behalten_gepinnt": 0, "behalten_eingespeist": 0,
+                 "behalten_zeitstempel": 0, "fehler": 0, "erster_fehler": None}
+        t0 = time.monotonic()
+        with self._cleanup_lock:
+            try:
+                start_ns = self._cache_clear_mark_start(marker)
+                tick = [time.monotonic() + self.CACHE_CLEAR_TICK_S]
+                clips, marks, remaining = self._cache_clear_scan(cache, job_id, tally, tick)
+                view = _fr.MarkenSicht(cache, marks)
+                for name in clips:
+                    remaining += self._cache_clear_one(cache, name, start_ns, view, tally)
+                    self._cache_clear_tick(job_id, tally, tick)
+            finally:
+                try:
+                    os.remove(marker)
+                except FileNotFoundError:
+                    pass                          # nie angelegt (Ausnahme beim Anlegen)
+                except OSError as e:
+                    self._cache_clear_error(tally, self.CACHE_CLEAR_MARKER_FILE, e)
+            self.groessen_stand_eichen(remaining)
+        tally["dauer_s"] = round(time.monotonic() - t0, 1)
+        summary = self._cache_clear_summary(tally)
+        if tally["fehler"]:
+            self.log.warning(f"cache_leeren {job_id}: done in {tally['dauer_s']} s — {summary}; "
+                             f"first error: {tally['erster_fehler']}")
+        else:
+            self.log.info(f"cache_leeren {job_id}: done in {tally['dauer_s']} s — {summary}")
+        return tally
+
+    @staticmethod
+    def _cache_clear_mark_start(marker):
+        """Legt die Merkdatei neu an (eine liegengebliebene wird ersetzt) und liest ihre ctime als Startzeit.
+        -> ctime in Nanosekunden"""
+        try:
+            os.remove(marker)
+        except FileNotFoundError:
+            pass                                  # der Normalfall: keine liegengebliebene Merkdatei
+        os.close(os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+        return os.stat(marker).st_ctime_ns
+
+    def _cache_clear_scan(self, cache, job_id, tally, tick):
+        """Ein Verzeichnislauf ueber clips/: die .mp4-Namen, die Marken-Eintraege (Pins, Dauermarken) und die
+        Groesse der .part-Dateien, die der Lauf nicht anfasst. -> (mp4-Namen, Marken-Eintraege, Bytes der .part)"""
+        clips, marks, part_bytes = [], [], 0
+        with os.scandir(cache) as entries:
+            for e in entries:
+                if e.name.endswith(".mp4"):
+                    clips.append(e.name)
+                elif e.name.endswith(".part"):
+                    try:
+                        part_bytes += e.stat().st_size
+                    except FileNotFoundError:
+                        # CL1b: seit dem Verzeichnislauf verschwunden (etwa zur .mp4 umbenannt), kein Fehler
+                        pass
+                    except OSError as exc:
+                        # CL1b (Codex-Gegenpruefung CL1, Befund 1): Groesse nicht lesbar ist ein Fehler des Laufs;
+                        # die Datei fehlt im geeichten Groessenstand, der naechste Aufraeumlauf eicht neu.
+                        self._cache_clear_error(tally, e.name, exc)
+                else:
+                    marks.append(e)
+                self._cache_clear_tick(job_id, tally, tick)
+        return clips, marks, part_bytes
+
+    def _cache_clear_one(self, cache, name, start_ns, view, tally):
+        """Entscheidet ueber eine .mp4 des Laufs, loescht sie gegebenenfalls und zaehlt das Ergebnis in `tally`.
+        -> Bytes, die von ihr im Clip-Ordner bleiben (0 nach der Loeschung oder wenn sie schon weg ist)"""
+        path = os.path.join(cache, name)
+        try:
+            st = os.stat(path)
+        except FileNotFoundError:
+            return 0                              # inzwischen umbenannt oder von einem anderen Weg geloescht
+        except OSError as e:
+            self._cache_clear_error(tally, name, e)
+            return 0
+        if st.st_ctime_ns >= start_ns:
+            tally["behalten_zeitstempel"] += 1
+            return st.st_size
+        if view.gepinnt(name):
+            tally["behalten_gepinnt"] += 1
+            return st.st_size
+        if view.wird_behalten(name):
+            tally["behalten_eingespeist"] += 1
+            return st.st_size
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            return 0                              # ein anderer Weg war schneller: keine bestaetigte Loeschung
+        except OSError as e:
+            self._cache_clear_error(tally, name, e)
+            return st.st_size
+        tally["geloescht"] += 1
+        tally["geloescht_bytes"] += st.st_size
+        return 0
+
+    def _cache_clear_tick(self, job_id, tally, tick):
+        """Schreibt zwischen zwei Dateioperationen hoechstens je CACHE_CLEAR_TICK_S eine INFO-Zeile mit dem
+        Zwischenstand. -> None"""
+        now = time.monotonic()
+        if now < tick[0]:
+            return
+        tick[0] = now + self.CACHE_CLEAR_TICK_S
+        self.log.info(f"cache_leeren {job_id}: in progress — {self._cache_clear_summary(tally)}")
+
+    @staticmethod
+    def _cache_clear_summary(tally):
+        """Die Zahlen eines Laufs als Text fuer das Log.
+        -> str"""
+        return (f"{tally['geloescht']} clips deleted ({tally['geloescht_bytes'] / 1024**3:.2f} GB); kept: "
+                f"{tally['behalten_gepinnt']} pinned, {tally['behalten_eingespeist']} imported, "
+                f"{tally['behalten_zeitstempel']} not older than the start; {tally['fehler']} errors")
+
+    @staticmethod
+    def _cache_clear_error(tally, name, e):
+        """Zaehlt einen Fehler des Laufs; der erste Grund bleibt stehen.
+        -> None"""
+        tally["fehler"] += 1
+        if tally["erster_fehler"] is None:
+            tally["erster_fehler"] = f"{name}: {type(e).__name__}: {e}"
+
     def _live_aufraeumen(self):
         """.315 (User 21.08. "sollte das nicht aufgeraeumt werden"): Retention fuer
         <data_dir>/live/<kamera>/ — der einzige Datenweg, den die Platten-Wache nicht
@@ -23570,7 +24883,13 @@ class Service:
             # Schlange · M in Arbeit" aus EINEM Datensatz.
             try:
                 q = getattr(self, "_ev_q", None)
-                st["queue_n"], st["in_arbeit"] = self.rueckstau_zahlen()
+                # Bauplan Disponent D1 Punkt 8: drei Backlogs (Anzahl, aeltestes
+                # wartendes Ereignis) aus derselben Lesung, in jeder Betriebsart;
+                # `queue_n` bleibt die Summe. Dazu der Zaehler der Ereignisse, deren
+                # Kamera der Support-Einzelweg nicht erfragen konnte (als Mid gezaehlt).
+                (st["queue_n"], st["in_arbeit"],
+                 st["stufen"]) = self.rueckstau_zahlen(stufen=True)
+                st["kamera_unbekannt"] = int(getattr(self, "_ev_kamera_unbekannt", 0))
                 # .534 (B9): wie viele Ereignisse uebersprungen wurden, weil
                 # Frigate sie nie abgeschlossen hat bzw. weil ihre Analyse
                 # wiederholt eingezogen wurde. Steht die Zahl still, ist nichts
@@ -24045,7 +25364,10 @@ class Service:
                     "score": u["score"], "stuetzen": u["stuetzen"],
                     "feuer": bool(u.get("feuer")),
                     "quelle": "person_recognition",
-                    "ts": round(time.time(), 1)}
+                    "ts": round(time.time(), 1),
+                    # "start" ADDITIV (Bauplan neueste_zuerst, Stufe LZ1 Punkt 4): die Ereigniszeit der Ergebniszeile;
+                    # "ts" behaelt seinen eigenen Zeitaufruf.
+                    "start": (entry or {}).get("start")}
                 if _vt_stufe is not None:
                     _payload["stufe"] = _vt_stufe
                 self._mqtt_pub(_melden.topic(self.cfg, "person_erkennung"),
@@ -24115,6 +25437,13 @@ class Service:
                 & (set(self.cfg["alert_kategorien"]) - {"erkannt"})):
             return False
         now = time.time()
+        # Bauplan Disponent D2 Punkt 2 (E3): ein Ereignis, dessen Beginn aelter als ALT_EREIGNIS_S ist, meldet keinen
+        # Ereignisalarm; die Pruefung steht vor der Belegung des Cooldowns, damit ein alter Alarm keinen frischen verdraengt.
+        _alter_s = now - (entry.get("start") or entry["ts"])
+        if _alter_s > ALT_EREIGNIS_S:
+            self.log.info(f"{entry['eid']}: no alert — the event began {int(_alter_s)} s ago, "
+                          f"older than {int(ALT_EREIGNIS_S)} s")
+            return False
         if not self._alarm_slot_nehmen(now):     # E0b: pruefen und belegen atomar
             self.log.warning(f"{entry['eid']}: alert suppressed (cooldown)")
             return False
@@ -24676,7 +26005,7 @@ class Service:
             # Schleife): sie haengt seit B2 an `processed`, s. `_catchup_freigeben`.
             eingereiht = []
             for ev in todo:
-                if self.event_einreihen(ev["id"], sofort=True):
+                if self.event_einreihen(ev["id"], sofort=True, kamera=ev.get("camera")):
                     eingereiht.append(ev["id"])
             _abgewiesen = len(todo) - len(eingereiht)
             if _abgewiesen:
@@ -24686,7 +26015,7 @@ class Service:
                 # naechste Sweep wieder, darueber hinaus haelt es der Merkzettel
                 # (seit B2 faellt der erst nach der Abarbeitung).
                 self.log.info(f"sweep: the event queue is full "
-                         f"({self.EV_QUEUE_MAX}) — {_abgewiesen} of {len(todo)} "
+                         f"({self.EV_QUEUE_MAX} per priority) — {_abgewiesen} of {len(todo)} "
                          f"events were not queued; they stay on the list and "
                          f"the next sweep picks them up")
             if abgleich:
@@ -25414,7 +26743,7 @@ class Service:
                 after = d.get("after", {})
                 if d.get("type") == "end" and after.get("label") == "person":
                     eid = after.get("id")
-                    self.event_einreihen(eid)
+                    self.event_einreihen(eid, kamera=after.get("camera"))
             except Exception as e:
                 self.log.error(f"MQTT payload error: {e}")
 
@@ -25487,28 +26816,79 @@ def make_handler(svc):
         timeout = 60
 
         def handle_one_request(self):
-            # Sprach-Stufe 1 (konzept_sprache.md B1, Eintrittspunkt a): DIE
-            # eine Stelle je Request fuer GET UND POST — die contextvar wird
-            # aus dem Store gesetzt, bevor irgendein t() laeuft. HEUTE gibt
-            # es kein keep-alive (protocol_version-Default HTTP/1.0, _send
-            # ohne Content-Length -> close_connection bleibt True), ein
-            # Setzen je Verbindung waere also gleichwertig — je REQUEST ist
-            # trotzdem der richtige Vertrag: bei einer spaeteren Umstellung
-            # auf HTTP/1.1 wuerde eine geparkte Verbindung sonst die Sprache
-            # des Vor-Requests behalten (Widerleger P7). Achtung: aktivieren()
-            # laeuft VOR dem blockierenden readline() in super(); der
-            # Store-Reader ist mtime-gecacht (B2), im Normalfall eine stat().
-            _sprache.aktivieren()
-            # K4 (01.09., Tester-Log): ein Reverse-Proxy davor resettet Verbindungen
-            # (Health-Checks, abgebrochene Clients) VOR oder MITTEN im Request —
-            # der Reset schlaegt dann im readline()/Parsen von super() auf, wo
-            # der _send-Fang (Fund 25.07.) nicht greift, und socketserver
-            # druckt je Reset einen vollen Traceback (100+ Bloecke am Morgen).
-            # Getrennte Verbindungen sind Normalbetrieb, kein Dienstfehler.
+            # Bauplan Seiten-Zeitprotokoll (analysen/bauplan_seitenzeit.md) SZ1 Punkt 2: der Messrahmen.
+            # begin() ist die erste Handlung, vor der Spracheinstellung; alles Weitere steht im aeusseren
+            # try, finish() und die Zeile im finally. Punkt 3: self.wfile wird einmal je Verbindung durch
+            # den zaehlenden Schreiber ersetzt (Bytes einschliesslich Kopfzeilen, erster Sendefehler), so
+            # sind alle Antwortwege erfasst, ohne sie einzeln anzufassen. raw_requestline wird vor dem
+            # Lesen geleert: ist sie beim Abschluss leer, kam keine Anfragezeile an (Abschlussart i, keine
+            # Zeile). Jede Ausnahme, die bis hierher kommt, wird mit ihrem Typ vermerkt (Abschlussart iii).
+            _rt.begin()
             try:
-                super().handle_one_request()
-            except (ConnectionResetError, BrokenPipeError, TimeoutError):
-                self.close_connection = True
+                if not isinstance(self.wfile, _rt.CountingWriter):
+                    self.wfile = _rt.CountingWriter(self.wfile)
+                self.raw_requestline = b""
+                # Sprach-Stufe 1 (konzept_sprache.md B1, Eintrittspunkt a): DIE
+                # eine Stelle je Request fuer GET UND POST — die contextvar wird
+                # aus dem Store gesetzt, bevor irgendein t() laeuft. HEUTE gibt
+                # es kein keep-alive (protocol_version-Default HTTP/1.0, _send
+                # ohne Content-Length -> close_connection bleibt True), ein
+                # Setzen je Verbindung waere also gleichwertig — je REQUEST ist
+                # trotzdem der richtige Vertrag: bei einer spaeteren Umstellung
+                # auf HTTP/1.1 wuerde eine geparkte Verbindung sonst die Sprache
+                # des Vor-Requests behalten (Widerleger P7). Achtung: aktivieren()
+                # laeuft VOR dem blockierenden readline() in super(); der
+                # Store-Reader ist mtime-gecacht (B2), im Normalfall eine stat().
+                _sprache.aktivieren()
+                # K4 (01.09., Tester-Log): ein Reverse-Proxy davor resettet Verbindungen
+                # (Health-Checks, abgebrochene Clients) VOR oder MITTEN im Request —
+                # der Reset schlaegt dann im readline()/Parsen von super() auf, wo
+                # der _send-Fang (Fund 25.07.) nicht greift, und socketserver
+                # druckt je Reset einen vollen Traceback (100+ Bloecke am Morgen).
+                # Getrennte Verbindungen sind Normalbetrieb, kein Dienstfehler.
+                try:
+                    super().handle_one_request()
+                except (ConnectionResetError, BrokenPipeError, TimeoutError) as exc:
+                    _rt.note_exception(exc)
+                    self.close_connection = True
+            except BaseException as exc:
+                _rt.note_exception(exc)
+                raise
+            finally:
+                # SZ1 Punkt 5: die Zeile. Reihenfolge der Abschlussarten: Sendefehler (iv), Ausnahme vor
+                # einem Status (iii), kein Status (v, auch die in der Basisklasse gefangenen
+                # Zeitueberschreitungen), sonst INFO (ii, vi). Routen der DEBUG-Liste stehen auf DEBUG.
+                rec = _rt.finish(bool(getattr(self, "raw_requestline", b"").strip()))
+                if rec is not None:
+                    if rec.send_error is not None:
+                        _log.log(_logbuch.DEBUG if rec.debug else _logbuch.WARNING,
+                                 f"request {rec.method} {rec.route} send aborted after {rec.ms} ms, "
+                                 f"{rec.bytes} bytes written")
+                    elif rec.status is None and rec.exc_type is not None:
+                        _log.log(_logbuch.DEBUG if rec.debug else _logbuch.WARNING,
+                                 f"request {rec.method} {rec.route} failed before a response after {rec.ms} ms: "
+                                 f"{rec.exc_type}")
+                    elif rec.status is None:
+                        _log.log(_logbuch.DEBUG if rec.debug else _logbuch.WARNING,
+                                 f"request {rec.method} {rec.route} ended without a response after {rec.ms} ms")
+                    else:
+                        _log.log(_logbuch.DEBUG if rec.debug else _logbuch.INFO,
+                                 f"request {rec.method} {rec.route} {rec.status} in {rec.ms} ms, "
+                                 f"{rec.bytes} bytes{rec.steps_text()}")
+
+        def parse_request(self):
+            # SZ1 Punkt 2: Methode und Route nach dem Parsen aus self.command und self.path, auch wenn das
+            # Parsen scheitert oder wirft (vorher gelten OTHER und other). getattr, weil die Basisklasse
+            # path erst nach der ersten Zeile setzt; die Werte laufen nur durch die festen Listen.
+            try:
+                return super().parse_request()
+            finally:
+                _rt.set_request(getattr(self, "command", None), getattr(self, "path", None))
+
+        def send_response(self, code, message=None):
+            # SZ1 Punkt 2: der Status der Zeile kommt von hier, nie geschaetzt (auch fuer send_error).
+            _rt.note_status(code)
+            super().send_response(code, message)
 
         def log_message(self, *a):
             pass
@@ -27798,12 +29178,14 @@ def make_handler(svc):
                         if backend not in ALLOWED_BK:
                             return self._send(400, json.dumps({"ok": False, "msg": _sprache.t("antwort.backend_unbekannt", backend=backend)}, ensure_ascii=False), "application/json")
                         updates["backend"] = backend
+                    store = _lade_config_store(cfg)
                     if d.get("kameras") is not None:               # gegen die REALE Frigate validieren (neue URL falls gesetzt)
                         kams, err = frigate_cameras({**cfg, **({"frigate_url": url} if url else {})}, force=True)
                         if err or not kams:
                             # 'none' bleibt englische Diagnose-Kennung (Grenze d).
                             return self._send(400, json.dumps({"ok": False, "msg": _sprache.t("antwort.kameras_fehlen", fehler=err or "none")}, ensure_ascii=False), "application/json")
                         neu = {}
+                        _alt_blatt = store.get("kameras") or {}
                         for name, k in (d.get("kameras") or {}).items():
                             if name not in kams:
                                 continue
@@ -27811,12 +29193,16 @@ def make_handler(svc):
                             verw = bool(k.get("verwenden", True))
                             if not kams[name]["enabled"]:
                                 verw = True
-                            neu[name] = {"verwenden": verw, "zonen": zonen}
+                            # Bauplan Disponent D1 Punkt 2: der Assistent schickt kein
+                            # `prio` — dann bleibt der gespeicherte Wert, neu heisst Mid.
+                            prio, falsch = kamera_prio(k.get("prio"), (_alt_blatt.get(name) or {}).get("prio"))
+                            if prio is None:
+                                return self._send(400, json.dumps({"ok": False, "msg": _sprache.t("antwort.prio_ungueltig", kamera=name, wert=falsch, erlaubt=", ".join(_reg.PRIO_STUFEN))}, ensure_ascii=False), "application/json")
+                            neu[name] = {"verwenden": verw, "zonen": zonen, "prio": prio}
                         updates["kameras"] = neu
                     if "frigate_read_only" in d:               # Wizard-Schritt 5 'write back?' (Vorbelegung = Ist-Wert)
                         updates["frigate_read_only"] = bool(d.get("frigate_read_only"))
                     updates["setup_done"] = True
-                    store = _lade_config_store(cfg)
                     store.update(updates)
                     p = _config_store_pfad(cfg)
                     _store_schreiben(p, store)      # atomar + fsync, unter _cfg_lock (5 Schreibwege)
@@ -27844,6 +29230,8 @@ def make_handler(svc):
                                               fehler=err or "none")},
                             ensure_ascii=False), "application/json")
                     neu = {}
+                    store = _lade_config_store(cfg)
+                    _alt_blatt = store.get("kameras") or {}
                     for name, k in (d.get("kameras") or {}).items():
                         if name not in kams:                   # nur echte Frigate-Kameras
                             continue
@@ -27851,8 +29239,15 @@ def make_handler(svc):
                         verw = bool(k.get("verwenden", True))
                         if not kams[name]["enabled"]:          # Review 21.07.: eine in Frigate gerade
                             verw = True                        # deaktivierte Kamera NICHT als verifyd-off
-                        neu[name] = {"verwenden": verw, "zonen": zonen}   # einfrieren (Re-Enable laeuft)
-                    store = _lade_config_store(cfg)
+                        # Bauplan Disponent D1 Punkt 2: `prio` gegen die Registry; fehlt
+                        # es, bleibt der gespeicherte Wert, eine neue Kamera bekommt Mid.
+                        prio, falsch = kamera_prio(k.get("prio"), (_alt_blatt.get(name) or {}).get("prio"))
+                        if prio is None:
+                            return self._send(400, json.dumps({"ok": False,
+                                "msg": _sprache.t("antwort.prio_ungueltig", kamera=name, wert=falsch, erlaubt=", ".join(_reg.PRIO_STUFEN))},
+                                ensure_ascii=False), "application/json")
+                        neu[name] = {"verwenden": verw, "zonen": zonen,   # einfrieren (Re-Enable laeuft)
+                                     "prio": prio}
                     store["kameras"] = neu
                     p = _config_store_pfad(cfg)
                     _store_schreiben(p, store)      # atomar + fsync, unter _cfg_lock (5 Schreibwege)
@@ -28294,6 +29689,29 @@ def make_handler(svc):
                 threading.Timer(0.5, svc.neustart,
                                 kwargs={"grund": "support API request"}).start()
                 return
+            if pfad == "/support/cache_leeren":
+                # Bauplan analysen/bauplan_cache_leeren.md Stufe CL1 (Eigentuemer 22.10.2026 10:17:08): die
+                # SECHSTE deklarierte Aktions-Ausnahme. Torwaechter wie /support/restart (Schalter
+                # support_zugriff + Token LIVE aus dem Store, Abweisung = generisches 404), Rumpf wie
+                # /support/dateiprobe (nur leer oder {}; ein Feld, kaputtes JSON, ein Nicht-Objekt 400,
+                # Uebergroesse 413). Die Anfrage belegt den Lauf, schreibt den Anfangsstand und startet den
+                # Loeschlauf im eigenen Faden (Service.cache_clear_accept); sie wartet nicht auf sein Ende.
+                from core import support as _sup7
+                _st = _lade_config_store(cfg)
+                if not _sup7.zugriff_ok(_st, self.headers.get("X-Support-Token")):
+                    _sup7.abweisung_zaehlen(svc.log)
+                    return self._send(404, "not found", "text/plain")
+                _b = self._body_json(2048, default={}, erwartet=dict)
+                if _b is _ABGEWIESEN:
+                    return
+                if _b:
+                    return self._send(400, json.dumps(
+                        {"ok": False, "msg": f"unknown field(s): "
+                                             f"{', '.join(sorted(_b))} "
+                                             f"(allowed: none, send {{}})"}),
+                        "application/json")
+                _code, _answer = svc.cache_clear_accept()
+                return self._send(_code, json.dumps(_answer, ensure_ascii=False), "application/json")
             if pfad == "/support/feinmessung":
                 # .534 (B7) FEINMESSUNG AUF ZURUF — die DRITTE deklarierte
                 # Aktions-Ausnahme im Support-Baum, nach /support/restart und
@@ -28589,7 +30007,8 @@ def make_handler(svc):
                         for _e2 in _wahl:
                             _eid2 = str(_e2["id"])
                             _erg2 = svc.event_neu_einreihen(
-                                _eid2, marke=_einspiel.reanalyse_marke())
+                                _eid2, marke=_einspiel.reanalyse_marke(),
+                                kamera=_e2.get("camera"))
                             if _erg2 is True:
                                 _ids.append(_eid2)
                             elif _erg2 is False:
@@ -28673,8 +30092,21 @@ def make_handler(svc):
                         # H1 / E-P9 (.507): mit Re-Analyse-Marke — auch dieses
                         # eine Ereignis darf nicht am Live-only-Uebersprung
                         # verschwinden, wenn seine Kamera live gedeckt ist.
+                        # Bauplan Disponent D1 Punkt 3: dieser Weg kennt die
+                        # Kamera nicht und fragt sie vorher bei Frigate ab. Scheitert
+                        # das, zaehlt das Ereignis als Mid: INFO-Zeile und Zaehler im
+                        # Rueckstau-Block von /health.
+                        _kam1 = None
+                        try:
+                            _kam1 = (api(cfg, f"/api/events/{_q_ev}") or {}).get("camera")
+                            _kam_grund = "Frigate names no camera for it"
+                        except Exception as _e1:              # noqa: BLE001
+                            _kam_grund = f"Frigate lookup failed: {type(_e1).__name__}"
+                        if not _kam1:
+                            _kam1 = None
+                            svc.kamera_unbekannt_melden(_q_ev, _kam_grund)
                         _erg1 = svc.event_neu_einreihen(
-                            _q_ev, marke=_einspiel.reanalyse_marke())
+                            _q_ev, marke=_einspiel.reanalyse_marke(), kamera=_kam1)
                         if _erg1 is False:
                             # W-A3 E3: laeuft gerade — nichts wurde angefasst.
                             # 409 statt 200, damit der Bediener es nochmal
@@ -28720,15 +30152,14 @@ def make_handler(svc):
                                                  _ev0.get("start_time"))
                         _erz = (_alter is not None and _alter >= float(
                             cfg.get("clip_erzeugung_alter_min") or 30))
-                        _frames.CLIP_VOD = (cfg.get("clip_vod") is not False)
+                        _frames.CLIP_VOD = _frames.vod_an(cfg.get("clip_vod"))   # VA1
                         try:
                             _vid = _frames.clip_holen(
                                 _q_ev, data_dir=_dd,
                                 frigate_url=cfg.get("frigate_url"),
                                 quelle="einspiel", alter_min=_alter,
                                 erzeugung=_erz,
-                                erzeugung_deckel_s=int(
-                                    cfg.get("clip_erzeugung_deckel_s") or 300))
+                                erzeugung_deckel_s=clip_erzeugung_deckel_s_aus_cfg(cfg))
                             _einspiel.ablegen(_dd, _neu, _meta, _vid)
                         finally:
                             _frames.frei(_q_ev, data_dir=_dd)
@@ -28749,7 +30180,7 @@ def make_handler(svc):
                         # ein unfaelliger Kopf hielt bis .505 ALLE Abholer auf
                         # (gemessen 15,00 s). Betrifft auch reine
                         # Poll-Installationen, nicht nur MQTT.
-                        svc.event_einreihen(_neu, sofort=True)
+                        svc.event_einreihen(_neu, sofort=True, kamera=_kam)
                         return self._send(200, json.dumps(
                             {"ok": True, "eid": _neu, "weg": "kamera-override"}),
                             "application/json")
@@ -28782,7 +30213,7 @@ def make_handler(svc):
                         # Kamera-Weg darueber — die Vorlage liegt bereits als
                         # Datei vor, es gibt nichts, worauf clip_delay warten
                         # koennte.
-                        svc.event_einreihen(_neu, sofort=True)
+                        svc.event_einreihen(_neu, sofort=True, kamera=_kam)
                         return self._send(200, json.dumps(
                             {"ok": True, "eid": _neu, "weg": "clip"}),
                             "application/json")
@@ -29003,20 +30434,13 @@ def make_handler(svc):
                     _titel, _inhalt = _auf.render(cfg, svc.log_path, master_persons(cfg), qs)
                 return self._send(200, webui.layout(_titel, "/heute", _inhalt, self._banner()))
             if path == "/heute":
+                _t0_seite = time.monotonic()      # Bauplan Seiten-Tempo ST1 Punkt 4: Dauer fuer die DEBUG-Zeile
                 # .232 (User-Entwurf): wer Today ansieht, klickt womoeglich
                 # gleich einen Pass-Check — .235: die DIENST-Instanz vorwaermen
                 # (svc.embedder, OV-schnell; dieselbe, die die Bruecke nutzt).
                 if svc._emb is None:
                     threading.Thread(target=lambda: svc.embedder,
                                      daemon=True).start()
-                rows, letzte = [], {}
-                if os.path.exists(svc.log_path):
-                    with open(svc.log_path) as f:
-                        for l in f:
-                            try:
-                                rows.append(json.loads(l))
-                            except Exception:
-                                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 # Tagesnavigation (User 25.07.: "tagweise vor und zurück pendeln"). Gleiche
                 # Konvention wie der Filter auf /ereignisse: ?tag=JJJJ-MM-TT, ungueltige Eingabe
                 # faellt still auf heute zurueck statt den Request abzureissen. Ohne Parameter
@@ -29049,18 +30473,21 @@ def make_handler(svc):
                 # Zeilen fuer dasselbe Event. Zaehlte die KPI wie frueher die ERSTE, stuende die
                 # Szenario-Karte auf der korrigierten Kategorie und der Zaehler darueber weiter
                 # auf dem alten Fehler-Stand.
-                by_h = {}
-                for r in rows:
-                    if r.get("eid"):
-                        by_h[r["eid"]] = r
+                # Bauplan Seiten-Tempo ST1: by_h kommt aus der Akten-Sicht (core/akte.py) und traegt nur die Ereignisse
+                # des Tages (dieselbe Auswahl und Reihenfolge wie by_h mit Tagesfilter); dazu die Personen-Historie ueber
+                # alle Zeilen und die Kameras der letzten Zeilen aller Ereignisse. Die Akte wird nicht mehr ganz gelesen.
+                from core import akte as _akte
+                _t0_akte = time.monotonic()
+                with _rt.step("akte_view"):               # Bauplan Seiten-Zeitprotokoll SZ1 Punkt 6
+                    by_h, letzte, _kams_h = _akte.sicht(svc.log_path).heute(heute0, tag_ende)
+                _akte_s = time.monotonic() - _t0_akte
                 # Areas Stufe 1 v2: Sicht aufloesen BEVOR irgendetwas zaehlt. Die Pass-Liste
                 # WAEHLT beruehrte Durchgaenge aus (Urteil bleibt property-weit, s. szenarien);
                 # die Event-KPIs zaehlen die Kameras der Sicht. Beobachtete Menge fuer die
                 # Default-Sicht = Kameras der Bestandsdaten (Frigate-Ausfall aendert nichts).
                 _areas_h = _areas_mod.normalisieren(cfg.get("areas"))
                 _ar_aktiv, _nk = _areas_mod.sicht_aufloesen(
-                    _areas_h, qs.get("area", [""])[0],
-                    {str(r.get("camera", "?")) for r in by_h.values()})
+                    _areas_h, qs.get("area", [""])[0], _kams_h)
                 _aq = f'&amp;area={urllib.parse.quote(_ar_aktiv)}' if _nk is not None else ''
                 for r in by_h.values():
                     if _nk is not None and str(r.get("camera", "?")) not in _nk:
@@ -29083,9 +30510,10 @@ def make_handler(svc):
                 try:
                     if (bool((cfg.get("live") or {}).get("guards"))
                             or _lwz.melde_protokoll_vorhanden(cfg)):
-                        z_live_liste, _zlg = _lwz.melde_liste(
-                            cfg, heute0, tag_ende, kameras=_nk,
-                            max_gruppen=200)
+                        with _rt.step("live_history"):    # Bauplan Seiten-Zeitprotokoll SZ1 Punkt 6
+                            z_live_liste, _zlg = _lwz.melde_liste(
+                                cfg, heute0, tag_ende, kameras=_nk,
+                                max_gruppen=200)
                 except Exception as e:
                     svc.log.error(f"!! live name list failed: "
                             f"{type(e).__name__}: {e}")
@@ -29102,11 +30530,7 @@ def make_handler(svc):
                 _erkannt = _lwz.namens_auftritte(z_live_liste) if z_live_liste else []
                 _alle_live = (_lwz.auftritts_gruppen(z_live_liste)
                               if z_live_liste else [])
-                for r in rows:                       # Personen-Historie ueber ALLE Zeilen
-                    t = r.get("start") or r.get("ts", 0)
-                    for p in r.get("bestaetigt") or []:
-                        if t > letzte.get(p, (0, None))[0]:
-                            letzte[p] = (t, r)
+                # Personen-Historie ueber ALLE Zeilen: `letzte` kommt oben aus der Akten-Sicht (Bauplan Seiten-Tempo ST1).
                 import webui
                 import szenarien as _szen
                 # F2 (.54): eid -> LETZTES Label — der Label-WERT entscheidet:
@@ -29179,7 +30603,8 @@ def make_handler(svc):
                 # dem Satz und der Altbestand); tolerant je Zeile (Widerleger phase34 MUSS-2: eine kaputte Pool-Zeile
                 # kostet nur sich selbst, nie die Seite).
                 from core import unbekanntpool as _ubp
-                uid_mitglieder = _ubp.mitglieder(cfg["data_dir"], log=svc.log)
+                with _rt.step("unknown_pool"):            # Bauplan Seiten-Zeitprotokoll SZ1 Punkt 6
+                    uid_mitglieder = _ubp.mitglieder(cfg["data_dir"], log=svc.log)
 
                 # --- Auswertung je Person ueber den ganzen Tag (fuer das Personen-Band) ---
                 # User-Vorgabe 25.07.: "Wichtig ist, WER erkannt wurde." Die Zahlen dafuer
@@ -29258,15 +30683,17 @@ def make_handler(svc):
                 # Hinweis: core/unbekanntpool (aktive Nicht-Objekt-Cluster mit Stuetzen
                 # im angezeigten Tag; Auftritte gap-gebuendelt wie die Vorbesuche).
                 from core import unbekanntpool as _ubp
-                pool_tag = _ubp.tages_cluster(cfg["data_dir"], heute0, tag_ende,
-                                              gap, log=svc.log)
+                with _rt.step("unknown_pool"):            # SZ1 Punkt 6: gleiche Namen summieren sich
+                    pool_tag = _ubp.tages_cluster(cfg["data_dir"], heute0, tag_ende,
+                                                  gap, log=svc.log)
                 # Bauplan analysen/bauplan_aehnlich.md Entscheid 16 (Fassung 4): die Seite stuft nicht selbst ein, sie
                 # liest das Merkmal „ähnlich zu P“, das der Aufraeum-Schritt des Verbraucher-Fadens an die Identitaet
                 # schreibt (core.aehnlich.merkmal_von). Ein vom Nutzer bestaetigter Fremder bleibt unter Unknown; Kopfzahl
                 # und Saetze der Randspalte zaehlen nur die Identitaeten unter Unknown, die Zeile „Probably recognized“
                 # zaehlt die Personen P. Der rote Hinweis kommt aus dem Zustand des letzten Aufraeum-Schritts.
                 from core import aehnlich as _aeh
-                _aeh_zeilen = _ubp.identitaeten(cfg["data_dir"])
+                with _rt.step("unknown_pool"):
+                    _aeh_zeilen = _ubp.identitaeten(cfg["data_dir"])
                 # AE5 (Fassung 6, Entscheid 20): Merkmal und Urteil „nicht P“ zusammen (core.aehnlich.vermutlich).
                 aeh_tag = _aehnlich_trennen({uid: _aeh.vermutlich(_aeh_zeilen.get(uid)) for uid in pool_tag},
                                             uid_mitglieder, szenarien, (heute0, tag_ende))
@@ -29279,9 +30706,10 @@ def make_handler(svc):
                 # mit frischem Mitglied im Fenster als eigene Zeile mitzaehlen — die Kachel
                 # darf sie nicht still verstecken. Entscheid 19 (Bauplan analysen/bauplan_aehnlich.md): Identitaeten, die
                 # als „vermutlich P“ gelten (Merkmal und Urteil zusammen, core.aehnlich.vermutlich), zaehlen hier nicht.
-                pool_archiv_n = _ubp.tages_archiv(cfg["data_dir"], heute0,
-                                                  tag_ende, log=svc.log,
-                                                  ohne={uid for uid, d in _aeh_zeilen.items() if _aeh.vermutlich(d)})
+                with _rt.step("unknown_pool"):
+                    pool_archiv_n = _ubp.tages_archiv(cfg["data_dir"], heute0,
+                                                      tag_ende, log=svc.log,
+                                                      ohne={uid for uid, d in _aeh_zeilen.items() if _aeh.vermutlich(d)})
 
                 # Die vier gleichrangigen Kennzahlkacheln sind am 25.07. entfallen: "People
                 # recognized: 3" ist redundant, sobald drei Personenkarten dastehen, und "With
@@ -29714,7 +31142,8 @@ def make_handler(svc):
                 if _keine and not (cfg.get("frigate_url") or "").strip():
                     band = webui.leer(_sprache.t("leer.frigate"),
                                       _sprache.t("leer.frigate_hinweis"))
-                elif _keine and not master_persons(cfg):
+                # SZ1 Punkt 6: step als Dekorator, der Aufruf steht mitten in der Bedingung.
+                elif _keine and not _rt.step("persons")(master_persons)(cfg):
                     band = webui.leer(_sprache.t("leer.refs"),
                                       _sprache.t("leer.refs_hinweis"))
                 elif pkarten:
@@ -29828,7 +31257,8 @@ def make_handler(svc):
                     f'<span class="num">{unbek_nebenbei}</span></div>'
                     '</div></aside>')
                 _dl = ('<datalist id="personen-liste">'
-                       + "".join(f'<option value="{html.escape(p)}">' for p in master_persons(cfg))
+                       + "".join(f'<option value="{html.escape(p)}">'
+                                 for p in _rt.step("persons")(master_persons)(cfg))   # SZ1 Punkt 6
                        + '</datalist>')
                 inhalt = (f'{_dl}{nav_tag}'
                           f'<div class="tagraster"><div>'
@@ -29916,10 +31346,13 @@ def make_handler(svc):
                 if (_frigate_fr.get("bekannt") and _frigate_fr.get("an")
                         and not cfg.get("frigate_sync")):
                     _hw = _sprache.t("hinweis.frigate_fr_an")
-                return self._send(200, webui.layout(
+                _seite = webui.layout(
                     _titel, "/heute", inhalt, _bn,
                     refresh=(30 if (live_offen or _bakt) else 120) if ist_heute else 0,
-                    banner_aktion=_bakt, hinweis=_hw))
+                    banner_aktion=_bakt, hinweis=_hw)
+                _log.debug(f"page /heute: {(time.monotonic() - _t0_seite) * 1000:.0f} ms total, deckung.jsonl view "
+                           f"{_akte_s * 1000:.0f} ms ({len(by_h)} events of the day)")
+                return self._send(200, _seite)
             if path == "/lernlauf/anker":
                 # E3-Ansicht (read-only): Cluster mit Crops — der erste Blick vor
                 # der Benennung. Renderer im Modul (I1), hier nur Daten + Layout.
@@ -30754,6 +32187,7 @@ def make_handler(svc):
                                          aeh_fehler=_aeh_s.SPEICHER.rot())
                 return self._send(200, webui.layout(_sprache.t("nav.unbekannte"), "/unbekannte", inhalt, self._banner()))
             if path == "/anwesenheit":                   # Anwesenheitsseite (Z4, .409; User 02.09.)
+                _t0_seite = time.monotonic()      # Bauplan Seiten-Tempo ST1 Punkt 4: Dauer fuer die DEBUG-Zeile
                 import webui
                 # ME1: Renderer in routes/anwesenheit.py, Daten als Parameter —
                 # kein Store-/Dateizugriff dort. Der Handler loest die Sicht
@@ -30766,18 +32200,13 @@ def make_handler(svc):
                 from routes import anwesenheit as _r_anw
                 _heute_a = _anw.tag_von_ts(time.time())
                 _datum_a = _r_anw.tag_waehlen(qs.get("tag", [""])[0], _heute_a)
-                _cams_a = set()
-                if os.path.exists(svc.log_path):
-                    with open(svc.log_path) as f:
-                        for l in f:
-                            try:
-                                _c = json.loads(l).get("camera")
-                            except Exception:
-                                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
-                                continue
-                            if _c:
-                                _cams_a.add(str(_c))
-                _cams_a = sorted(_cams_a)
+                # Bauplan Seiten-Tempo ST1: die Kameras aller Zeilen (jeder gesetzte Wert als Text) aus der Akten-Sicht
+                # (core/akte.py), ohne die Akte ganz zu lesen.
+                from core import akte as _akte
+                _t0_akte = time.monotonic()
+                with _rt.step("akte_view"):               # Bauplan Seiten-Zeitprotokoll SZ1 Punkt 6
+                    _cams_a = sorted(_akte.sicht(svc.log_path).kameras())
+                _akte_s = time.monotonic() - _t0_akte
                 _areas_a = _areas_mod.normalisieren(cfg.get("areas"))
                 _sicht_a = _r_anw.sicht_waehlen(_cams_a, _areas_a,
                                                 qs.get("kamera", [""])[0],
@@ -30791,7 +32220,10 @@ def make_handler(svc):
                                        _anw.fenster(cfg, log=svc.log),
                                        master_persons(cfg), _cams_a, _areas_a, _sicht_a,
                                        _anw.tage_vorhanden(cfg))
-                return self._send(200, webui.layout(_sprache.t("anwesenheit.titel"), "/anwesenheit", inhalt, self._banner()))
+                _seite = webui.layout(_sprache.t("anwesenheit.titel"), "/anwesenheit", inhalt, self._banner())
+                _log.debug(f"page /anwesenheit: {(time.monotonic() - _t0_seite) * 1000:.0f} ms total, deckung.jsonl view "
+                           f"{_akte_s * 1000:.0f} ms ({len(_cams_a)} cameras)")
+                return self._send(200, _seite)
             if path == "/gpu":                           # Beschleuniger-Aufteilung (P5, .503)
                 import webui
                 # ME1: Renderer in routes/gpu.py, Daten als Parameter. Der Handler
@@ -31416,8 +32848,9 @@ def make_handler(svc):
                 # Satz mit der juengsten aktiven Bindung (Lese-Stufe b, Feld
                 # personen, erste ref_id), die Zahl der Referenzen kommt aus
                 # master_umfang — kein Lesen von faces/ und refs_meta mehr.
-                _pl = [(_p, _rids[0]) for _p, _rids in sorted(
-                    _rq_fc.read_catalog({"data_dir": cfg["data_dir"]})["personen"].items())]
+                with _rt.step("catalog"):                 # Bauplan Seiten-Zeitprotokoll SZ1 Punkt 6
+                    _pl = [(_p, _rids[0]) for _p, _rids in sorted(
+                        _rq_fc.read_catalog({"data_dir": cfg["data_dir"]})["personen"].items())]
                 _nb = master_umfang(cfg)[1]
                 # Stufe V1c: Identitaeten mit mindestens einem Mitglied (Satz oder
                 # Altbestand) ueber den einen Leser core.unbekanntpool.mitglieder.
@@ -31593,12 +33026,15 @@ def make_handler(svc):
                 return
             if path == "/system":
                 import webui
+                _t0_seite = time.monotonic()      # Bauplan Seiten-Tempo ST1b Punkt 2: Dauer des ganzen Abrufs
                 # Modulumbau R1: Rendern byte-treu in routes/system.py (Service-Objekt
                 # injiziert — die Seite zeigt die Dienst-LAGE, s. Modul-Docstring;
                 # ro/docs_url bleiben Kern-Quellen).
                 from routes import system as _r_system
                 inhalt = _r_system.render(svc, cfg, frigate_read_only(cfg), DOCS_URL)
-                return self._send(200, webui.layout(_sprache.t("nav.system"), "/system", inhalt, self._banner()))
+                _seite = webui.layout(_sprache.t("nav.system"), "/system", inhalt, self._banner())
+                _log.debug(f"page /system: {(time.monotonic() - _t0_seite) * 1000:.0f} ms total")
+                return self._send(200, _seite)
             if path == "/systemstat":
                 # .341 Systemseite: gerendert wird AUS DEM RINGPUFFER, nie
                 # frisch gemessen — sonst kostet jeder Reload eine Messrunde
@@ -31878,6 +33314,10 @@ def make_handler(svc):
                 _zl = _frames_health.RUECKFAELLE.get("zuletzt")
                 if _zl and _zl.get("steps"):               # nur die steps, nie der Clip-Name
                     h["frame_rueckfaelle"]["zuletzt_steps"] = _zl["steps"]
+                # Bauplan Seiten-Zeitprotokoll SZ1 Punkt 7: laufende Seitenaufrufe (Zahl, Route und Alter des
+                # aeltesten, ohne /health selbst) und Antworten mit Sendefehler seit dem Start. Nur lesend,
+                # `ok` bleibt davon unberuehrt (ED008).
+                h["web"] = _rt.health_block()
                 _antwort = self._send(200, json.dumps(h), "application/json")
                 svc.health_dauer_melden(time.monotonic() - _t_health, _log_block_s)
                 return _antwort
@@ -32207,6 +33647,14 @@ def make_handler(svc):
                         svc.log.debug("SUPPORT: config (masked) served")   # .511: Leseabruf
                         return self._send(200, json.dumps(
                             d, ensure_ascii=False, indent=1),
+                            "application/json")
+                    if _rest == "faeden":
+                        # Bauplan analysen/bauplan_fadenliste.md, Stufe FL1: je Faden die Stelle im Code und
+                        # die laufenden Seitenaufrufe; erst gesammelt, dann geloggt und gesendet.
+                        _faeden = _sup.thread_list()
+                        svc.log.debug("SUPPORT: thread list served")
+                        return self._send(200, json.dumps(
+                            _faeden, ensure_ascii=False, indent=1),
                             "application/json")
                     if (_rest == _sup.BAUM_CODE
                             or _rest.startswith(_sup.BAUM_CODE + "/")):
@@ -32701,8 +34149,13 @@ def decode_byte_probe(cfg, max_clips=3, deckel_s=180.0):
                 eid = e.get("id")
                 if not eid:
                     continue
+                # Bauplan VOD aus, Stufe VA1: `--benchmark` laeuft vor dem Dienststart, das
+                # Prozess-Global ist dann noch nicht aus der Config gesetzt; Schalter und
+                # Deckel gehen deshalb ausdruecklich aus der gespeicherten Config mit.
                 kandidaten.append(_frames.clip_holen(
-                    eid, data_dir=dd, frigate_url=cfg.get("frigate_url", "")))
+                    eid, data_dir=dd, frigate_url=cfg.get("frigate_url", ""),
+                    vod=_frames.vod_an(cfg.get("clip_vod")),
+                    erzeugung_deckel_s=clip_erzeugung_deckel_s_aus_cfg(cfg)))
                 geholt = eid          # der PIN haengt an der Event-Id, nicht am Pfad
                 break
         except Exception as ex:                            # noqa: BLE001
@@ -33525,6 +34978,44 @@ def startup_selfcheck(svc):
     L.info("========== ready ==========")
 
 
+def prewarm_views(svc):
+    """Startet nach dem Start-Selbsttest einen Daemon-Faden, der Akten-Sicht und Namen-Sicht je einmal anfordert.
+    -> der gestartete Faden
+
+    Bauplan analysen/bauplan_perf_katalog.md, Stufe PK2 (Eigentuemer 23.10.2026 17:43:17, einfache Form 18:03:09,
+    Fehlerweg 18:17:44). Die Akten-Sicht ueber denselben Weg wie /anwesenheit (core/akte.sicht, ein Abruf), die
+    Namen-Sicht ueber master_persons (Referenz-Quelle). Kein eigenes Schloss, keine Ablage, keine Wiederholung; ein
+    Seitenabruf waehrend des Aufbaus wartet am Schloss der Sicht auf denselben Aufbau. Scheitert ein Aufbau, zaehlt
+    das wie ein gescheiterter Startschritt: ERROR-Zeile, FAIL-Eintrag in der Startdatei (core/selfcheck.add_fail),
+    startup_fails und damit /health rot bis zum naechsten Start; danach die naechste Sicht. Zeilen ohne Namen und Pfad."""
+    from core import akte as _akte_pw
+    from core import selfcheck as _sc_pw
+    sichten = (("case-file view", lambda: _akte_pw.sicht(svc.log_path).kameras()),
+               ("person-name view", lambda: master_persons(svc.cfg)))
+
+    def lauf():
+        for name, anfordern in sichten:
+            t0 = time.monotonic()
+            svc.log.debug(f"prewarm {name}: started")
+            try:
+                anfordern()
+            except Exception as e:                    # noqa: BLE001  laut, zaehlt wie ein gescheiterter Startschritt
+                art = type(e).__name__
+                svc.log.error(f"prewarm {name} failed after {(time.monotonic() - t0) * 1000:.0f} ms ({art}); "
+                              "counted as a failed startup step, health stays red until the next start")
+                try:
+                    _, svc.startup_fails = _sc_pw.add_fail(svc.cfg["data_dir"], "prewarm", f"{name} failed: {art}")
+                except Exception as e2:               # noqa: BLE001  Startdatei nicht lesbar oder nicht schreibbar
+                    svc.startup_fails = int(getattr(svc, "startup_fails", 0) or 0) + 1
+                    svc.log.error(f"startup record of the failed prewarm not written ({type(e2).__name__}); "
+                                  f"startup_fails raised to {svc.startup_fails} anyway")
+                continue
+            svc.log.debug(f"prewarm {name}: done in {(time.monotonic() - t0) * 1000:.0f} ms")
+    faden = threading.Thread(target=lauf, name="prewarm-views", daemon=True)
+    faden.start()
+    return faden
+
+
 def _ausgabe_auslaufen(frist_s=2.0):
     """Tee und Siebe ABBAUEN, damit die LETZTEN Zeilen wirklich ankommen.
 
@@ -33764,6 +35255,7 @@ def main():
     threading.Thread(target=web.serve_forever, daemon=True).start()
     # E14 D3: die Zeile „Webview: port …" entfaellt, der Startblock sagt es (web UI … ready).
     startup_selfcheck(svc)                    # strukturierter Selbstcheck nach stdout (Roadmap 4/10)
+    prewarm_views(svc)                        # Bauplan Katalog-Fortschreibung PK2: Sichten im Hintergrund vorwaermen
     # EINMALIGER KALIBRIER-RING-RESET (User 03.09., Boeden-Neueichung): die
     # Bestands-Ringe wurden mit den ALTEN Boeden und teils ohne Pose-Wert
     # gefuellt und taugen nicht als Kalibrier-Grundlage. Beim ERSTEN Start

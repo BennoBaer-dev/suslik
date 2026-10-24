@@ -121,6 +121,23 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   5); the highest is 240 so that a card with room again waits at most four hours. Watchers come
   back one per such period. The time only runs while the service runs and jobs arrive; after a
   restart it starts from the beginning.
+- **`poll_interval`** — seconds between two queries to Frigate for new events, in poll mode only
+  (`trigger: poll`); with MQTT it has no effect. Default 10, allowed 5 to 300. A shorter interval
+  picks up finished events sooner and asks Frigate more often.
+- **`clip_delay`** — seconds suslik waits before it fetches an event's clip, so Frigate can finish
+  the recording: in poll mode counted from the end of the event, with MQTT from Frigate's end
+  message. Default 5, allowed 0 to 120. Raise it if clips often arrive incomplete or need a second
+  attempt.
+
+  Both are on the **Advanced** settings page (`/konfiguration`, in the menu in Expert mode) and
+  take effect without a restart: the next poll waits the new interval, and events queued after
+  saving get the new delay (events already waiting keep theirs). Up to version 0.1.1.034 the defaults were 20 and 15. On the first
+  start of the version that brings this change, suslik moves each of the two values that is still
+  at its old default (20 or 15, whether from your config file or from the settings store) to the
+  new one, once, with a line in the log and in the config audit; any other value is kept. A marker
+  in `state/` records that this happened, so setting 20 or 15 again later, or restoring an older
+  config backup, keeps your values. Restoring a full backup from before that version brings back
+  `state/` without the marker, and the next start moves the old defaults once more.
 - **`/health` fields for stalls, losses and fallbacks** — `ok` is false while a start check
   failed, an analysis-failure series is active or a standstill lasts; a standstill lasts until the
   next successful analysis. `nachhol` counts the events the catch-up run gave up for good since the

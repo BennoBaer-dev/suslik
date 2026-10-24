@@ -102,6 +102,10 @@ T = {
         "für Personen aus &mdash; hier können keine Events "
         "ankommen",
     "kameras.karte.pill_keine_detektion": "keine Objekterkennung in Frigate",
+    "kameras.karte.prio": "Priorität",
+    "kameras.prio.low": "niedrig",
+    "kameras.prio.mid": "mittel",
+    "kameras.prio.high": "hoch",
     "kameras.leer.titel": "Keine Kameras in Frigate gefunden.",
     "kameras.leer.hinweis": "Prüfe, ob suslik die Frigate-API erreicht.",
     "kameras.fuss.knopf_speichern": "Kameras speichern",
@@ -436,7 +440,7 @@ T = {
     "konfiguration.neustart.frage": "Dienst jetzt neu starten? Die Verarbeitung pausiert ein paar Sekunden.",
     "antwort.neustart": "Neustart laeuft — diese Seite antwortet in wenigen Sekunden wieder.",
     "konfiguration.support.titel": "Fern-Support-Zugriff",
-    "konfiguration.support.satz": "Nur-Lese-Download benannter Bereiche (Logs, maskierte Config, Gesichter, Lernlaeufe, Koerpermaterial, Zustandsdateien) fuer den Inhaber des Support-Tokens. Der Ein/Aus-Schalter support_zugriff steht in der Tabelle unten, Standard aus. Jede Anfrage steht im Dienst-Log. Die Gesichts- und Koerperbereiche enthalten Bilder echter Personen — den Token mit Bedacht weitergeben. Ohne TLS vor diesem Dienst reist der Token im Klartext. Der Token erlaubt auch fuenf Aktionen: diesen Dienst aus der Ferne neu starten (POST /support/restart), Ereignisse erneut durch die Erkennung schicken (POST /support/einspielen), die Feinmessung ein- und ausschalten (POST /support/feinmessung), das Debug-Log ohne Neustart ein- und ausschalten (POST /support/debug) und kleine Dateioperationen im Dienst und in einem frischen Prozess messen (POST /support/dateiprobe).",
+    "konfiguration.support.satz": "Nur-Lese-Download benannter Bereiche (Logs, maskierte Config, Gesichter, Lernlaeufe, Koerpermaterial, Zustandsdateien, Fadenliste des Dienstes) fuer den Inhaber des Support-Tokens. Der Ein/Aus-Schalter support_zugriff steht in der Tabelle unten, Standard aus. Jede Anfrage steht im Dienst-Log. Die Gesichts- und Koerperbereiche enthalten Bilder echter Personen — den Token mit Bedacht weitergeben. Ohne TLS vor diesem Dienst reist der Token im Klartext. Der Token erlaubt auch sechs Aktionen: diesen Dienst aus der Ferne neu starten (POST /support/restart), Ereignisse erneut durch die Erkennung schicken (POST /support/einspielen), die Feinmessung ein- und ausschalten (POST /support/feinmessung), das Debug-Log ohne Neustart ein- und ausschalten (POST /support/debug), kleine Dateioperationen im Dienst und in einem frischen Prozess messen (POST /support/dateiprobe) und den Clip-Cache einmal leeren (POST /support/cache_leeren).",
     "konfiguration.support.token_gesetzt": "Ein Support-Token ist gesetzt.",
     "konfiguration.support.token_fehlt": "Noch kein Support-Token.",
     "konfiguration.support.knopf_token": "Neuen Token erzeugen",
@@ -2113,6 +2117,7 @@ T = {
         "gespeicherten Wächtern.",
     "unbekannte.name": "Unbekannt {nummer}",
     "unbekannte.meta_zeit": " Auftritte · {zeit}",
+    "unbekannte.zeit_unbekannt": "Zeit unbekannt",
     "unbekannte.mehr_bilder": "+{n} weitere Bilder in dieser Gruppe",
     "unbekannte.knopf_reaktivieren": "wieder aktivieren",
     "unbekannte.attr_name": "Name (neu oder bestehend)",
@@ -2214,6 +2219,8 @@ T = {
         "Weniger als die Hälfte der Bilder des Clips waren lesbar",
     "event.verwurf_grund.clip_fehlt":
         "Der Clip liegt nicht mehr in Frigate (Aufbewahrung abgelaufen oder Ereignis gelöscht)",
+    "event.verwurf_grund.cache_verloren":
+        "Der Clip fehlte zweimal im lokalen Cache, obwohl er bereitgestellt war — die Analyse lief nicht",
     "event.pass_zurueck": "&#8592; voriges",
     "event.pass_weiter": "nächstes &#8594;",
     "event.pass_teil": "Teil eines Durchgangs",
@@ -2273,13 +2280,8 @@ T = {
     "system.sync.titel": "Abgleich mit Frigate",
     "system.sync.knopf": "Frigate-Abgleich öffnen",
     "system.sync.satz":
-        "Die Abgleich-Seite vergleicht beide Seiten Person für Person und "
-        "sortiert jedes Referenzbild nach seinem Zustand, unterzieht jeden "
-        "Kandidaten derselben Vorprüfung wie Frigate, sendet nur, was du "
-        "anhakst, und importiert, was nur Frigate hat.",
-    "system.sync.fehlt":
-        "noch nicht verfügbar — braucht ein erreichbares Frigate und "
-        "mindestens ein Referenzgesicht",
+        "Öffne den Frigate-Abgleich, um beide Bibliotheken zu vergleichen und "
+        "Übertragungen zu prüfen. Diese Seite führt den Abgleich nicht aus.",
     "system.qc.titel": "Qualitätsbericht",
     "system.qc.stand": "(Stand {stand}, {tage} Tage)",
     "system.qc.kopf_gesicht": "mit Gesicht",
@@ -3289,6 +3291,8 @@ T = {
         "Einrichtung gespeichert — Dienst startet neu",
     "antwort.kameras_gespeichert":
         "{n} Kameras gespeichert — Dienst startet neu",
+    "antwort.prio_ungueltig":
+        "Kamera \"{kamera}\": ungültige Priorität \"{wert}\" (erlaubt: {erlaubt})",
     "antwort.name_ungueltig":
         "ungültiger Personenname (2–40 Buchstaben, Ziffern, "
         "Leerzeichen, -)",
@@ -3542,14 +3546,6 @@ Personen zwischendurch auffüllen.</p>""",
     "setupwiz.fertig.wieder_satz":
         "Du kannst diesen Assistenten jederzeit über <b>System → "
         "Einrichtungsassistent erneut ausführen</b> aufrufen.",
-    "system.sync.diagnose_satz":
-        'Meldet ein Abgleich ein Problem, <a href="/sync_diagnose" '
-        'target="_blank">öffne die Diagnose</a> — sie bündelt den '
-        "suslik-Bericht und das Frigate-Log, fertig zum Kopieren in ein "
-        "Issue.",
-    "system.sync.diagnose_kurz":
-        '<a href="/sync_diagnose" target="_blank">öffne die Diagnose</a> '
-        "— bündelt den suslik-Bericht und das Frigate-Log.",
     "vision.kopf.einleitung":
         "Ein dritter Erkennungsweg neben Gesicht und Körper: Ein "
         "Vision-Sprachmodell schaut auf ein Bild aus einem Durchgang und "
@@ -4014,6 +4010,8 @@ Personen zwischendurch auffüllen.</p>""",
     "systemstat.rueckstau.stand": "Eingereiht · in der Schlange · in Arbeit",
     "systemstat.rueckstau.stand_wert": "{gesamt} · {schlange} · {arbeit}",
     "systemstat.rueckstau.fenster": "Rückschau-Fenster",
+    "systemstat.rueckstau.stufe": "Rückstau {stufe}",
+    "systemstat.rueckstau.stufe_wert": "{n} · ältestes {alter} s",
     "systemstat.kachel.live": "Live-Engine",
     "systemstat.live.waechter": "Wächter aktiv",
     "systemstat.live.supervisor": "Supervisor",
@@ -4120,6 +4118,13 @@ Personen zwischendurch auffüllen.</p>""",
     "gpu.engpass.rechenzeit": 'Hier begrenzt die Rechenzeit, nicht der Speicher.',
     "gpu.noch_moeglich": 'Platz für {n} weitere Rechenstränge.',
     "gpu.passt_nicht": 'Das passt nicht. Nimm Wächter oder Rechenstränge zurück, sonst läuft das System in die Speichergrenze und der Kernel entscheidet, welcher Prozess stirbt.',
+    "gpu.plan.passt": "Passt: die Karte trägt die geplanten Rechenstränge.",
+    "gpu.plan.warten": "Der Worker wartet auf Grafikspeicher: etwas außerhalb dieses Dienstes belegt ihn, oder die Live-Engine startet gerade.",
+    "gpu.plan.minimal": "Die Erkennung läuft im Minimalmodus (1 Rechenstrang, 1 Geometrie): neben den Live-Wächtern trägt die Karte nicht mehr.",
+    "gpu.plan.reduziert": "Live-Wächter wurden abgeschaltet, damit die Erkennung weiterläuft; der Worker läuft im Minimalmodus (1 Rechenstrang, 1 Geometrie).",
+    "gpu.plan.aus": "Der Erkennungs-Worker ist nicht gestartet: die Karte trägt gerade keinen einzigen Rechenstrang.",
+    "gpu.plan.aus_messung": "Der Erkennungs-Worker ist nicht gestartet: der freie Speicher der Karte ließ sich nicht messen. Den Grund nennt das Log.",
+    "gpu.plan.unmessbar": "Grafikspeicher nicht messbar: der Worker läuft mit einem Rechenstrang und festem Deckel, ohne Prüfung des freien Speichers. Den Grund nennt das Log.",
     "gpu.regler.titel": 'Rechenstränge',
     "gpu.regler.erklaerung": 'Wie viele Ereignisse der Analyse-Worker gleichzeitig rechnen darf. Hintergrund-Arbeit — Ernte, Sammeln und alles, was du anklickst — läuft daneben auf einem eigenen Strang und nimmt keinem Ereignis mehr seinen Platz weg.',
     "gpu.regler.legacy": 'Der Legacy-Modus ohne Analyse-Worker (worker: false) ist eingeschaltet, und dort steuert diese Einstellung nichts: jedes Ereignis rechnet in einem eigenen Prozess, eines nach dem anderen.',

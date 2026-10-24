@@ -398,7 +398,9 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None, banner_aktion=None,
     # aktiv-Zustand kommt aus dem BLATT-Eintrag (kein Bereich).
     # aktiv (nicht a): BLATT bildet /kalibrierung bewusst auf None ab —
     # gegen den gemappten Wert verglichen leuchtete der Knopf nie.
-    kalk = (f'<a class="rmk kalk{" an" if aktiv == "/kalibrierung" else ""}" '
+    # Nur im Expert-Modus (User 21.10.2026): die Klasse nur-expert blendet ihn
+    # in Easy aus, die Seite bleibt per Adresse und ueber die Live-Seite erreichbar.
+    kalk = (f'<a class="rmk kalk nur-expert{" an" if aktiv == "/kalibrierung" else ""}" '
             f'href="/kalibrierung" '
             f'title="{html.escape(t("kalib.knopf_tip"))}">'
             f'{html.escape(t("kalib.knopf"))}</a>')

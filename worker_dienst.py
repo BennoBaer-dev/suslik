@@ -595,15 +595,15 @@ def argv_lesen(argv):
 def _clip_vod(job):
     """Der VOD-Schalter DIESES Jobs (E3.3, Bauplan 2f) -> True/False/None.
 
-    Die Auslegung ist die des Hauses und steht genau einmal da: `clip_vod is not
-    False` heisst „an, solange niemand ausdruecklich abschaltet" (verifyd.py:2171,
-    :4343, worker.py:665). FEHLT das Feld ganz — ein aelterer Aufrufer, eine Probe,
-    der Roundtrip —, wird hier NICHTS behauptet: `None` laesst `core.frames` seinen
-    Prozess-Default nehmen, statt ihm ein `True` unterzuschieben, das der Aufrufer
-    nie gesagt hat."""
+    Die Auslegung steht genau einmal da, in `core.frames.vod_an`: an nur bei `True`,
+    alles andere ist aus (Bauplan analysen/bauplan_vod_aus.md, Stufe VA1,
+    Werkseinstellung aus). FEHLT das Feld ganz — ein aelterer Aufrufer, eine Probe,
+    der Roundtrip —, wird hier NICHTS behauptet: `None` laesst `core.frames` seine
+    Modul-Vorgabe nehmen, die der Prozess aus der Umgebung des Dienstes erbt
+    (SUSLIK_CLIP_VOD, beim Dienststart aus der Config gesetzt)."""
     if "clip_vod" not in job:
         return None
-    return job.get("clip_vod") is not False
+    return clipcache.vod_an(job.get("clip_vod"))
 
 
 def felder_lesen(job):
@@ -626,6 +626,9 @@ def felder_lesen(job):
                                 core.personenzahl), hier roh uebernommen; event_lauf prueft sie, und
                                 fehlt sie oder ist sie unbrauchbar, gilt None (kein fruehes Ende,
                                 keine Obergrenze im Stapel)
+      ereignis_start {eid: zeit} Bauplan analysen/bauplan_unbekannt_zeit.md, Stufe UZ1: die Startzeit je
+                                Ereignis (verifyd aus start_time), hier roh uebernommen; event_lauf gibt sie an
+                                Bildvorrat.schreiben, fehlt sie, tragen die Saetze keine Zeit
 
     UNBEKANNTE SCHLUESSEL fallen wie bei `argv_lesen` nicht still, sondern werden
     gesammelt und mit dem Job beantwortet — ein Dienst, der eine Vorgabe des
@@ -657,6 +660,7 @@ def felder_lesen(job):
     except (TypeError, ValueError):
         deckel = 0
     pzj = job.get("personenzahl")
+    esj = job.get("ereignis_start")
     return {"eids": list(job.get("eids") or []),
             "labels": list(job.get("labels") or []),
             "persons": list(job.get("persons") or []),
@@ -667,6 +671,8 @@ def felder_lesen(job):
                       "kamera": str(kal.get("kamera") or "")},
             # roh je Ereignis; gueltig macht sie erst event_lauf (core.personenzahl.gueltig)
             "personenzahl": {str(k): v for k, v in (pzj.items() if isinstance(pzj, dict) else ())},
+            # UZ1: roh je Ereignis wie die Personenzahl; event_lauf nimmt nur eine Zahl
+            "ereignis_start": {str(k): v for k, v in (esj.items() if isinstance(esj, dict) else ())},
             "unbekannt": unbekannt}
 
 
@@ -748,7 +754,9 @@ def referenzen_laden(cfg, kennung, log, rechenwerk=None):
     ueber „fremd" (`fremd_urteilen`), vorher steht in der Bindung `fremd: None` (W4).
     Gelesen werden nur Katalog, quelle.json und fingerabdruck.npy, nie ein
     Bild; es wird nichts gerechnet und nichts auf Platte geschrieben (keine Matrizen-Datei mehr,
-    Entscheid 10). Damit sind die alten Fehlerklassen dieser Stelle weg: kein Lauf schreibt eine
+    Entscheid 10), ausser der Zeile im Journal der Nutzung, wenn sich die Menge der Matrix fuer diesen
+    Leser geaendert hat (read_matrix, Bauplan analysen/bauplan_katalog_lebenszyklus.md Stufe LK1).
+    Damit sind die alten Fehlerklassen dieser Stelle weg: kein Lauf schreibt eine
     Teilmenge zurueck (Prod-Fund 21.08.), kein Fingerabdruck wird aus einer kleinen Datei neu
     gerechnet (28 von 40 ohne Gesicht, core/refbeiwert.py), keiner auf einem anderen Rechenwerk
     (E2-Blocker CPU gegen GPU). Der Fingerabdruck eines Satzes ist der Wert seines Rechenwerks.
@@ -2296,24 +2304,20 @@ class Dienst:
         # zusaetzlich vom Geometrie-Bau eines ANDEREN Strangs getrennt — das ist
         # die Ueberlappung, an der die Karte am 15.09. ueberlief.
         #
-        # MS1: auch Satzanlage und Framepuffer liegen im CUDA-Staffelriegel.
-        if self.auf_karte():
-            self._cuda_satz(g, lauf, W, H)
-            return g
-        satz = g.satz()
-        if not getattr(satz, "_dienst_warm", False):
-            with self._staffel(lauf, f"warm-up {W}x{H}"):
-                with self._warm_schloss:
-                    if not getattr(satz, "_dienst_warm", False):
-                        with self._kompilat_buchen(lauf, f"warm-up {W}x{H}"):
-                            satz.warm()
-                            self.kompilat_pruefen(g, satz, lauf)
-                        satz._dienst_warm = True
+        # HA1 (Bauplan cuda_harmonie): Satzanlage, Framepuffer und Warm-up liegen
+        # auf JEDEM Backend im Staffelriegel und in der Bau-Buchung (seit MS1 nur CUDA).
+        self._satz_anlegen(g, lauf, W, H)
         return g
 
-    def _cuda_satz(self, g, lauf, width, height):
-        """Baut Satz und Warm-up gemeinsam unter dem vorhandenen CUDA-Staffelriegel.
-        -> None; ein warmer Cachetreffer allokiert und misst nichts zusätzlich."""
+    def _satz_anlegen(self, g, lauf, width, height):
+        """Baut Satz und Warm-up dieses Strangs auf jedem Backend unter dem Staffelriegel.
+        -> None; ein warmer Satz am Faden nimmt weder Riegel noch Warm-Schloss und bucht nichts.
+
+        SCHLOSSFOLGE, fest (Bauplan HA1, Punkt 3): `_staffel` (Bauriegel) -> `_warm_schloss`
+        -> `_kompilat_buchen` -> `_geo_schloss` nur um `g.satz()`. `_kompilat_buchen` steht
+        nie innerhalb eines gehaltenen `_geo_schloss`, seine Diagnose nimmt es selbst
+        (`_gpu_diagnose`). CUDA-eigen bleiben nur der Merker der ersten Analyse und der
+        Abbruch bei abgelaufener Schlossfrist (in `_staffel`)."""
         local = getattr(g, "_lokal", None)
         satz = getattr(local, "satz", None)
         if satz is not None and getattr(satz, "_dienst_warm", False):
@@ -2327,7 +2331,8 @@ class Dienst:
                         satz.warm()
                         self.kompilat_pruefen(g, satz, lauf)
                         satz._dienst_warm = True
-                        lauf._cuda_first_analysis = True
+                        if self.auf_karte():
+                            lauf._cuda_first_analysis = True
 
     def _cuda_nachmessen(self):
         """Misst natives Frei, Worker-PID und vorhandene Decoder desselben Prozessverbands.
@@ -2363,6 +2368,19 @@ class Dienst:
         """Prüft genau den nächsten Aufbau einschließlich späterer Decoder und Analysespitzen.
         -> None; bei Mangel bestehender Retry-/Neustartweg über MaterializationError."""
         snap = self._cuda_nachmessen()
+        if snap["native_reason"] and getattr(getattr(self, "a", None), "card_unmeasurable", 0):
+            # Bauplan Kartengroesse KG1 Punkt 5 (Eigentuemer 22.10.2026 15:34:14): der Dienst hat diesen
+            # Prozess im Rueckfall bei ganz unmessbarer Karte gestartet (`--card-unmeasurable`),
+            # und die Kartensonde selbst liefert weiter keinen Wert (nicht nur die PID-Messung).
+            # Wie bis 0.1.1.025 wird gebaut statt abgewiesen; die Grenze ist allein der feste
+            # Arena-Deckel. Eine gemessene Null hat keinen Grund und laeuft unten in die Absage.
+            if not getattr(self, "_card_fallback_warned", False):
+                self._card_fallback_warned = True
+                _log.warning(f"{what}: card memory not measurable ({snap['native_reason']}) — "
+                             f"building within the fixed arena cap of "
+                             f"{getattr(self, 'vram_deckel_mb', 0)} MiB instead of refusing; "
+                             f"out-of-memory is possible")
+            return
         with self._geo_schloss:
             forms = sorted((w,h,int(getattr(obj,"saetze",0) or 0))
                            for (w,h),obj in self.graphen.items())
@@ -3779,7 +3797,11 @@ class Dienst:
                     verwurf = None
                 if isinstance(e, _cuda_budget.MaterializationError):
                     memory_denied = str(e)
-                art = ("karte_voll" if isinstance(e, _cuda_budget.MaterializationError)
+                # Bauplan Disponent D3b Punkt 8: `cache_fehlt` (der Live-Auftrag fand seinen Clip nicht im Cache)
+                # erkennt verwurf_grund vor allen anderen Klassen; es geht strukturiert als `verwurf_grund` zurueck und
+                # ist nie ein Speicherdruck.
+                art = (None if verwurf == clipcache.CACHE_MISSING
+                       else "karte_voll" if isinstance(e, _cuda_budget.MaterializationError)
                        else self.vram_druck_art(f"{type(e).__name__}: {e}"))
                 if art:
                     # .544 M3a: EINE VOLLE KARTE IST NOCH KEIN VERLORENES
@@ -3900,6 +3922,8 @@ class Dienst:
             antwort["zeiten"] = {"abruf_s": lauf.abruf_s,
                                  "abruf_bytes": lauf.abruf_bytes,
                                  "abruf_quelle": lauf.abruf_quelle,
+                                 # Bauplan VOD2: VOD scheiterte, clip.mp4 lieferte (None = kein Rueckfall)
+                                 "rueckfall_grund": getattr(lauf, "rueckfall_grund", None),
                                  "erstes_bild_s": lauf.erstes_bild_s,
                                  "decoder": lauf.decoder,
                                  "kompilat_s": round(lauf.kompilat_s, 2) or None,
@@ -4430,17 +4454,28 @@ class Dienst:
         alle = sorted(set(personen))
         bilanz = collections.Counter()
         frames_info = {}
-        for k, eid in enumerate(opt["eids"]):
-            label = (opt["labels"][k] if k < len(opt["labels"])
-                     else os.path.basename(eid).split(".")[0])
-            if label in done:
-                lauf.log.zeile(f"\n=== {label} — bereits in results.jsonl, übersprungen ===")
-                continue
-            info = self.event_lauf(lauf, opt, job, eid, label, lat, g_aus, pose_aus,
-                                   profil, personen, alle, outdir, results_pfad)
-            for kk, vv in info.get("bilanz", {}).items():
-                bilanz[kk] += vv
-            frames_info = info.get("frames", frames_info)
+        # Bauplan analysen/bauplan_katalog_lebenszyklus.md, Stufe LK1 (Punkte 2 und 3): die tatsaechlichen Vergleiche
+        # gegen die Matrix je Ereignis, im Speicher gesammelt und am Ende des Auftrags EINMAL ins Journal der Nutzung
+        # (refquelle.usage_comparisons, eine Zeile je Matrix-Stand), auch wenn ein Ereignis scheitert
+        vergleiche = []
+        try:
+            for k, eid in enumerate(opt["eids"]):
+                label = (opt["labels"][k] if k < len(opt["labels"])
+                         else os.path.basename(eid).split(".")[0])
+                if label in done:
+                    lauf.log.zeile(f"\n=== {label} — bereits in results.jsonl, übersprungen ===")
+                    continue
+                info = self.event_lauf(lauf, opt, job, eid, label, lat, g_aus, pose_aus,
+                                       profil, personen, alle, outdir, results_pfad)
+                for kk, vv in info.get("bilanz", {}).items():
+                    bilanz[kk] += vv
+                frames_info = info.get("frames", frames_info)
+                if info.get("vergleich"):
+                    vergleiche.append(info["vergleich"])
+        finally:
+            if vergleiche and self._ref_cfg is not None:
+                from core import refquelle                  # noqa: PLC0415
+                refquelle.usage_comparisons(self._ref_cfg, vergleiche)
         aus = {"frames": frames_info, "bilder": dict(bilanz)}
         if self.null_serie:
             # LAUF-WACHE, Rohsignal (Konzept §4 Schicht 3): „N Ereignisse in Folge
@@ -4483,20 +4518,10 @@ class Dienst:
         fest = opt["argv_fest"]
         pin = None
         _t_abruf = time.monotonic()
-        # .534 (Abnahme-Befund 15.09.): WOHER der Clip kam, wird VOR dem Abruf
-        # festgestellt — danach liegt er in beiden Faellen im Cache, und die
-        # Zeile „abruf 0.0 s" saehe fuer einen frischen Frigate-Zug genauso aus
-        # wie fuer einen Treffer. Genau diese Unterscheidung wollte der Inhaber
-        # sehen.
-        _cache_vorher = False
-        if not os.path.exists(eid):
-            try:
-                _cache_vorher = os.path.exists(clipcache.cache_pfad(eid))
-            except Exception:                              # noqa: BLE001
-                _cache_vorher = False
         if os.path.exists(eid):                            # lokaler Videopfad (analyze.py:510)
             vid = eid
             lauf.abruf_quelle = "datei"
+            lauf.rueckfall_grund = None                    # Bauplan VOD2: kein Abruf, kein Rueckfall
         else:
             # W2-B2: alles als ARGUMENT, nichts ueber Modulglobals — inklusive der
             # Debug-Senke, die als einzige bisher nur prozessweit ging.
@@ -4517,14 +4542,23 @@ class Dienst:
                 # (er entscheidet, ob Frigates kranker Erzeugungspfad betreten wird).
                 # Deshalb als Argument, dasselbe Muster wie `dbg=` in E2 (W2-B2).
                 vod=_clip_vod(job),
-                dbg=((lambda z: lauf.log.zeile(z)) if job.get("clip_dbg") else None))
+                dbg=((lambda z: lauf.log.zeile(z)) if job.get("clip_dbg") else None),
+                # Bauplan analysen/bauplan_disponent.md, Stufe D3b Punkt 8: die Kennung „nur Cache" der Live-Auftraege
+                # (Job-Feld des Dienstes); dann liest der Strang nur den Clip, den der Disponent bereitgestellt hat.
+                cache_only=bool(job.get("clip_cache_only")))
             pin = eid
             # .534 (B5): WAS DER ABRUF GEKOSTET HAT. Ein Cache-Treffer misst hier
             # nahe null — und genau das ist die Auskunft, um die es geht: wie oft
             # der Platz wirklich auf Frigate wartet. Die Bytes stehen daneben,
             # weil eine Sekunde fuer 4 MB etwas anderes heisst als fuer 75.
             lauf.abruf_s = round(time.monotonic() - _t_abruf, 2)
-            lauf.abruf_quelle = "cache" if _cache_vorher else "frigate"
+            # .534 (Abnahme-Befund 15.09.): WOHER der Clip kam — nach dem Abruf liegt er in jedem Fall im
+            # Cache, und die Zeile „abruf 0.0 s" saehe fuer einen frischen Frigate-Zug genauso aus wie fuer
+            # einen Treffer. Bauplan VOD2 Punkt 4: die Antwort gibt der Abrufstand dieses Fadens (vod,
+            # clip.mp4, cache, einspiel), dazu der Grund, wenn VOD scheiterte und clip.mp4 lieferte.
+            _stand = clipcache.abrufstand()
+            lauf.abruf_quelle = _stand.get("weg") or None
+            lauf.rueckfall_grund = _stand.get("rueckfall_grund")
             try:
                 lauf.abruf_bytes = int(os.path.getsize(vid))
             except OSError:
@@ -4585,6 +4619,10 @@ class Dienst:
             pz = _personenzahl.gueltig((opt.get("personenzahl") or {}).get(str(eid)))[0]
             # Bauplan Vorlauf-Diagnose D1, Stempel 6: Dekodieren und Modelle ueber beide Laeufe eines Neulaufs
             _d1 = {"dekodieren_s": 0.0, "modelle_s": 0.0, "bilder_s": 0.0}
+            # LK1 (Bauplan analysen/bauplan_katalog_lebenszyklus.md, Nachbesserung Codex-Befund 3): die Gesichter, die
+            # der Kern im letzten Lauf gegen die Matrix gerechnet hat (worker_kern.VERGLICHEN), auch die, denen das
+            # Norm-Sieb den Erkennungswert danach nahm; der letzte Lauf ist der, dessen Zeilen gelten
+            _lk1 = {"verglichen": 0}
 
             def rechnen(tor):
                 # je Lauf ein frischer Vorrat: im Stoerstellen-Neulauf verfaellt der Erstversuch
@@ -4597,6 +4635,7 @@ class Dienst:
                 _d1["dekodieren_s"] += tor._wache.dekodieren_s
                 _d1["modelle_s"] += sum(v for k, v in zeiten.items() if k != "bilder")
                 _d1["bilder_s"] += zeiten.get("bilder", 0.0)
+                _lk1["verglichen"] = zaehler[wk.VERGLICHEN]
                 return vorrat, zeilen, ende
 
             wache, (vorrat, zeilen, ende), neulauf = self.rechnen_mit_neulauf(vid, schritt, rechnen)
@@ -4689,9 +4728,16 @@ class Dienst:
         # ohne Job-Feld ist der Weg ohnehin gesperrt (worker_kern._satz_weg), dann wird sie nicht geholt.
         from core import harvest_set as _harvest_set        # noqa: PLC0415
         set_feed = job.get(_harvest_set.FEED_FIELD)
+        # Bauplan analysen/bauplan_unbekannt_zeit.md, Stufe UZ1: die Startzeit dieses Ereignisses (Job-Feld
+        # ereignis_start) geht in jeden Satz; fehlt sie, bleibt sie leer (kein Ersatzwert), keine Zahl: laut leer
+        _start = (opt.get("ereignis_start") or {}).get(str(eid))
+        if _start is not None and (isinstance(_start, bool) or not isinstance(_start, (int, float))):
+            lauf.log.zeile(f"WARN: event start time {_start!r} is not a number — the sets of this event carry "
+                           f"no time", stufe=_logbuch.WARNING)
+            _start = None
         bilanz = vorrat.schreiben(outdir, label, eid, persons_voll, personen, set_feed=set_feed,
                                   kennung=self.ref_kennung(lauf) if isinstance(set_feed, dict) else None,
-                                  datei=os.path.exists(eid))
+                                  datei=os.path.exists(eid), ereignis_start=_start)
         for person in personen:
             rec = persons_voll.get(person)
             if not rec:
@@ -4740,7 +4786,14 @@ class Dienst:
             self.zaehler["null_gesichter"] += 1
         else:
             self.null_serie = 0
-        return {"bilanz": bilanz,
+        # LK1 (Bauplan analysen/bauplan_katalog_lebenszyklus.md): ein tatsaechlicher Vergleich heisst, mindestens ein
+        # Gesicht wurde gegen jede Zeile der Matrix dieses Abzugs gerechnet (scores_rechnen lief, auch wenn das
+        # Norm-Sieb den Score danach wieder nahm); nur dann eine Angabe, und nur fuer einen Abzug mit Lesestand und
+        # Zeilenzahl (referenzen_laden setzt beide immer). Der Lesestand ist der des Abzugs dieses Ereignisses.
+        vergleich = ({"stand": erk["stand"], "zeilen": erk["zeilen"], "gesichter": _lk1["verglichen"],
+                      "ts": time.time(), "ereigniszeit": _start}
+                     if _lk1["verglichen"] and "stand" in erk and "zeilen" in erk else None)
+        return {"bilanz": bilanz, "vergleich": vergleich,
                 "frames": {"gelesen": wache.gelesen, "soll": wache.soll,
                            "samples": wache.samples, "kette": wache.kette,
                            "decoder_fehler": wache.decoder_fehler,
@@ -4965,6 +5018,11 @@ def argumente():
                          "(Begruendung und Messung im Kopf von engine_cuda). "
                          "Wirkt nur auf CUDA; der Intel-Zweig liest den Wert "
                          "nicht.")
+    ap.add_argument("--card-unmeasurable", type=int, default=0, choices=(0, 1),
+                    help="1 = der Dienst startet diesen Prozess im Rueckfall bei ganz "
+                         "unmessbarer Karte (Bauplan Kartengroesse KG1): ein Strang, fester "
+                         "Arena-Deckel; die Speicherwache baut dann ohne Kartenmessung, statt "
+                         "abzuweisen, und meldet das einmal als WARNING.")
     # Bauplan GPU-Wartefrist, Stufe 1 Punkt 2: der Weg des Config-Werts `inferenz_frist_s`
     # in die Engine. Bewusst OHNE Vorgabe hier: die Zahl steht einmal, als Werkswert in
     # verifyd.load_config; fehlt das Argument, startet die OpenVINO-Engine laut nicht.

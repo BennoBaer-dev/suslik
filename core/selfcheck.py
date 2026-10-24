@@ -59,14 +59,19 @@ def dateisystem_typ(pfad, mounts="/proc/mounts"):
     return treffer
 
 
+def startup_path(data_dir):
+    """Der Pfad der Startdatei state/startup.json, an dieser einen Stelle (schreiben und add_fail).
+    -> Pfad"""
+    return os.path.join(data_dir, "state", "startup.json")
+
+
 def schreiben(data_dir, version, records):
     """records = Liste {schritt, name, mark, detail}. -> (pfad, fails)."""
     fails = sum(1 for r in records if str(r.get("mark", "")).strip().upper() == "FAIL")
     d = {"ts": round(time.time(), 1), "version": version,
          "fails": fails, "records": records}
-    sd = os.path.join(data_dir, "state")
-    os.makedirs(sd, exist_ok=True)
-    pfad = os.path.join(sd, "startup.json")
+    pfad = startup_path(data_dir)
+    os.makedirs(os.path.dirname(pfad), exist_ok=True)
     tmp = pfad + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(d, f, ensure_ascii=False)
@@ -74,3 +79,13 @@ def schreiben(data_dir, version, records):
         os.fsync(f.fileno())
     os.replace(tmp, pfad)
     return pfad, fails
+
+
+def add_fail(data_dir, name, detail):
+    """Einen FAIL-Eintrag an state/startup.json anhaengen und ueber `schreiben` neu zaehlen (Bauplan
+    analysen/bauplan_perf_katalog.md, Stufe PK2: ein gescheitertes Vorwaermen zaehlt wie ein gescheiterter Startschritt).
+    -> (pfad, fails); ist die Datei nicht lesbar oder nicht schreibbar, geht der Fehler an den Aufrufer"""
+    with open(startup_path(data_dir), encoding="utf-8") as f:
+        d = json.load(f)
+    records = list(d["records"]) + [{"schritt": None, "name": name, "mark": "FAIL", "detail": detail}]
+    return schreiben(data_dir, d.get("version"), records)

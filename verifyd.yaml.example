@@ -7,9 +7,9 @@ frigate_url: ${FRIGATE_URL}
 
 # Trigger: "mqtt" (event push from the broker) or "poll" (Frigate API, fallback without credentials)
 trigger: mqtt
-poll_interval: 20        # seconds between API polls (poll mode only)
+poll_interval: 10        # seconds between API polls (poll mode only)
 lookback_h: 2            # how far back to look for unprocessed events (poll mode only)
-clip_delay: 15           # seconds to wait after event end (let the recording finalize)
+clip_delay: 5            # seconds to wait after event end (let the recording finalize)
 
 mqtt:                    # credentials live in .env
   host: mqtt.example.lan  # your MQTT broker (IP or hostname; often the same host as Frigate)

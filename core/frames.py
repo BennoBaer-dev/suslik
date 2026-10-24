@@ -91,6 +91,53 @@ PIN_ABGESTANDEN_S = 1800     # v2 §3.1: aelter = Waise (aufgegebener Thread/
 #                              Prozess) — zaehlt nicht mehr und wird geraeumt
 
 
+# Bauplan analysen/bauplan_disponent.md, Stufe D3b Punkt 5: der BENANNTE Halter. Ein Fadenpin traegt Prozess- und
+# Fadennummer und gehoert damit dem Faden, der den Clip gerade liest; der Disponent haelt einen Clip aber ueber viele
+# Faeden und Takte hinweg, bis sein Ereignis abgeschlossen ist. Sein Halter heisst deshalb `<clip>.<name>.pin`, ohne
+# Prozess- und Fadennummer. gepinnt() und MarkenSicht sehen ihn ueber dasselbe Muster `<clip>.*.pin`; er veraltet wie
+# jeder Pin nach PIN_ABGESTANDEN_S, deshalb erneuert sein Halter die Aenderungszeit ausdruecklich (pin() oeffnet nur
+# zum Anhaengen und laesst sie stehen).
+def named_pin_path(eid, name, data_dir=None):
+    """The path of the named holder `name` for the clip of eid (no process or thread number in it).
+    -> path"""
+    return f"{cache_pfad(eid, data_dir)}.{name}.pin"
+
+
+def pin_named(eid, name, data_dir=None):
+    """Sets the named holder for the clip of eid and renews its modification time (idempotent).
+    -> path of the holder"""
+    p = named_pin_path(eid, name, data_dir)
+    open(p, "a").close()
+    os.utime(p, None)
+    return p
+
+
+def refresh_named(eid, name, data_dir=None):
+    """Renews the modification time of an existing named holder, so the age check does not count it as stale.
+    -> True when the holder exists, False otherwise"""
+    try:
+        os.utime(named_pin_path(eid, name, data_dir), None)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def free_named(eid, name, data_dir=None):
+    """Removes the named holder for the clip of eid; other holders stay untouched.
+    -> None"""
+    try:
+        os.remove(named_pin_path(eid, name, data_dir))
+    except FileNotFoundError:
+        pass
+
+
+def named_pins(name, data_dir=None):
+    """All named holders `name` in the clip cache (for the takeover after a restart).
+    -> list of paths"""
+    import glob
+    return glob.glob(os.path.join(cache_dir(data_dir), f"*.{name}.pin"))
+
+
 def gepinnt(pfad):
     """Auskunft fuer cleanup_cache: haelt IRGENDWER diese Clip-Datei?
     (Glob ueber <pfad>.*.pin.) Abgestandene Pins (> PIN_ABGESTANDEN_S)
@@ -272,14 +319,31 @@ CLIP_ERZEUGUNG = bool(os.environ.get("SUSLIK_CLIP_ERZEUGUNG"))
 CLIP_ERZEUGUNG_DECKEL_S = (
     float(os.environ["SUSLIK_CLIP_ERZEUGUNG_DECKEL_S"])
     if os.environ.get("SUSLIK_CLIP_ERZEUGUNG_DECKEL_S") else None)
-# .292 VOD-Weg-Default (Config-Key clip_vod, Muster wie CLIP_ERZEUGUNG):
-# True = Alt-Event-Clips zuerst ueber Frigates /vod/event/{id}/master.m3u8
-# beschaffen (nginx-vod liefert die Segmente direkt, der bewiesen kranke
-# Python-Erzeugungspfad in Frigate — ungelesene ffmpeg-stderr-Pipe, je Zug
-# +1 Thread/+1 ffmpeg-Leiche, Discussion frigate#24029 — wird gar nicht
-# betreten). Das Zusammenfuegen macht das LOKALE ffmpeg als reines
-# Stream-Copy (bitgleiche Pakete, Pixelpfad-Invariante unberuehrt).
-CLIP_VOD = os.environ.get("SUSLIK_CLIP_VOD", "1") != "0"
+# .292 VOD-Weg (Config-Key clip_vod, Muster wie CLIP_ERZEUGUNG): an = jeden
+# Clip zuerst ueber Frigates /vod/event/{id}/master.m3u8 beschaffen (nginx-vod
+# liefert die Segmente, Frigates Erzeugungspfad fuer clip.mp4 mit der
+# ungelesenen ffmpeg-stderr-Pipe, frigate#24029, wird nicht betreten). Das
+# Zusammenfuegen macht das LOKALE ffmpeg als reines Stream-Copy (bitgleiche
+# Pakete, Pixelpfad-Invariante unberuehrt).
+# Bauplan analysen/bauplan_vod_aus.md, Stufe VA1: an oder aus, Werkseinstellung
+# AUS. Auf Frigate 0.17.1 bis 0.18 baut VOD bei Ereignissen unter einer Stunde
+# die Zuordnung je Anfrage neu und bremst Abruf und API (frigate#24029); im
+# Feld war der Abruf ueber VOD langsamer als ueber clip.mp4. Modul-Vorgabe
+# dieses Prozesses: nur SUSLIK_CLIP_VOD="1" schaltet ein. Der Dienst setzt den
+# Wert beim Start aus der Config in seine Umgebung, jeder Kindprozess erbt ihn.
+# Config- und Job-Werte legt jeder Leser ueber vod_an aus.
+CLIP_VOD = os.environ.get("SUSLIK_CLIP_VOD") == "1"
+# Bauplan analysen/bauplan_disponent.md, Stufe D3b Punkt 8: die Kennung „nur Cache" des Legacy-Unterprozesses (der
+# Dienst setzt SUSLIK_CLIP_CACHE_ONLY bei jedem Live-Auftrag ausdruecklich auf "1" oder "0"); analyze.py reicht sie
+# an clip_holen weiter. Der Worker bekommt sie als Job-Feld, nie ueber dieses Global.
+CLIP_CACHE_ONLY = os.environ.get("SUSLIK_CLIP_CACHE_ONLY") == "1"
+
+
+def vod_an(wert):
+    """Die EINE Auslegung des Schalters clip_vod: an nur bei True, alles andere (fehlt, None, False, Text) ist aus.
+    -> bool"""
+    return wert is True
+
 # .509 CLIP-DOWNLOAD-TOR (Feldbefund 06.09.2026, s. Abschnitt „Das Tor" unten):
 # wie viele Clips DIESER Prozess gleichzeitig von Frigate ziehen darf, wenn der
 # Aufrufer nichts anderes sagt. 0/None = kein Tor (Melde-Weg, Einspielung und
@@ -313,6 +377,23 @@ CLIP_TOR_DECKEL_S = (float(os.environ["SUSLIK_CLIP_TOR_DECKEL_S"])
 # DIESES Jobs. Ohne `dbg=` aendert sich nichts: worker.py, der Legacy-Subprozess
 # und die ENV-Wege armieren weiter das Modul-Global.
 _TL = threading.local()
+
+# Bauplan analysen/bauplan_vod_und_vorrat.md, Stufe VOD2 (offene Liste O717): DER ABRUFSTAND. Jeder echte Abruf
+# in clip_holen legt in DIESEM Faden einen frischen Stand an (`_TL.abruf`, Felder wie `_ABRUF_LEER`): `weg` ist
+# cache, vod, clip.mp4 oder einspiel (leer, wenn der Abruf scheiterte), `vod_versucht`, `rueckfall_grund` (nur
+# wenn VOD scheiterte und clip.mp4 den Clip danach lieferte; die Grundklasse aus _vod_holen) und `zeit` (Beginn
+# des Abrufs). Die Verbraucher (Analyseplatz im Worker, Vorrat im Dienst) lesen ihn ueber `abrufstand()` im
+# selben Faden direkt nach dem Abruf. Daneben die Drosselung der Rueckfall-ERROR: je Prozess und Grundklasse
+# schreibt nur der erste Rueckfall eine Zeile, jeder wird gezaehlt (Schluessel ohne Ereignis und Fehlertext).
+_ABRUF_LEER = {"weg": "", "vod_versucht": False, "rueckfall_grund": None, "zeit": None}
+_VOD_RUECKFALL_SCHLOSS = threading.Lock()
+_VOD_RUECKFAELLE = {}                    # Grundklasse -> Zahl der Rueckfaelle in diesem Prozess
+
+
+def abrufstand():
+    """Der Abrufstand des letzten clip_holen-Aufrufs in DIESEM Faden (Bauplan VOD2, Block oben).
+    -> dict (Kopie) mit weg, vod_versucht, rueckfall_grund, zeit; vor dem ersten Abruf des Fadens leer."""
+    return dict(getattr(_TL, "abruf", None) or _ABRUF_LEER)
 
 
 def clip_dbg(msg):
@@ -374,8 +455,16 @@ def verwurf_grund(ausnahme):
 
     Alles andere (Timeout mitten im Strom, Decode-Fehler, OOM-Abbruch der
     RSS-Wache) ist NICHT „Clip fehlt" und bekommt hier bewusst kein Urteil —
-    der Aufrufer traegt dann den allgemeinen Grund ein."""
+    der Aufrufer traegt dann den allgemeinen Grund ein.
+
+    Bauplan analysen/bauplan_disponent.md, Stufe D3b Punkt 8: VOR allen anderen
+    steht `ClipCacheMissing` (ein Live-Auftrag mit der Kennung „nur Cache" fand
+    seinen Clip nicht im lokalen Cache). Die Antwort ist dann CACHE_MISSING —
+    kein Buchungsgrund der Akte, sondern das Signal an den Dienst, das Ereignis
+    dem Disponenten zurueckzugeben (`Service.process`)."""
     from core import registry as _reg_vg
+    if isinstance(ausnahme, ClipCacheMissing):
+        return CACHE_MISSING
     if isinstance(ausnahme, ClipErzeugungAbbruch):
         # .509: der TOR-Deckel ist kein „Frigate hat den Clip nicht" — er ist
         # unsere eigene Bremse. Das Ereignis bleibt ungebucht und wird geholt;
@@ -428,6 +517,22 @@ class ClipErzeugungAbbruch(RuntimeError):
     def __init__(self, klasse, msg):
         super().__init__(f"{klasse}: {msg}")
         self.klasse = klasse
+
+
+# Bauplan analysen/bauplan_disponent.md, Stufe D3b Punkt 8: die Klasse des Abbruchs „nur Cache, Datei fehlt". Wie bei
+# ClipErzeugungAbbruch steht sie vorne im Text, weil der Legacy-Unterprozess (analyze.py) nur seinen Text hinterlaesst.
+CACHE_MISSING = "cache_fehlt"
+
+
+class ClipCacheMissing(RuntimeError):
+    """A live job with the flag "cache only" found no local clip (class CACHE_MISSING, at the front of the text).
+    Deliberately not a FileNotFoundError: a missing template of an injected event stays the ordinary class."""
+
+    def __init__(self, msg):
+        """Builds the exception with the class at the front of its text.
+        -> None"""
+        super().__init__(f"{CACHE_MISSING}: {msg}")
+        self.klasse = CACHE_MISSING
 
 
 class ErzeugungsWarte:
@@ -494,26 +599,40 @@ def _ist_stall(e):
 def _vod_holen(eid, teil, basis, deckel_s):
     """Alt-Event-Clip ueber Frigates VOD-Weg beschaffen (.292, Machbarkeit
     bewiesen in prototyp/frigate_vod_probe.py am ungefixten 0.18.0-beta3):
-    /vod/event/{id}/master.m3u8 beantwortet das nginx-vod-Modul direkt aus
-    den Segment-Dateien — Frigates kranker Python-Erzeugungspfad (frigate
-    #24029) wird nicht betreten, serverseitig entsteht weder ffmpeg noch
-    Pool-Thread. Das LOKALE ffmpeg fuegt per Stream-Copy zusammen (-c copy
+    /vod/event/{id}/master.m3u8 beantwortet das nginx-vod-Modul aus den
+    Segment-Dateien — Frigates Erzeugungspfad fuer clip.mp4 (frigate#24029)
+    wird nicht betreten. Ganz ohne Frigates Python-Teil laeuft der Weg aber
+    nicht: jede VOD-Anfrage loest dort einen /auth-Aufruf aus, und bei
+    Ereignissen unter einer Stunde baut Frigate 0.17.1 bis 0.18 je Anfrage die
+    Zuordnung mit ffprobe neu (analysen/vod_langsamer_recherche_20261020.md,
+    Maintainer 21.10.2026). Das LOKALE ffmpeg fuegt per Stream-Copy zusammen (-c copy
     = bitgleiche Pakete). stderr geht bewusst nach DEVNULL — die Warnflut
     der Audio-degenerierten Segmente ist genau das, was drueben die
     ungelesene Pipe fuellte; wir bauen dieselbe Falle nicht nach. Ein
     Fehlschlag (aelteres Frigate ohne vod/event -> 404-Probe, ffmpeg-Fehler,
     Deckel) ist LAUT und liefert False — der Aufrufer faellt auf den
-    gehaerteten clip.mp4-Weg zurueck."""
+    gehaerteten clip.mp4-Weg zurueck.
+    Bauplan VOD2: jeder Fehlschlag legt seine feste Grundklasse in den Abrufstand dieses Fadens
+    (`rueckfall_grund`, Block bei `_TL`); ob es ein Rueckfall wird, entscheidet clip_holen danach."""
+    def _grund(klasse):
+        st = getattr(_TL, "abruf", None)
+        if st is not None:
+            st["rueckfall_grund"] = klasse
+        return False
     url = f"{basis}/vod/event/{eid}/master.m3u8"
     try:
         with _fauth.oeffnen(url, timeout=10) as r:        # 5e
             if r.status != 200:
                 clip_dbg(f"{eid}: vod probe HTTP {r.status} — falling back")
-                return False
+                return _grund(f"vod probe http {r.status}")
+    except urllib.error.HTTPError as e:
+        clip_dbg(f"{eid}: vod probe failed ({type(e).__name__}: "
+                 f"{str(e)[:80]}) — falling back")
+        return _grund(f"vod probe http {e.code}")
     except Exception as e:
         clip_dbg(f"{eid}: vod probe failed ({type(e).__name__}: "
                  f"{str(e)[:80]}) — falling back")
-        return False
+        return _grund(f"vod probe error {type(e).__name__}")
     t0 = time.monotonic()
     try:
         # 5e: den m3u8-Zug macht das LOKALE ffmpeg selbst — es ist der EINE
@@ -533,19 +652,27 @@ def _vod_holen(eid, teil, basis, deckel_s):
             timeout=deckel_s)
     except subprocess.TimeoutExpired:
         clip_dbg(f"{eid}: vod remux hit cap ({deckel_s:.0f}s) — falling back")
-        return False
+        return _grund("vod remux cap")
     except Exception as e:
         clip_dbg(f"{eid}: vod remux failed ({type(e).__name__}: "
                  f"{str(e)[:80]}) — falling back")
-        return False
+        return _grund(f"vod remux error {type(e).__name__}")
     if (lauf.returncode != 0 or not os.path.exists(teil)
             or not os.path.getsize(teil)):
         clip_dbg(f"{eid}: vod remux exit {lauf.returncode} — falling back")
-        return False
+        return _grund(f"vod remux exit {lauf.returncode}" if lauf.returncode != 0
+                      else "vod remux no output")
     clip_dbg(f"{eid}: vod fetch ok s={time.monotonic() - t0:.1f} "
              f"bytes={os.path.getsize(teil)} (local remux, no server-side "
              "clip generation)")
     return True
+
+
+def _deadline_check(eid, deadline_s, t_call):
+    """Raises TimeoutError when the fetch deadline (seconds since t_call) is used up; None means no deadline.
+    -> None"""
+    if deadline_s is not None and time.monotonic() - t_call >= float(deadline_s):
+        raise TimeoutError(f"clip fetch deadline of {float(deadline_s):.0f}s reached for {eid} — fetch aborted")
 
 
 def _einspiel_ist(eid):
@@ -817,7 +944,8 @@ def tor_zustand(n, data_dir=None):
 def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
                quelle=None, alter_min=None,
                erzeugung=None, erzeugung_deckel_s=None, warte=None,
-               tor_n=None, tor_deckel_s=None, dbg=None, vod=None):
+               tor_n=None, tor_deckel_s=None, dbg=None, vod=None,
+               deadline_s=None, cache_only=False):
     """Clip beschaffen: Cache-Treffer ODER atomarer Download (.part wie
     analyze.py — ein abgerissener Download darf nie als halbes Video
     durchgehen). Der PIN dieses Halters wird IM SELBEN ZUG gesetzt
@@ -861,16 +989,29 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
     Mehr-Job-Worker je JOB armierbar (W2-B2) statt ueber ein Modulglobal, das
     sich zwei gleichzeitige Jobs gegenseitig unter den Fuessen wegziehen —
     genau dieselbe Klasse wie beim `dbg=` der E2-Etappe. `worker.py`, der
-    Legacy-Subprozess und die ENV-Wege armieren weiter das Global."""
+    Legacy-Subprozess und die ENV-Wege armieren weiter das Global.
+    deadline_s (Bauplan analysen/bauplan_disponent.md, Stufe D3b Punkt 3): die
+    Abruffrist, die nur der Disponent setzt, gemessen ab Beginn dieses Aufrufs.
+    Geprueft wird hinter dem VOD-Zweig, vor dem Aufbau von clip.mp4 und zwischen
+    zwei Stuecken der Leseschleife; ist sie um, steigt ein TimeoutError auf dem
+    bestehenden Fehlerweg (.part weg, Fadenpin frei, Torplatz frei). Tor, VOD und
+    Aufbau behalten ihre eigenen Grenzen. None = keine Frist (alle anderen Wege).
+    cache_only (Stufe D3b Punkt 8, die Kennung „nur Cache" der Live-Auftraege):
+    liefert NUR eine vorhandene lokale Datei, vor der Einspiel-Bereitstellung,
+    vor dem Tor und vor jedem Netz; fehlt sie, steigt ClipCacheMissing."""
     if dbg is not None:
         _dbg_vorher = getattr(_TL, "dbg", None)
         _TL.dbg = dbg
         try:
             return clip_holen(eid, data_dir, frigate_url, timeout, quelle,
                               alter_min, erzeugung, erzeugung_deckel_s, warte,
-                              tor_n, tor_deckel_s, None, vod)
+                              tor_n, tor_deckel_s, None, vod, deadline_s, cache_only)
         finally:
             _TL.dbg = _dbg_vorher
+    # Bauplan VOD2: der Abrufstand dieses Aufrufs, frisch je echtem Abruf (Block bei `_TL`); der dbg=-Mantel
+    # oben ruft hierher und laesst ihn nach seiner Rueckkehr stehen.
+    _stand = _TL.abruf = dict(_ABRUF_LEER, zeit=time.time())
+    _t_call = time.monotonic()          # D3b Punkt 3: Beginn des Aufrufs, ab hier zaehlt die Abruffrist
     if erzeugung is None:
         erzeugung = CLIP_ERZEUGUNG
     if erzeugung_deckel_s is None:
@@ -881,10 +1022,22 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
         tor_deckel_s = CLIP_TOR_DECKEL_S
     if vod is None:
         vod = CLIP_VOD
-    vod = bool(vod)
+    vod = vod_an(vod)
     erzeugung = bool(erzeugung)
     pfad = cache_pfad(eid, data_dir)
     pin(eid, data_dir)
+    if cache_only:
+        # D3b Punkt 8: der Live-Auftrag liest nur, was der Disponent bereitgestellt hat. Erst der eigene Pin, dann die
+        # Frage nach der Datei (dieselbe Reihenfolge wie beim Cache-Treffer unten); keine Einspiel-Bereitstellung,
+        # kein Tor, kein Netz.
+        if os.path.exists(pfad):
+            _stand["weg"] = "cache"
+            clip_dbg(f"{eid}: clip cache hit src={quelle or CLIP_QUELLE or '?'} "
+                     f"bytes={os.path.getsize(pfad)} — cache only, no Frigate request")
+            return pfad
+        frei(eid, data_dir)
+        clip_dbg(f"{eid}: cache only and no local clip — nothing fetched")
+        raise ClipCacheMissing(f"the clip of {eid} is not in the local clip cache (cache only, nothing fetched)")
     teil = f"{pfad}.{os.getpid()}.{threading.get_native_id()}.part"
     q = quelle or CLIP_QUELLE or "?"
     alter = alter_min if alter_min is not None else CLIP_ALTER_MIN
@@ -903,6 +1056,7 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
             # LAUTER Fehler wie ein fehlgeschlagener Download — der
             # except-Zweig unten raeumt .part und Pin und wirft weiter.
             from core import einspielen as _einspiel
+            _stand["weg"] = "einspiel"      # VOD2: auch der zweite Griff auf die Vorlage
             if os.path.exists(pfad):
                 clip_dbg(f"{eid}: clip cache hit src={q} "
                          f"bytes={os.path.getsize(pfad)} — injected event, "
@@ -935,24 +1089,36 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
                         "deckel_s aus der Config — kein Modul-Default")
                 warte = ErzeugungsWarte(erzeugung_deckel_s,
                                         _version_probe(basis))
-            # .292 VOD-Weg ZUERST — fuer JEDEN Clip-Zug (User-Auftrag 19.08.:
-            # „jedes Mal, wenn wir ein Event holen", Lernlauf/Live/Nachhol/
-            # Meldung gleichermassen; kranke Segment-Fenster koennen auch
-            # frische Events treffen, z. B. direkt nach Frigate-Neustarts).
-            # Gelingt der lokale Remux, ist der Zug hier fertig — Frigates
-            # kranker Erzeugungspfad wird nie betreten. Jeder Fehlschlag ist
-            # laut (clip_dbg in _vod_holen) und faellt auf den gehaerteten
-            # clip.mp4-Weg darunter zurueck. Deckel: im Erzeugungs-Fall der
-            # Config-Deckel, sonst das normale Socket-Fenster (VOD liefert
-            # frisch in <1 s, gemessen).
+            # .292 VOD-Weg ZUERST, wenn der Schalter an ist — dann fuer JEDEN
+            # Clip-Zug (Lernlauf/Live/Nachhol/Meldung gleichermassen). Seit
+            # Bauplan VOD aus (Stufe VA1) ist er nur an, wenn ihn jemand
+            # einschaltet (Kopf bei CLIP_VOD). Gelingt der lokale Remux, ist der
+            # Zug hier fertig, Frigates Erzeugungspfad fuer clip.mp4 wird nicht
+            # betreten. Jeder Fehlschlag ist laut (clip_dbg in _vod_holen) und
+            # faellt auf den gehaerteten clip.mp4-Weg darunter zurueck.
+            # Deckel fuer ffmpeg (VA1 Punkt 3): im Erzeugungs-Fall der Deckel der
+            # Warte; sonst erzeugung_deckel_s (Argument, ohne Argument die
+            # Modul-Vorgabe CLIP_ERZEUGUNG_DECKEL_S, oben eingesetzt); fehlt
+            # beides, das Socket-Fenster `timeout`. Frische Ereignisse liefert
+            # VOD auf Frigate 0.17.1 bis 0.18 nicht in <1 s, grosse Clips rissen
+            # unter Last nach 30 s ab. Eine Gesamtgrenze fuer VOD und Rueckfall
+            # gibt es nicht (offene Liste O746).
             # E3.3: `vod` ist der je-Aufruf armierte Schalter (Vorgabe = CLIP_VOD,
             # s. Kopf). Ein zweiter Griff auf das Modul-Global gaebe es hier nicht.
-            if vod and _vod_holen(
-                    eid, teil, basis,
-                    warte.deckel_s if (erzeugung and warte is not None)
-                    else float(timeout)):
+            _stand["vod_versucht"] = vod
+            if erzeugung and warte is not None:
+                _vod_deckel = warte.deckel_s
+            elif erzeugung_deckel_s is not None:
+                _vod_deckel = float(erzeugung_deckel_s)
+            else:
+                _vod_deckel = float(timeout)
+            if vod and _vod_holen(eid, teil, basis, _vod_deckel):
                 os.replace(teil, pfad)
+                _stand["weg"] = "vod"
                 return pfad
+            if vod:
+                # VOD2: eine Attrappe ohne Grund (oder ein Weg, der keinen legt) heisst „unbekannt"
+                _stand["rueckfall_grund"] = _stand["rueckfall_grund"] or "unbekannt"
             # .289 (Haertungstest-Fang am Frisch-Event): Frigate schickt bei
             # der Erzeugung auch die RESPONSE-HEADER erst am Ende — der
             # strenge Verbindungs-Timeout brach dann VOR der Warte-Schleife
@@ -961,6 +1127,8 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
             # den Headern stellt settimeout() das strenge Fenster zurueck.
             _aufbau_to = (warte.deckel_s if (erzeugung and warte is not None)
                           else timeout)
+            # D3b Punkt 3, erster Pruefpunkt der Abruffrist: hinter dem VOD-Zweig, vor dem Aufbau von clip.mp4.
+            _deadline_check(eid, deadline_s, _t_call)
             with _fauth.oeffnen(f"{basis}/api/events/{eid}/clip.mp4",
                                 timeout=_aufbau_to) as r, \
                  open(teil, "wb") as f:          # 5e: derselbe Griff, echtes
@@ -1025,6 +1193,8 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
                         break
                     f.write(stueck)
                     geladen += len(stueck)
+                    # D3b Punkt 3, zweiter Pruefpunkt: zwischen zwei Stuecken der Leseschleife.
+                    _deadline_check(eid, deadline_s, _t_call)
             # O505 F1 (Bauplan analysen/bauplan_videogeometrie_fix.md): eine LEERE
             # Antwort ist kein Clip. Bis hier wurde sie als 0-Byte-Datei in den Cache
             # uebernommen, und jeder spaetere Versuch nahm diesen Treffer, statt Frigate
@@ -1039,13 +1209,28 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
                 raise RuntimeError(f"empty clip download for {eid} (src={q}, "
                                    f"bytes={_groesse}) — not cached")
             os.replace(teil, pfad)
+            _stand["weg"] = "clip.mp4"
+            if _stand["vod_versucht"]:
+                # Bauplan VOD2 Punkt 2 und 3: der RUECKFALL — VOD scheiterte, clip.mp4 lieferte. Stufe ERROR,
+                # nicht WARNING (Eigentuemer 20.10.2026 10:12:59: „Aber der Rückfall wäre doch eher ein Error
+                # und keine Warning"): der Weg traegt den bekannten Frigate-Haenger. Je Prozess und Grundklasse eine
+                # Zeile, jeder Rueckfall gezaehlt (Zustand bei `_TL`).
+                _klasse = _stand["rueckfall_grund"]
+                with _VOD_RUECKFALL_SCHLOSS:
+                    _n = _VOD_RUECKFAELLE[_klasse] = _VOD_RUECKFAELLE.get(_klasse, 0) + 1
+                if _n == 1:
+                    _log.error(f"VOD fetch failed ({_klasse}) for {eid} (src={q}), the clip was fetched over "
+                               "clip.mp4 instead — this is the path with the known Frigate hang "
+                               "(frigate#24029); further fallbacks of this class are counted, not logged")
             clip_dbg(f"{eid}: GET clip.mp4 ok src={q} "
                      f"s={time.monotonic() - t0:.1f} bytes={geladen}")
         else:
+            _stand["weg"] = "cache"
             clip_dbg(f"{eid}: clip cache hit src={q} "
                      f"bytes={os.path.getsize(pfad)} — no Frigate request")
         return pfad
     except Exception as e:
+        _stand["weg"], _stand["rueckfall_grund"] = "", None      # VOD2: gescheitert, kein Rueckfall
         clip_dbg(f"{eid}: GET clip.mp4 {_fehler_art(e, geladen)} src={q} "
                  f"s={time.monotonic() - t0:.1f} bytes={geladen} "
                  f"({type(e).__name__}: {str(e)[:120]})")

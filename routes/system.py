@@ -5,12 +5,12 @@ Dienst-LAGE (log_path, processed, pub, letzter_hb, frigate_fehler, _nachhol_stat
 enroll_warnung) — der Handler injiziert deshalb das Service-OBJEKT (modulplan
 §2c: Objekt-Injektion, nie Rueckimport; die Attr-Familie ist die in §2a
 kartierte). Dazu ro=frigate_read_only(cfg) und docs_url — beide Quellen bleiben
-im Kern. Die sync-Imports stehen IN der try wie im Original: ein Importfehler
-gehoert dort zur Karten-Semantik (Fallback-Karte statt Seitenkiller).
+im Kern. Die Sync-Karte ist seit Stufe PK3 (analysen/bauplan_perf_katalog.md)
+eine statische Verweiskarte zur Sync-Seite: kein sync-Import, kein Abgleich,
+kein Abruf von Frigates Gesichtsliste, kein Fehlerzweig.
 Sprach-Stufe 2 (Tranche C, konzept_sprache.md v2): sichtbare Texte aus
-core/sprache.t() — BYTE-TREU (Harnisch tools/harnisch_sprache.py). Die zwei
-Diagnose-Saetze der Sync-Karte (<a>-Links mitten im Satz) sind seit Stufe 3
-t_html-Schluessel (system.sync.diagnose_*). Verbleibende Grenzen: "health"
+core/sprache.t() — BYTE-TREU (Harnisch tools/harnisch_sprache.py).
+Verbleibende Grenzen: "health"
 ist Anzeige==Endpunkt-Name (§8.2); "Frigate"/"MQTT" sind Produkt-/
 Protokollnamen (§8.6); die Datumsformate %H:%M bleiben in der Route (B19)."""
 import datetime
@@ -20,25 +20,24 @@ import os
 import shutil
 import time
 
-from core.sprache import t, t_html
+from time import monotonic as _uhr                 # Bauplan Seiten-Tempo ST1: Dauer der DEBUG-Zeile
+
+from core.sprache import t
+from core import akte as _akte
 from core import logbuch as _logbuch
+from core import request_timing as _rt             # Bauplan Seiten-Zeitprotokoll SZ1: Schritte der Seite
 _log = _logbuch.logger(__name__)
 
 
 def render(svc, cfg, ro, docs_url):
     """-> Seiten-INHALT (layout/banner bleiben beim Handler)."""
+    t0_seite = _uhr()
     # Ampel mit DEFINIERTEN Messungen (Plan AP5 — kein Latenz-Raten)
-    letzte = None
-    if os.path.exists(svc.log_path):
-        with open(svc.log_path) as f:
-            for l in f:
-                try:
-                    d = json.loads(l)
-                    if d.get("nachhol"):
-                        continue     # Retry misst einen Batch-Job, nicht den Live-Pfad
-                    letzte = d
-                except Exception:
-                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
+    # Der letzte Eintrag ohne nachhol (Retry misst einen Batch-Job, nicht den Live-Pfad) kommt aus der Akten-Sicht
+    # (core/akte.py, Bauplan Seiten-Tempo ST1), ohne die Akte ganz zu lesen.
+    with _rt.step("akte_view"):                    # Bauplan Seiten-Zeitprotokoll SZ1 Punkt 6
+        letzte = _akte.sicht(svc.log_path).letzter_eintrag()
+    akte_s = _uhr() - t0_seite
     cache_gb, frei_gb = svc.cache_stand()      # .313: EINE Quelle (auch Knopf/Wache)
     # .32x: die WIRKSAMEN Grenzen, nicht die rohen Config-Zahlen. Seit 0 fuer
     # "aus der Plattengroesse ableiten" steht, ist der rohe Wert als Anzeige
@@ -125,39 +124,13 @@ def render(svc, cfg, ro, docs_url):
     if w and time.time() - w[0] < 86400:
         drift = (f'<div class="banner">{t("system.drift.banner")}'
                  f"<pre style='white-space:pre-wrap'>{html.escape(w[1])}</pre></div>")
-    sync_html = ""
-    try:
-        # .137: die System-Karte ist nur noch eine STATUSZEILE + Weg zur
-        # Seite (eigener Nav-Punkt "Frigate sync"). Alles Bedienbare —
-        # Auswahl, Transfer, Import, Entscheidungsfaelle — liegt dort,
-        # damit es nicht zwei halbe Sync-Oberflaechen gibt.
-        from sync_refs import abgleich as sync_abgleich
-        # .138 Panel-Fix: die Zahlenzeile kommt aus DERSELBEN
-        # Funktion wie auf der Sync-Seite (bilanz_zeile) — vorher
-        # rechnete die Karte 'ready to transfer' selbst und ohne
-        # die gemerkten Frigate-Ablehnungen: zwei Seiten, gleiche
-        # Beschriftung, verschiedene Zahlen.
-        from routes.syncauswahl import bilanz_zeile as sync_bilanz_zeile
-        _ab = sync_abgleich()
-        sync_html = (f'<div class="card"><b>{t("system.sync.titel")}</b>'
-                     + sync_bilanz_zeile(_ab, _ab.get("abgelehnt"),
-                                         mit_personen=False)
-                     + '<div style="margin-top:8px">'
-                     '<a class="gtb on" href="/sync_auswahl">'
-                     f'{t("system.sync.knopf")}</a></div>'
-                     f'<small>{t("system.sync.satz")} '
-                     # Stufe 3 (t_html): Diagnose-Satz mit <a>-Link — der
-                     # statische href liegt im Wert (Tag-Folge gepinnt).
-                     f'{t_html("system.sync.diagnose_satz")}</small></div>')
-    except Exception as e:
-        # Roher Python-Fehler stand hier direkt in der Karte (Plan-QS P.6) — fuer
-        # den haeufigsten Fall (frisches System ohne Frigate/Referenzen) jetzt ein Satz.
-        sync_html = (f'<div class="card"><b>{t("system.sync.titel")}</b><br>'
-                     f'<span class="dim">{t("system.sync.fehlt")}</span>'
-                     f'<br><small class="dim">({html.escape(str(e)[:60])})</small>'
-                     # Stufe 3 (t_html): Kurz-Diagnose-Satz mit <a>-Link.
-                     f'<br><small>{t_html("system.sync.diagnose_kurz")}'
-                     '</small></div>')
+    # Bauplan analysen/bauplan_perf_katalog.md, Stufe PK3: eine reine Verweiskarte. Die Seite ruft
+    # weder den Abgleich noch Frigates Gesichtsliste auf; Zahlen, Ergebnis und Fehler des Abgleichs
+    # zeigt allein die Sync-Seite /sync_auswahl.
+    sync_html = (f'<div class="card"><b>{t("system.sync.titel")}</b>'
+                 '<div style="margin-top:8px"><a class="gtb on" href="/sync_auswahl">'
+                 f'{t("system.sync.knopf")}</a></div>'
+                 f'<small>{t("system.sync.satz")}</small></div>')
     qs_html = ""
     qp = os.path.join(cfg["data_dir"], "state", "qs_bericht.json")
     if os.path.exists(qp):
@@ -223,7 +196,8 @@ def render(svc, cfg, ro, docs_url):
                 or _lw.melde_protokoll_vorhanden(cfg)):
             _h0 = datetime.datetime.now().replace(
                 hour=0, minute=0, second=0, microsecond=0).timestamp()
-            _z = _lw.melde_zaehler(cfg, _h0, time.time())
+            with _rt.step("live_counts"):          # Bauplan Seiten-Zeitprotokoll SZ1 Punkt 6
+                _z = _lw.melde_zaehler(cfg, _h0, time.time())
             _alerts = " · ".join(
                 f"{k} {_z.get(('alert', k), 0)}"
                 for k in ("pushover", "telegram", "mqtt"))
@@ -276,4 +250,5 @@ def render(svc, cfg, ro, docs_url):
               f'<div class="card"><b>{t("system.docs.titel")}</b><br>'
               f'<a href="{docs_url}" target="_blank" rel="noopener noreferrer">'
               f'{t("system.docs.link")}</a></div>')
+    _log.debug(f"page /system: {(_uhr() - t0_seite) * 1000:.0f} ms render, deckung.jsonl view {akte_s * 1000:.0f} ms")
     return inhalt
