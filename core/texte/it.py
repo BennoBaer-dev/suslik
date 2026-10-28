@@ -371,42 +371,8 @@ T = {
     # "Frigate" und "suslik" sind reine Produktnamen; die Kategorie-Labels
     # kommen aus webui.bausteine.KAT_LABELS (zentrale Quelle, eigene
     # Tranche); das Datumsformat %d.%m bleibt in der Route (B19-Stufe).
-    "ereignisliste.offen.titel": "Casi aperti da etichettare ({n})",
-    "ereignisliste.offen.satz":
-        "Si riempie da sola: tutti gli eventi con volti che nessuno ha "
-        "confermato e che non hai ancora etichettato. Vengono prima "
-        "quelli in cui non è stato riconosciuto nessuno nelle vicinanze "
-        "— sono quelli che vale la pena guardare. Dopo l’etichettatura "
-        "la scheda sbiadisce e sparisce al caricamento successivo.",
-    # {score} kommt vorformatiert (:.2f) aus der Route (Format-Regel §8.8).
-    "ereignisliste.offen.frigate_mit": "Frigate: {label} {score}",
-    "ereignisliste.offen.frigate_ohne": "Frigate: —",
-    # Stufe 0 = byte-treu: das Original sagt auch bei 1 "faces".
-    "ereignisliste.offen.zeile_faces": "{n} volti · migliore: {beste}",
-    "ereignisliste.offen.link_video": "Video",
-    "ereignisliste.offen.kontext_erkannt":
-        "riconosciuti nella stessa finestra temporale: {wer}",
-    "ereignisliste.offen.kontext_fehlt":
-        "nessun riconoscimento confermato nelle vicinanze",
     "ereignisliste.blaettern.neuer": "← più recenti",
     "ereignisliste.blaettern.aelter": "più vecchi →",
-    "ereignisliste.offen.blaettern_stand":
-        "Pagina {seite}/{max} ({n} aperti)",
-    # echter Plural schon im Original — t_n loest .eins/.viele auf.
-    "ereignisliste.offen.schwach_versteckt.eins":
-        "{n} evento con volto debole nascosto — probabilmente nessun "
-        "volto utilizzabile (e nessuna conferma nelle vicinanze).",
-    "ereignisliste.offen.schwach_versteckt.viele":
-        "{n} eventi con volti deboli nascosti — probabilmente nessun "
-        "volto utilizzabile (e nessuna conferma nelle vicinanze).",
-    "ereignisliste.offen.schwach_zeigen": "mostrali",
-    "ereignisliste.offen.schwach_alle":
-        "mostrati anche gli eventi con volti deboli —",
-    "ereignisliste.offen.schwach_zurueck": "torna a quelli che contano",
-    "ereignisliste.offen.leer_titel": "Niente di aperto — tutto etichettato.",
-    "ereignisliste.offen.leer_hinweis":
-        "I nuovi eventi non confermati con volti compaiono qui "
-        "automaticamente.",
     "ereignisliste.titel": "Eventi",
     "ereignisliste.filter.alle_areas": "tutte le aree",
     "ereignisliste.filter.alle_kameras": "tutte le telecamere",
@@ -1761,7 +1727,6 @@ T = {
     "nav.bereich.system": "Sistema",
     "nav.heute": "Oggi",
     "nav.ereignisse": "Eventi",
-    "nav.offen": "Da etichettare",
     "nav.faces": "Volti",
     "nav.gesichter": "Conosciuti",
     "nav.unbekannte": "Sconosciuti",
@@ -2246,61 +2211,64 @@ T = {
         "I riquadri provengono solo dall’elenco telecamere di Frigate e "
         "dalle sentinelle salvate.",
     "unbekannte.name": "Sconosciuto {nummer}",
-    "unbekannte.meta_zeit": " apparizioni · {zeit}",
-    "unbekannte.zeit_unbekannt": "ora sconosciuta",
-    "unbekannte.mehr_bilder": "+{n} altre immagini in questo gruppo",
-    "unbekannte.knopf_reaktivieren": "riattiva",
-    "unbekannte.attr_name": "Nome (nuovo o esistente)",
-    "unbekannte.attr_wahl": "Scegli questo gruppo per l'unione",
-    "unbekannte.knopf_zuweisen": "Assegna persona",
-    "unbekannte.knopf_teil": "Assegna le {n} selezionate",
-    "unbekannte.knopf_ignorieren": "Ignora",
-    "unbekannte.knopf_objekt": "Non è una persona",
-    "unbekannte.knopf_person": "È una persona",
-    "unbekannte.knopf_bulkmerge": "Unisci i {n} gruppi scelti",
-    "unbekannte.knopf_mehr": "Mostra altri {n} gruppi",
-    "unbekannte.titel": "Sconosciuti",
-    "unbekannte.anker": "{offen} gruppi su {gesamt} sono ancora in attesa",
-    "unbekannte.sort_label": "Ordine",
-    "unbekannte.sort_bilder": "più immagini",
-    "unbekannte.sort_neu": "più recenti",
-    "unbekannte.filter_label": "Mostra",
-    "unbekannte.f_offen": "da gestire",
-    "unbekannte.f_wieder": "ricorrenti",
-    "unbekannte.f_heute": "nuovi oggi",
-    "unbekannte.f_vorschlag": "unione suggerita",
-    "unbekannte.f_besucher": "silenziati",
-    "unbekannte.f_objekt": "non persone",
-    "unbekannte.kopf_satz":
-        "Volti che non corrispondono a nessuna persona conosciuta, "
-        "raggruppati in identità ricorrenti.",
-    # Kopf-Erklaerung an den <b>-Grenzen gesplittet; die Fett-Teile sind
-    # die knopf_*-Schluessel selbst (eine Quelle, kein Drift).
-    "unbekannte.kopf_satz_zuweisen":
-        " collega un riquadro a una persona (nuova o esistente, digita "
-        "il nome),",
-    "unbekannte.kopf_satz_ignorieren":
-        " silenzia un estraneo conosciuto (nessun avviso).",
-    "unbekannte.kopf_satz_auto":
-        "I volti nuovi arrivano qui automaticamente dopo ogni passaggio.",
-    "unbekannte.knopf_reorg": "Riorganizza ora",
-    "unbekannte.hinweis_reorg":
-        "ricontrolla i volti estratti e ricostruisce i gruppi — "
-        "l’estrazione vera e propria avviene automaticamente (1-2 min)",
-    "unbekannte.satz_objekte":
-        "Gruppi le cui immagini sono quasi identiche tra loro e non "
-        "somigliano a nessuna persona — in genere un passaruota, la "
-        "pavimentazione o un gioco di luce che il rilevatore continua a "
-        "scambiare per un volto. Sono congelati: i nuovi volti trovati "
-        "non vengono mai aggiunti qui (formano gruppi nuovi e visibili e "
-        "vengono ricontrollati dalla stessa regola) — i gruppi restano "
-        "in elenco, così nulla viene nascosto. Segnati a mano o trovati automaticamente; «È una persona» ne riporta uno indietro.",
-    "unbekannte.leer": "Ancora nessun volto sconosciuto.",
-    "unbekannte.leer_hinweis":
-        "Le identità compaiono qui dopo il prossimo visitatore "
-        "sconosciuto.",
-    "unbekannte.leer_filter": "Niente in questa vista.",
-    "unbekannte.leer_filter_hinweis": "Altri gruppi aspettano sopra, sotto un altro filtro.",
+    # ---- routes/unbekannte: Seite „Unbekannte“ zum Benennen (Bauplan analysen/bauplan_benennen.md, Stufe BN3) ---
+    # Die alten Texte unbekannte.* (ausser unbekannte.name), ereignisliste.offen.* und nav.offen stehen mit Wortlaut
+    # in archiv/unbekannte_offen_alt/texte_entfernt.json; die von Stufe FU1 (Bauplan analysen/bauplan_fix_unbekannte.md)
+    # entfernten in archiv/fix_unbekannte_fu1/texte_entfernt.json.
+    "benennen.titel": "Dare un nome ai volti sconosciuti",
+    "benennen.satz":
+        "Volti che suslik ha visto negli ultimi {tage} giorni senza riconoscerli, raggruppati come suslik li conserva. Spunta le immagini di una persona e dai loro un nome: diventano riferimenti e da quel momento suslik riconosce la persona.",
+    "benennen.satz_expert":
+        "Sono mostrate le immagini migliori degli ultimi {ereignisse} eventi di un gruppo, in ordine di tempo. Compaiono solo immagini la cui norma delle caratteristiche salvata raggiunge la soglia della loro telecamera (la più alta tra la soglia del catalogo e quella di riconoscimento); un gruppo senza un'immagine così viene nascosto e contato sotto le schede.",
+    "benennen.reiter.aehnlich": "Somiglia a una persona nota ({n})",
+    "benennen.reiter.unbekannt": "Sconosciuto ({n})",
+    "benennen.reiter.nicht_lernbar": "Non abbastanza buoni per imparare ({n})",
+    "benennen.blaettern.neuer": "← più recenti",
+    "benennen.blaettern.aelter": "più vecchi →",
+    "benennen.blaettern.stand": "Pagina {nr} di {seiten}",
+    "benennen.leer": "Tutto nominato per gli ultimi {tage} giorni.",
+    "benennen.leer_hinweis": "I nuovi volti sconosciuti compaiono qui dopo il prossimo passaggio.",
+    "benennen.leer_reiter": "Niente in questa scheda.",
+    "benennen.leer_reiter_hinweis": "Nell'altra scheda ci sono gruppi aperti.",
+    "benennen.leer_ausgeblendet.eins": "Niente da nominare: {n} gruppo ha solo immagini sotto la soglia.",
+    "benennen.leer_ausgeblendet.viele": "Niente da nominare: {n} gruppi hanno solo immagini sotto la soglia.",
+    "benennen.teilmenge":
+        "Non è stato possibile leggere tutto: in questa pagina possono mancare gruppi o immagini. Dettagli nel registro.",
+    "benennen.ziel_weg":
+        "Il gruppo da cui arrivi non è più aperto qui (nominato, ignorato o più vecchio di {tage} giorni).",
+    "benennen.kopf.bilder.eins": "{n} immagine",
+    "benennen.kopf.bilder.viele": "{n} immagini",
+    "benennen.kopf.zuletzt": "visto l'ultima volta {zeit}, {kamera}",
+    "benennen.vorschlag": "Suggerimento: {person}",
+    "benennen.kein_vorschlag": "Nessun suggerimento: forse qualcuno che suslik non conosce ancora.",
+    "benennen.nicht_lernbar.hinweis":
+        "suslik ha visto questi volti, ma le loro immagini sono troppo deboli per imparare da esse.",
+    "benennen.nicht_lernbar.grund": "Qualità {wert} · servono {latte}",
+    "benennen.nicht_lernbar.ohne_wert": "Nessuna misura",
+    "benennen.nach_zeit": "Alcune immagini sono ordinate solo per orario (manca la classifica del loro evento).",
+    "benennen.knopf.alle": "Spunta tutte",
+    "benennen.knopf.sind": "Le spuntate sono {person}",
+    "benennen.attr_name": "nome (persona nuova o esistente)",
+    "benennen.knopf.name": "Le spuntate sono questa persona",
+    "benennen.knopf.nicht": "Non è {person}",
+    "benennen.knopf.nicht_auswahl": "Le spuntate non sono {person}",
+    "benennen.knopf.ignorieren": "Ignora gruppo",
+    "benennen.knopf.objekt": "Nessun volto",
+    "benennen.frage.nicht":
+        "Segnare tutto questo gruppo come «non è {person}»? Riguarda tutte le sue immagini, anche quelle non mostrate.",
+    "benennen.frage.ignorieren":
+        "Ignorare tutto questo gruppo come estraneo noto? Riguarda tutte le sue immagini, anche quelle non mostrate, e non comparirà più qui.",
+    "benennen.frage.objekt":
+        "Segnare tutto questo gruppo come nessun volto (un cespuglio, un riflesso, un'auto parcheggiata)? Riguarda tutte le sue immagini, anche quelle non mostrate.",
+    "benennen.reihe.gruppe": "Immagini di questo gruppo, le più recenti prima",
+    "benennen.reihe.vergleich": "Così suslik conosce {person}",
+    "benennen.mehr_bilder": "+{n} altre immagini in questo gruppo",
+    "benennen.benannt": "nominato: {person}",
+    "benennen.bild.norm": "norma {norm} · soglia {latte}",
+    "benennen.js.keine": "Spunta almeno un'immagine.",
+    "benennen.js.name": "Inserisci un nome.",
+    "benennen.js.laeuft": "in corso…",
+    "benennen.js.fehler": "errore: riprova",
     "livealerts.link_video": "&#9654; video {n}",
     "livealerts.person_unbekannt": "sconosciuto",
     # "trigger" ist im IT-Bestand etabliertes Lehnwort (live.zaehler.*),
@@ -3378,6 +3346,27 @@ T = {
     "antwort.bruecke_nichts":
         "niente da prendere — nessuna nuova immagine utile in questo "
         "passaggio (va bene così)",
+    # BN1 (bauplan_benennen.md, O807): vedi en.py.
+    "antwort.bruecke_nicht_abgeholt":
+        "non è stato possibile recuperare {k} di {n} evento/i ({grund}) — "
+        "clicca di nuovo per riprovare",
+    "antwort.bruecke_nicht_abgeholt_zusatz":
+        " · non è stato possibile recuperare {k} di {n} evento/i "
+        "({grund}) — clicca di nuovo per riprovare",
+    "antwort.benennen_leer":
+        "nessun nome assegnato — spunta almeno un'immagine di questo gruppo",
+    "antwort.benennen_keins":
+        "nessun nome assegnato — nessuna delle {n} immagini spuntate può essere adottata: {gruende}",
+    "antwort.benennen_abgelehnt":
+        " · {n} immagine/i non adottata/e: {gruende}",
+    "antwort.benennen_grund_fremd":
+        "{n} non in questo gruppo",
+    "antwort.benennen_grund_altformat":
+        "{n} salvata/e prima della nuova memorizzazione dei volti",
+    "antwort.benennen_grund_ohne_norm":
+        "{n} senza feature norm salvata",
+    "antwort.benennen_grund_unter_latte":
+        "{n} con feature norm sotto la soglia",
     "antwort.bruecke_undo": "{n} immagine/i rimossa/e di nuovo",
     # .521 mini raccolta: non si prende nulla e l'esecuzione è effimera — le
     # sue immagini spariscono subito e il clic successivo raccoglie di nuovo.
@@ -3991,10 +3980,12 @@ vista del giorno integri le persone conosciute.</p>""",
     "heute.pass.live_title": "un osservatore in diretta ha segnalato un nome durante questo passaggio",
     "heute.rand.personen": "Persone",
     "heute.rand.personen_title": "persone con almeno una conferma in questo giorno — giudizi del worker e nomi dell'osservatore in diretta",
+    "heute.rand.passes": "Passaggi",
     "heute.rand.passes_title": "passaggi: eventi raggruppati per tempo e luogo; i passaggi di solo movimento non contano",
+    "heute.rand.events": "Eventi analizzati",
     "heute.rand.events_title": "eventi analizzati in questo giorno, telecamere della vista attuale",
-    "heute.rand.unmatched": "non assegnati nei passaggi",
-    "heute.rand.unmatched_title": "eventi con un volto senza corrispondenza a una persona nota, dentro passaggi con riconoscimento — di solito le stesse persone",
+    "heute.rand.gesicht": "Tasso di rilevamento",
+    "heute.rand.gesicht_title": "{n} di {m} eventi analizzati con almeno un volto verificato (rilevamenti errati filtrati), telecamere della vista attuale",
     "heute.rand.unbek_title": "identità sconosciute del pool con supporto in questo giorno; senza dati del pool: passaggi senza nessun riconoscimento",
     "heute.aehnlich.titel": "Probabilmente riconosciuti",
     "heute.aehnlich.cnt.eins": "{n} persona nota, non confermata · ordinata per ultimo avvistamento",

@@ -114,14 +114,18 @@ def _beruehrt(e, kamera, anfang, ende):
 
 def aus_frigate(api_fn, ev, rueckblick_s):
     """Die Personenzahl eines Frigate-Ereignisses nach Punkt 3.2 (drei Abfragen, Kopf dieser Datei).
-    -> (Zahl oder None, Grund oder None, Teile fuer die DEBUG-Zeile)"""
+    -> (Zahl oder None, Grund oder None, Teile fuer die DEBUG-Zeile, gezaehlte Ereignisse mit `data`)
+
+    Die gezaehlten Ereignisse (nach Kennung geordnet, ohne zusaetzlichen Abruf) gibt die Funktion fuer die
+    Namenszuordnung mit (Bauplan analysen/bauplan_namenszuordnung.md, Stufe NZ3 Punkt 1); sie gehoeren nicht in
+    die DEBUG-Zeile. Ohne Zeiten oder nach einer gescheiterten Abfrage ist die Liste leer."""
     kamera, anfang, ende = ev.get("camera"), ev.get("start_time"), ev.get("end_time")
     try:
         anfang, ende, r = float(anfang), float(ende), max(0.0, float(rueckblick_s))
     except (TypeError, ValueError):
-        return None, OHNE_ZEITEN, {}
+        return None, OHNE_ZEITEN, {}, []
     if not kamera:
-        return None, OHNE_ZEITEN, {}
+        return None, OHNE_ZEITEN, {}, []
     grenze = anfang - r
     treffer, api_weg = {}, []
     try:
@@ -137,15 +141,16 @@ def aus_frigate(api_fn, ev, rueckblick_s):
                 continue
             treffer[eid] = e
     except Exception as e:                                           # noqa: BLE001
-        return None, ABFRAGE_FEHLER, {"fehler": f"{type(e).__name__}: {e}"[:200]}
+        return None, ABFRAGE_FEHLER, {"fehler": f"{type(e).__name__}: {e}"[:200]}, []
     teile = {"ids": sorted(treffer), "api_ausgelassen": sorted(set(api_weg)),
              "abfragen": {"rueckblick": len(a), "frueher_begonnen": len(b), "laufend": len(c)},
              "rueckblick_s": r}
+    ereignisse = [treffer[k] for k in sorted(treffer)]
     if not (a_ok and b_ok and c_ok):
-        return None, UNVOLLSTAENDIG, teile
+        return None, UNVOLLSTAENDIG, teile, ereignisse
     if str(ev.get("id")) not in treffer:
-        return None, EVENT_FEHLT, teile
-    return len(treffer), None, teile
+        return None, EVENT_FEHLT, teile, ereignisse
+    return len(treffer), None, teile, ereignisse
 
 
 def ohne_fruehes_ende_zaehlen(grund):

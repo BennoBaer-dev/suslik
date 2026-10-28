@@ -879,13 +879,16 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
             hart=st_zahl.get("hart", 0), thin=st_zahl.get("zu_duenn", 0),
             unconfirmed=st_zahl.get("unbestaetigt", 0),
             **({"merge suggestions": vorschlaege_n} if vorschlaege_n else {})))
-        log.error(f"anchor stage finished (run {lauf_id}): {len(saetze)} clusters "
+        log.info(f"anchor stage finished (run {lauf_id}): {len(saetze)} clusters "
             f"(ok {st_zahl.get('ok', 0)} / hart {st_zahl.get('hart', 0)} / "
             f"thin {st_zahl.get('zu_duenn', 0)} / unconfirmed {st_zahl.get('unbestaetigt', 0)}"
             f"{f' / {vorschlaege_n} merge suggestions' if vorschlaege_n else ''}) "
             f"from {dg_mit_material}/{len(dg)} passes / {s_ges} anchor-ready faces; "
             f"stage2 n={len(alle_v)} rounds={runden} in {dauer}s"
             + (f"; NOTE {kaputt} unreadable anchor lines carried over" if kaputt else ""))
+        if kaputt:
+            log.warning(f"anchor stage (run {lauf_id}): {kaputt} unreadable anchor lines "
+                        "carried over")
     return {"anker": len(saetze), "status_zahlen": st_zahl, "durchgaenge": len(dg),
             "durchgaenge_mit_material": dg_mit_material, "s": s_ges,
             "vertreter": len(alle_v), "runden": runden, "ungeclustert": ungeclustert,

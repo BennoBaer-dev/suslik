@@ -445,6 +445,26 @@ AEHNLICH_WERK = {
 }
 
 
+# ---------------------------------------------------------------- Seite „Unbekannte“ zum Benennen
+# BENENNEN (Bauplan analysen/bauplan_benennen.md Fassung 3, Entscheid E2, Stufe BN2 Punkt 4; Eigentuemer 25.10.2026 „Macht
+# es so, dass es über die Konfig steuerbar ist“, Werte mit „ja“ bestaetigt 11:50): die fuenf Werte der neuen Seite, gelesen
+# von core.unbekanntpool (benennen_werte). Schluessel = die Config-Namen. ENTSCHIEDEN, nicht gemessen:
+#   benennen_karten_je_seite 5: Kacheln je Reiter und Seite.
+#   benennen_bilder_je_karte 12: Bilder in der Bildreihe einer Karte (so viele wie THUMBS_JE_REIHE in auftritte.py).
+#   benennen_tage 7: das Fenster, heute und die sechs lokalen Kalendertage davor.
+#   benennen_vergleichsbilder 6: Bilder der Reihe „So kennt suslik X“.
+#   benennen_ereignisse_je_karte 20: so viele juengste Ereignisse einer Kachel liest die Bildwahl.
+# NUR WERKSWERT, NIE UEBERSTEUERUNG (wie AEHNLICH_WERK): gezogen in verifyd.load_config; yaml und Config-Store liegen
+# darueber; alle fuenf wirken ohne Neustart (verifyd.Service.config_schreiben, _live_keys; die Seite liest sie je Aufruf).
+BENENNEN_WERK = {
+    "benennen_karten_je_seite": 5,
+    "benennen_bilder_je_karte": 12,
+    "benennen_tage": 7,
+    "benennen_vergleichsbilder": 6,
+    "benennen_ereignisse_je_karte": 20,
+}
+
+
 # ---------------------------------------------------------------- MQTT-Stummwache
 # MQTT-STUMMWACHE (Bauplan analysen/bauplan_mqtt_stummwache.md, Entscheide 2 bis 4, Eigentuemer 14.10.2026 18:11:03
 # „Ok zu Fassung 1"; Anlass Vorfall O632: nach einem Wirt-Neustart sprach Frigate nicht mehr ueber MQTT, suslik merkte
@@ -455,6 +475,52 @@ AEHNLICH_WERK = {
 #     (Vorschlag des Bauplans, nicht gemessen).
 #   abgleich_s 300: Takt des Abgleichs (`Service.sweep` im Modus abgleich) im MQTT-Betrieb (Vorschlag, nicht gemessen).
 MQTT_STUMMWACHE = {"stats_intervall_s": 60, "stumm_faktor": 3, "abgleich_s": 300}
+
+
+# ---------------------------------------------------------------- Namenszuordnung bei mehreren Personen
+# NAMENSZUORDNUNG (Bauplan analysen/bauplan_namenszuordnung.md, Entscheid 3, Stufe NZ2; Eigentuemer 26.10.2026 15:15:37):
+# die Werkswerte des Zuordners core/namenszuordnung.py. Werkswerte, kein Config-Schluessel (Entscheid 3, ED004 bleibt
+# unberuehrt). Gelesen je Aufruf von core.namenszuordnung, nie kopiert. GEMESSEN an EINEM Fall (26.10., vier Personen,
+# eine Kamera); Quellen: analysen/pruefungen/2026-10-26_1427_namenszuordnung_machbarkeit/bericht_machbarkeit.md (M) und
+# analysen/pruefungen/2026-10-26_1505_namenszuordnung_zusatzregeln/bericht_zusatzregeln.md (Z).
+#   eich_vor_s 10, eich_nach_s 2, eich_schritt_s 0,01: Suchfenster der Startzeit start_time - 10 s bis + 2 s, Schritt
+#     0,01 s (M Frage 4: Clips 11 bis 13 s, gemessenes pre 0,2 bis 1,8 s; ein Zehntel des Bildabstands).
+#   eich_det_min 0,5, eich_kante_min_px 40: Gesichter der Eichung, Detektionswert und kuerzere Kante (M Frage 4 „alle
+#     Gesichter"); dazu ohne Fehldetektion.
+#   kopf_versatz 0,1, kosten_deckel 1,0: Kopfpunkt auf der Rahmenoberkante plus 0,1 Rahmenhoehe; Kosten je Gesicht als
+#     Abstand in Rahmenbreiten und -hoehen, bei 1 gekappt (M Frage 4).
+#   schaerfe_min 1,5, schaerfe_abstand_s 0,3: das zweitbeste oertliche Minimum, mindestens 0,3 s vom besten entfernt
+#     (M a3_eichung.py), muss mindestens 1,5-mal so teuer sein; gemessen Fehlfall nur mit Stimmen 1,09, kleinster
+#     Gutfall mit allen Gesichtern 1,96 (M Frage 4).
+#   innen_breite 0,6, innen_oben 0,1, innen_unten 0,35: ein Gesicht liegt im Rahmen, wenn es waagrecht hoechstens 0,6
+#     Rahmenbreiten von der Mitte und senkrecht zwischen 0,1 Rahmenhoehen ueber und 0,35 unter der Oberkante liegt
+#     (M Frage 5; gemessen lagen die richtigen Stimmen bei hoechstens 0,19 und 0,02 bis 0,32).
+#   halten_vor_s 1,5, halten_nach_s 0,3: der Fusspunkt wird so lange vor dem ersten und nach dem letzten Wegpunkt
+#     gehalten (M Frage 5: Gesichter 0,86 bis 1,36 s vor Frigates erstem Eintrag; Wegpunktabstand bis 0,33 s).
+#   begegnung_faktor 1,0, begegnung_schritt_s 0,01: Begegnung, wenn der Fussabstand in Pixeln kleiner ist als 1,0 mal
+#     die kleinere Rahmenbreite in Pixeln, geprueft im Raster 0,01 s (Z Frage 3: bei 1,5 fallen Namen aus, kein
+#     falscher; Abstand zum Kippen etwa 15 %).
+#   bild_gleich_s 0,05: gleiche Kamerabilder ueberlappender Clips zaehlen einmal, wenn Rolle gleich und Frigate-Zeit
+#     auf 0,05 s gleich (M Frage 5, Z Vorgehen).
+NAMENSZUORDNUNG_WERK = {
+    "eich_vor_s": 10.0,
+    "eich_nach_s": 2.0,
+    "eich_schritt_s": 0.01,
+    "eich_det_min": 0.5,
+    "eich_kante_min_px": 40,
+    "kopf_versatz": 0.1,
+    "kosten_deckel": 1.0,
+    "schaerfe_min": 1.5,
+    "schaerfe_abstand_s": 0.3,
+    "innen_breite": 0.6,
+    "innen_oben": 0.1,
+    "innen_unten": 0.35,
+    "halten_vor_s": 1.5,
+    "halten_nach_s": 0.3,
+    "begegnung_faktor": 1.0,
+    "begegnung_schritt_s": 0.01,
+    "bild_gleich_s": 0.05,
+}
 
 
 # ------------------------------------------------- Beworbener EP je Variante (0.1.0.542)
@@ -861,6 +927,22 @@ PRIO_STUFEN = ("low", "mid", "high")
 PRIO_WERK = "mid"
 
 
+# --- Fristen des Aufraeumens (Bauplan analysen/bauplan_datenordner_klein.md, Baustein „Fristen", Stufe DK1) ------------
+# Werkswerte, kein Config-Schluessel, nicht in der Oberflaeche; gelesen von core/refquelle/papierkorb.py und vom Dienst.
+# Angebotsfrist, Eigentuemer 27.10.2026 13:43:22 „7 Tage …“: ein nie gewaehlter Kandidat bleibt sieben Tage.
+ANGEBOT_TAGE_WERK = 7
+# Papierkorbfrist, Eigentuemer 27.10.2026 16:58:21: was entfernt wird, liegt eine Woche im Papierkorb, dann geleert.
+PAPIERKORB_TAGE_WERK = 7
+
+
+# --- Erste Abfrage der Kartengroesse beim Start (Bauplan analysen/bauplan_kartenabfrage_start.md, Stufe KS1) -----------
+# Werkswert, kein Config-Schluessel, nicht in der Oberflaeche; gelesen von verifyd.Service._maschine_speicher_mb, nur
+# fuer dessen erste Abfrage der CUDA-Sonde je Prozess (sonst gelten die 2 s in core/systemstat.py). Entscheid E1 (a),
+# Eigentuemer 28.10.2026 10:09:19 „Okay, ich folge deiner Empfehlung“: 30 s, nicht gemessen; eine Obergrenze, der
+# Aufruf kehrt zurueck, sobald nvidia-smi antwortet (Anlass Issue #33, langsame Karte beim Kaltstart einer VM).
+KARTE_START_ZEITGRENZE_S = 30
+
+
 # --- Seiten-Zeitprotokoll (Bauplan analysen/bauplan_seitenzeit.md, Stufe SZ1, 22.10.2026) ---------
 # Der Eigentuemer 22.10.2026 13:20:54 (Befehlsbuch befehle/2026-10-22.md): „Ja, schreib einen kleinen
 # Bauplan Seiten-Zeitprotokoll fuer die naechste Version". DIE eine Liste der Routen, die die Zeile je
@@ -873,7 +955,8 @@ WEB_ROUTES = (
     "/", "/aehnliche", "/aehnliche_status", "/anlern_wartung_jetzt", "/anlernen", "/anlernen_benennen",
     "/anwesenheit", "/areas", "/areas_speichern", "/auftritt_lernen", "/auftritt_lernen_undo", "/auftritte",
     "/backup_voll", "/backup_voll_wiederherstellen", "/benachrichtigung_speichern", "/benachrichtigungen",
-    "/cache_aufraeumen", "/catchup_start", "/config_sichern", "/config_wiederherstellen", "/doc", "/enroll",
+    "/benennen_zuweisen", "/cache_aufraeumen", "/catchup_start", "/config_sichern", "/config_wiederherstellen",
+    "/doc", "/enroll",
     "/ereignisse", "/erkennung", "/erkennung_live", "/erkennungstest", "/faces", "/fremde", "/frigate",
     "/gesichter", "/gpu", "/gpu_speichern", "/gt", "/health", "/heute", "/kalibrierung",
     "/kalibrierung_fuellen", "/kalibrierung_fuellstand", "/kameras", "/kameras/steckbriefe_neu",

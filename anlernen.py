@@ -810,6 +810,147 @@ def _pool_saetze_verwerfen(zeilen, grund):
     return _ll.saetze_verwerfen(_pool_cfg(), rids, grund)
 
 
+# ---------------------------------------------------------------- Gruppen ohne Auftritt aufloesen (DK2)
+# Bauplan analysen/bauplan_datenordner_klein.md, Stufe DK2 Punkte 1, 2 und 4 mit dem Nachtrag O884 (Eigentuemer 27.10.2026
+# 21:00:05), Bausteine „Papierkorb“ und „Nichts Unlesbares loeschen“. Der Wartungsschritt „data cleanup“ des Dienstes ruft
+# resolve_old_groups vor den Saetzen (DK2 Punkt 5). Ehrliche Grenzen: eine unlesbare Katalogzeile bleibt als Stoerung im
+# Prozess stehen (core.refquelle), bis zum Neustart wird dann nichts aufgeloest. Den Katalog liest _katalog_lesen frisch und
+# streng ueber core.refquelle.catalog_ref_ids: eine unlesbare Zeile oder eine Schlusszeile ohne Zeilenende (ein Schreiber im
+# Gang) heisst, in diesem Lauf wird nichts aufgeloest (laut abgelehnt).
+GRUND_GRUPPE_AUFGELOEST = "the unknown group had no appearance within the group window and was resolved"
+KORB_GRUPPEN, KORB_POOL = "gruppen", "pool"     # Namen im Papierkorb (core.refquelle.trash_lines haengt die Endung an)
+
+
+def _jsonl_streng(pfad, was):
+    """Eine JSONL-Datei frisch und Byte fuer Byte; jede nicht leere Zeile muss ein dict sein (Baustein „Nichts Unlesbares
+    loeschen“), fehlt die Datei, ist sie leer. -> Liste (Zeile als Bytes ohne Zeilenende, dict oder None bei Leerzeile);
+    nicht vollstaendig lesbar: ValueError"""
+    try:
+        with open(pfad, "rb") as f:
+            daten = f.read()
+    except FileNotFoundError:
+        return []
+    if daten and not daten.endswith(b"\n"):
+        raise ValueError(f"{was} ends with an incomplete line — nothing resolved (nothing unreadable is removed)")
+    aus, kaputt = [], []
+    for nr, roh in enumerate(daten.split(b"\n")[:-1], 1):
+        d = None
+        if roh.strip():
+            try:
+                d = json.loads(roh)
+            except ValueError:
+                d = None
+            if not isinstance(d, dict):
+                kaputt.append(nr)
+        aus.append((roh, d))
+    if kaputt:
+        raise ValueError(f"{was}: {len(kaputt)} line(s) not readable (first line {kaputt[0]}) — nothing resolved "
+                         "(nothing unreadable is removed)")
+    return aus
+
+
+def _gruppe_lesbar(d):
+    """Kennung und Mitglieder einer Gruppenzeile (Kennung wie core.unbekanntpool.identitaeten).
+    -> (Kennung, [Mitglied]); ohne Kennung oder mit kaputter Liste members: None"""
+    uid = d.get("uid") or d.get("id")
+    mem = d.get("members") or []
+    if not (isinstance(uid, str) and uid) or not (isinstance(mem, list) and all(isinstance(m, str) for m in mem)):
+        return None
+    return uid, mem
+
+
+def _zu_alt(d, grenze):
+    """Sind letzter Auftritt und Anlage einer Gruppe aelter als die Grenze (DK2 Punkt 1)? -> bool"""
+    return all(isinstance(d.get(k), (int, float)) and not isinstance(d.get(k), bool) and d[k] < grenze
+               for k in ("last_seen", "created"))
+
+
+def _katalog_lesen(cfg):
+    """Die ref_ids des Katalogs (catalog_ref_ids, frisch unter der Katalogsperre, Nachtrag 28.10.) und die gebundenen
+    Mitglieder je Gruppe (unknown_member_rows) ueber core.refquelle. -> (Menge der ref_ids, {uid: [ref_id]}); eine
+    unlesbare Katalogzeile oder eine Schlusszeile ohne Zeilenende: ValueError"""
+    from core import refquelle as _rq
+    try:
+        im_katalog = _rq.catalog_ref_ids(cfg)
+    except _rq.RefquelleError as e:
+        raise ValueError(f"{e} — nothing resolved") from e
+    luecken = []
+    gebunden = _rq.unknown_member_rows(cfg, luecken)
+    if any(g["grund"] == _rq.lesen.GAP_CATALOG_LINE for g in luecken):
+        raise ValueError("reference source: a catalog line is not readable — nothing resolved (nothing unreadable is "
+                         "removed)")
+    return im_katalog, {uid: [m["ref_id"] for m in ms] for uid, ms in gebunden.items()}
+
+
+def _aufloesen_auswahl(gruppen, pool, im_katalog, grenze):
+    """Die Auswahl nach DK2 Punkt 1 und 2 (O884): alte Gruppenzeilen; Pool-Zeilen, die nur entfernte Gruppen fuehren;
+    Pool-Zeilen ohne Gruppe mit ref_id, die nicht im Katalog steht. -> (alte Zeilen, Kennungen ohne lebende Zeile,
+    Pool-Zeilen der Gruppen, Pool-Zeilen ohne Gruppe)"""
+    gelesen = [(roh, d, _gruppe_lesbar(d)) for roh, d in gruppen if d is not None]
+    kaputt = sum(1 for _r, _d, k in gelesen if k is None)
+    if kaputt:
+        raise ValueError(f"unknown groups: {kaputt} line(s) without an id or with a broken member list — nothing resolved "
+                         "(nothing unreadable is removed)")
+    alt = [(roh, d, k) for roh, d, k in gelesen if _zu_alt(d, grenze)]
+    weg_zeilen = {roh for roh, _d, _k in alt}
+    bleibt = [k for roh, _d, k in gelesen if roh not in weg_zeilen]
+    lebend_ids, lebend_mit = {k[0] for k in bleibt}, {m for k in bleibt for m in k[1]}
+    weg_ids = {k[0] for _r, _d, k in alt} - lebend_ids
+    weg_mit = {m for _r, _d, k in alt for m in k[1]} - lebend_mit
+    aus_gruppen, ohne_gruppe = [], []
+    for roh, z in pool:
+        if z is None or z.get("id") in lebend_mit:
+            continue
+        rid = z.get("ref_id")
+        if z.get("id") in weg_mit:
+            aus_gruppen.append(roh)
+        elif isinstance(rid, str) and rid and rid not in im_katalog:
+            ohne_gruppe.append(roh)
+    return alt, weg_ids, aus_gruppen, ohne_gruppe
+
+
+def _zeilen_ersetzen(pfad, zeilen, weg):
+    """Eine Datei ohne die Zeilen weg atomar neu schreiben (core.atomar: Hilfsdatei, fsync, os.replace), die uebrigen Byte
+    fuer Byte in ihrer Reihenfolge. -> None"""
+    from core import atomar as _atomar
+    _atomar.bytes_schreiben(pfad, b"".join(roh + b"\n" for roh, _d in zeilen if roh not in weg))
+
+
+def resolve_old_groups(jetzt=None):
+    """Unbekannt-Gruppen ohne Auftritt aufloesen (Stufe DK2): ganz unter pool_lock, frisch gelesen; alte Gruppenzeilen und
+    die Pool-Zeilen nur entfernter Gruppen sowie Pool-Zeilen ohne Gruppe, deren Satz nicht im Katalog steht (O884), Byte
+    fuer Byte in den Papierkorb, die Katalogbindungen der entfernten Gruppen loesen, dann Pool und Gruppenbestand ohne sie
+    atomar neu. Unlesbares (Gruppenbestand, Pool, Katalog): laut abgelehnt, nichts bewegt.
+    -> dict day, groups {Status oder objekt: Zahl}, released, pool, pool_without_group"""
+    from core import refquelle as _rq
+    from core import unbekanntpool as _up
+    jetzt = time.time() if jetzt is None else jetzt
+    cfg = _pool_cfg()
+    with pool_lock():
+        gruppen = _jsonl_streng(UNB_PATH, "unknown groups")
+        pool = _jsonl_streng(GES_PATH, "unknown pool")
+        im_katalog, gebunden = _katalog_lesen(cfg)
+        alt, weg_ids, aus_gruppen, ohne_gruppe = _aufloesen_auswahl(gruppen, pool, im_katalog,
+                                                                    jetzt - ARCHIV_TAGE * 86400)
+        aus = {"day": os.path.basename(_rq.trash_dir(cfg, jetzt)[1]),
+               "groups": dict(collections.Counter("objekt" if d.get("objekt") else d.get("status", "aktiv")
+                                                  for _r, d, _k in alt)),
+               "released": 0, "pool": len(aus_gruppen) + len(ohne_gruppe), "pool_without_group": len(ohne_gruppe)}
+        if not (alt or aus["pool"]):
+            return aus
+        _up.note_group_ids(DATA, [k[0] for _r, _d, k in alt])     # DK2 Punkt 4: die Nummern bleiben vergeben
+        _rq.trash_lines(cfg, jetzt, KORB_GRUPPEN, [roh for roh, _d, _k in alt])
+        _rq.trash_lines(cfg, jetzt, KORB_POOL, aus_gruppen + ohne_gruppe)
+        loesen = [r for uid in sorted(weg_ids) for r in gebunden.get(uid, [])]
+        if loesen:
+            aus["released"] = _rq.unknown_release(cfg, loesen, GRUND_GRUPPE_AUFGELOEST)
+        if aus["pool"]:
+            _zeilen_ersetzen(GES_PATH, pool, set(aus_gruppen + ohne_gruppe))
+        if alt:
+            _zeilen_ersetzen(UNB_PATH, gruppen, {roh for roh, _d, _k in alt})
+    return aus
+
+
 def migriere_und_pruefe_pool(emb=None, refs=None):
     """Hebel 1 (User 21.07.): den Unbekannt-Pool sauber halten.
     (a) MODELL-KONSISTENZ: Gesichter, deren gespeichertes Embedding von einem ANDEREN
@@ -1174,9 +1315,10 @@ def _reconcile_intern(archiv_tage=ARCHIV_TAGE, sim=SIM_DEFAULT):
     _status("clustern", 0, len(frei))
     clusters = clustere(list(frei.values()), sim=sim) if frei else []
     _status("zuordnen", len(frei), len(frei))
-    nums = [int(k[1:]) for k in list(idents) + list(eingefroren)
-            if k[:1] == "U" and k[1:].isdigit()]
-    naechste = (max(nums) + 1) if nums else 1
+    # Bauplan analysen/bauplan_datenordner_klein.md DK2 Punkt 4: die Nummer kommt aus der gemeinsamen Vergabe (nie wieder
+    # vergeben); die eingefrorenen zaehlen mit (ID-Kollisionsschutz). Der Aufrufer haelt pool_lock.
+    from core import unbekanntpool as _up
+    vorhanden = list(idents) + list(eingefroren)
     neu, vorschlaege = {}, []
     for c in clusters:
         mids = [g["id"] for g in c]
@@ -1187,10 +1329,10 @@ def _reconcile_intern(archiv_tage=ARCHIV_TAGE, sim=SIM_DEFAULT):
                 if other != zid:
                     vorschlaege.append((zid, other))          # Cluster spannt mehrere Alt-IDs
         else:
-            zid = f"U{naechste}"; naechste += 1
+            zid = _up.next_group_id(DATA, vorhanden)
         if zid in neu:                                        # Alt-ID auf zwei Cluster aufgespalten
             orig = zid
-            zid = f"U{naechste}"; naechste += 1
+            zid = _up.next_group_id(DATA, vorhanden)
             vorschlaege.append((orig, zid))
         alt = idents.get(zid, {})
         tss = [faces[m]["ts"] for m in mids]
@@ -1387,9 +1529,7 @@ def objekt_reparatur(uid=None, seit=None):
             print(f"objekt_reparatur: object cluster {uid!r} not found" if uid
                   else "objekt_reparatur: no object clusters in the pool", flush=True)
             return []
-        nums = [int(u["id"][1:]) for u in U
-                if u["id"][:1] == "U" and u["id"][1:].isdigit()]
-        naechste = (max(nums) + 1) if nums else 1
+        from core import unbekanntpool as _up         # DK2 Punkt 4: die gemeinsame Vergabe der Nummer
         angelegt, geaendert = [], False
         for u in ziele:
             anker = seit if seit is not None else u.get("objekt_seit")
@@ -1413,7 +1553,7 @@ def objekt_reparatur(uid=None, seit=None):
             for c in clustere([faces[m] for m in jung], sim=SIM_DEFAULT):
                 mids = [g["id"] for g in c]
                 tss = [faces[m]["ts"] for m in mids]
-                nid = f"U{naechste}"; naechste += 1
+                nid = _up.next_group_id(DATA, [x.get("id") for x in U])
                 neu = {"id": nid, "created": min(tss), "first_seen": min(tss),
                        "last_seen": max(tss), "status": "aktiv", "label": None,
                        "members": mids, "objekt": False}
@@ -1594,9 +1734,8 @@ def nicht_p_auswahl_kern(uid, ids, ts=None):
     alt = [m for m in (becken or {}).get("members") or [] if m in wahl]
     if person is None or not (saetze or alt):
         return None, 0
-    nummern = [int(k[1:]) for k in [u.get("id") for u in U] + list(gebunden)
-               if isinstance(k, str) and k[:1] == "U" and k[1:].isdigit()]
-    neu = f"U{max(nummern + [0]) + 1}"
+    from core import unbekanntpool as _up              # DK2 Punkt 4: die gemeinsame Vergabe der Nummer
+    neu = _up.next_group_id(DATA, [u.get("id") for u in U] + list(gebunden))
     G = {g["id"]: g for g in lade_gesichter()} if alt else {}
     tss = ([m["ts"] for m in saetze if isinstance(m["ts"], (int, float))]
            + [G[m]["ts"] for m in alt if isinstance((G.get(m) or {}).get("ts"), (int, float))]) or [ts]

@@ -505,9 +505,24 @@ def _sonde_openvino():
     return {"prozent": round(max(0.0, wert), 1), "grund": None, "engine": bester}
 
 
-def _sonde_cuda():
+# .531: 2 s statt 8. Diese Sonde haengt seit .529 am ABSETZWEG jedes
+# Jobs (verifyd: worker_fussabdruck_max_mb/worker_geometrien_max) und
+# seit .531 zusaetzlich am Takt der Speicher-Wache im Worker. Ein
+# haengendes nvidia-smi kostete damit bis zu 8 s JE AUFRUF, und zwar
+# dort, wo der Dienst gerade einen Job absetzen will. Eine Karte, die
+# 2 s braucht, um ihre eigene Belegung zu nennen, ist ohnehin kein
+# verlaesslicher Messwert mehr — der Aufrufer nimmt dann den letzten
+# guten Wert MIT Alter.
+# Bauplan analysen/bauplan_kartenabfrage_start.md, KS1: nur die erste Abfrage der
+# Kartengroesse beim Aufbau des Dienstes gibt eine eigene, laengere Grenze mit
+# (core/registry.py KARTE_START_ZEITGRENZE_S); jeder Aufruf ohne Angabe gilt diese.
+SONDE_CUDA_ZEITGRENZE_S = 2
+
+
+def _sonde_cuda(zeitgrenze_s=SONDE_CUDA_ZEITGRENZE_S):
     """NVIDIA: nvidia-smi. Die Auslastung ist dort GESAMT (je Prozess liefert
-    nvidia-smi nur Speicher, keine Rechenzeit — Bauplan §0)."""
+    nvidia-smi nur Speicher, keine Rechenzeit — Bauplan §0).
+    `zeitgrenze_s`: Frist fuer nvidia-smi in Sekunden; ohne Angabe SONDE_CUDA_ZEITGRENZE_S."""
     if not _knoten_da(_pflicht_knoten("cuda")):
         return _fehlt("kein_geraet")
     try:
@@ -519,15 +534,8 @@ def _sonde_cuda():
             ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total,"
              "temperature.gpu,memory.free", "--format=csv,noheader,nounits"],
             stdin=subprocess.DEVNULL,
-            # .531: 2 s statt 8. Diese Sonde haengt seit .529 am ABSETZWEG jedes
-            # Jobs (verifyd: worker_fussabdruck_max_mb/worker_geometrien_max) und
-            # seit .531 zusaetzlich am Takt der Speicher-Wache im Worker. Ein
-            # haengendes nvidia-smi kostete damit bis zu 8 s JE AUFRUF, und zwar
-            # dort, wo der Dienst gerade einen Job absetzen will. Eine Karte, die
-            # 2 s braucht, um ihre eigene Belegung zu nennen, ist ohnehin kein
-            # verlaesslicher Messwert mehr — der Aufrufer nimmt dann den letzten
-            # guten Wert MIT Alter.
-            capture_output=True, text=True, timeout=2)
+            # Zeitgrenze: Begruendung der 2 s bei SONDE_CUDA_ZEITGRENZE_S oben.
+            capture_output=True, text=True, timeout=zeitgrenze_s)
     except FileNotFoundError:
         return _fehlt("werkzeug_fehlt")
     except subprocess.TimeoutExpired:

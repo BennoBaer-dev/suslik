@@ -70,8 +70,19 @@ the update to the first version with the reference source, also save `clips/refc
 
 Two settings belong to the reference source: `profil_faktor` (default 2.2, must be above 1.5) sets the
 side of a stored profile picture as this factor times the longer side of the face box, and
-`aufbewahrung_tage` (default 60, `verifyd.yaml` only) is how long discarded candidate sets and old
-event folders are kept.
+`aufbewahrung_tage` (default 60, `verifyd.yaml` only) is how long everything tied to events is kept: old
+event folders, the monthly archive files of the event record (`state/archiv/deckung_YYYY-MM.jsonl`), the pieces
+of the unknown queue and the log of names written to Frigate (`state/sublabel_writes.jsonl`).
+
+Candidate sets that were never chosen and discarded sets do not follow `aufbewahrung_tage`: after an offer
+period of 7 days they move, together with their catalog lines, into the trash folder `<data>/papierkorb/<date>/`.
+Unknown groups without an appearance for 7 days, usage journal lines older than 7 days, and the archive files,
+queue pieces and log lines above once they are older than `aufbewahrung_tage` go the same way; old event folders
+are deleted directly. suslik empties each day folder of the trash 7 days later; until then you can take things
+back out by hand. This runs in the maintenance step "data cleanup" at start and every day at 06:00, except for the
+pieces of the unknown queue: the consumer of the unknown queue moves those itself in each of its rounds. The 7-day
+periods are fixed defaults and cannot be changed in the UI. References and the archive `state/archiv/refquelle/`
+are never moved to the trash, and the trash is not part of the full backup.
 
 ## Key settings
 

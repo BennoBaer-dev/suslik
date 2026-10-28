@@ -12,10 +12,26 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.037"   # 0.1.1.037: Eigentuemer 24.10.2026 09:23:49 (Befehlsbuch): "Wir machen eine saubere Version,
-                      # erhoehen auf einen Version, damit wir das mit dem bestehenden vergleichen koennen." Inhalt
-                      # wie 0.1.1.036 (nie veroeffentlicht, Lauf 20261024_002352 in Stufe 5 rot: intel Test 1 Stehend-
-                      # Regel), CHANGELOG mit dem Buendel-Satz; Box unveraendert, nur STAND geht hoch.
+STAND = "0.1.1.043"   # 0.1.1.043: Box-Eintrag und CHANGELOG-Texte wie 0.1.1.042, die nie veroeffentlicht wurde und hier aufgeht;
+                      # Eigentuemer 28.10.2026 15:35:04 ("What's new und changelog lassen wir so. Das sind irrelevante
+                      # Aenderungen."), im CHANGELOG nur die Klammer "(seen in a Proxmox VM)" gestrichen (15:35:40 "ja"; der
+                      # Feldtester betreibt einen LXC-Container, keine VM). Neu in dieser Nummer: TS3 und TS4 (Randspalte).
+                      # Davor 0.1.1.042: Box-Eintrag mit zwei Punkten (korrigierte Statistik der Seite Heute, automatisches Aufraeumen
+                      # alter, ungenutzter Daten nach 7 Tagen), Wunsch des Eigentuemers 28.10.2026 13:06:44 ("korrigierte Statistik
+                      # oder Fehlerfixes in der Statistik und automatisches Aufraeumen von alten Daten aelter als 7 Tage"), Wortlaut
+                      # DE und EN abgenommen 13:09:58 ("Passt so"); Bauplaene analysen/bauplan_today_statistik.md (TS1, TS2),
+                      # analysen/bauplan_datenordner_klein.md (DK1 bis DK5) und analysen/bauplan_kartenabfrage_start.md (KS1,
+                      # nur CHANGELOG, Satz abgenommen 13:06:17).
+                      # Davor 0.1.1.041: Box-Eintrag Lernlauf (Norm-Schritt mit voller Stunde, Erfolgszeilen nicht mehr als Fehler),
+                      # Inhalt vom Eigentuemer 27.10.2026 19:03:21 ("Ja, 0.1.1.041 bekommt den Lernlauf-Eintrag, der Aufraeum-Eintrag
+                      # kommt mit der naechsten Version."); Stufen N1 bis N3 des Bauplans analysen/bauplan_lernlauf_korrekturen.md.
+                      # Davor 0.1.1.040: Box-Eintrag mit zwei Punkten (Seite Unbekannte, Namen bei mehreren Personen), Inhalt vom
+                      # Eigentuemer 26.10.2026 17:48:16, abgenommen mit dem Ketten-Go 18:26:32 ("Nummer mit CHANGELOG und Box nach
+                      # Entwurf"); der nie veroeffentlichte Eintrag 0.1.1.039 geht darin auf, CHANGELOG mit Buendel 0.1.1.038 und 0.1.1.039.
+                      # Davor 0.1.1.039: Box-Eintrag Seite Unbekannte (abgenommen 26.10.2026), CHANGELOG mit FU1 und Buendel 0.1.1.038
+                      # Lauf nur gpu, ohne Veroeffentlichung (Eigentuemer 25.10.2026). CHANGELOG-Abschnitt vom
+                      # Eigentuemer 26.10.2026 abgenommen ("changelog passt"); Box unveraendert, nur STAND geht hoch.
+                      # Am 24.10. war die Nummer fuer OA1 allein vorgesehen; ein Lauf damit fand nicht statt.
                       # Davor 0.1.1.036: Eigentuemer 24.10.2026 00:20:55 (Befehlsbuch): "Ja, What's-new fuer 0.1.1.036 so
                       # uebernehmen (Box unveraendert, CHANGELOG wie im Entwurf)". Box unveraendert: nur STAND geht hoch;
                       # neu im Code: PK1, PK1b, PK3, PK1c, LK1, PK2 (Katalog-Fortschreibung, Systemseite, Vorwaermen,
@@ -838,6 +854,85 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.1.043 — Texte unveraendert aus dem nie veroeffentlichten Eintrag 0.1.1.042 (Eigentuemer 28.10.2026 15:35:04 „What's
+    # new und changelog lassen wir so“). Herkunft der Texte von 0.1.1.042: ZWEI Punkte, INHALT VOM INHABER: Wunsch 28.10.2026 13:06:44 („korrigierte Statistik oder Fehlerfixes in der
+    # Statistik und automatisches Aufräumen von alten Daten älter als 7 Tage“), Wortlaut DE und EN abgenommen 13:09:58; der
+    # Seitenname je Sprache wie nav.heute in core/texte/<sprache>.py. ES, IT, FR und FI von der Hauptsession (Opus) nach EN
+    # uebersetzt, das Wort fuer die Kandidaten wie in core/texte/<sprache>.py.
+    ("0.1.1.043", (
+        {"de": "Seite Heute: korrigierte Statistik, die Randspalte zeigt jetzt, wie viele Ereignisse mindestens ein Gesicht "
+               "hatten.",
+         "en": "Today page: corrected statistics, the side column now shows how many events had at least one face.",
+         "es": "Página Hoy: estadística corregida, la columna lateral muestra ahora cuántos eventos tuvieron al menos un rostro.",
+         "it": "Pagina Oggi: statistica corretta, la colonna laterale mostra ora quanti eventi hanno avuto almeno un volto.",
+         "fr": "Page Aujourd'hui : statistiques corrigées, la colonne latérale indique désormais combien d'événements "
+               "comportaient au moins un visage.",
+         "fi": "Tänään-sivu: korjattu tilasto, sivupalkki näyttää nyt, kuinka monessa tapahtumassa oli vähintään yhdet kasvot."},
+        {"de": "Automatisches Aufräumen: alte, ungenutzte Daten wie nie gewählte Gesichts-Kandidaten werden nach 7 Tagen "
+               "weggeräumt, zuerst in einen Papierkorb, der eine Woche später geleert wird.",
+         "en": "Automatic cleanup: old, unused data such as face candidates nobody picked is cleared out after 7 days, first "
+               "into a trash folder that is emptied a week later.",
+         "es": "Limpieza automática: los datos antiguos sin usar, como las candidatas de rostro que nadie eligió, se retiran a "
+               "los 7 días, primero a una papelera que se vacía una semana después.",
+         "it": "Pulizia automatica: i dati vecchi e inutilizzati, come i candidati volto che nessuno ha scelto, vengono rimossi "
+               "dopo 7 giorni, prima in un cestino che viene svuotato una settimana dopo.",
+         "fr": "Nettoyage automatique : les données anciennes et inutilisées, comme les candidats visage que personne n'a "
+               "choisis, sont retirées au bout de 7 jours, d'abord dans une corbeille vidée une semaine plus tard.",
+         "fi": "Automaattinen siivous: vanhat, käyttämättömät tiedot, kuten kasvoehdokkaat, joita kukaan ei valinnut, "
+               "poistetaan 7 päivän jälkeen, ensin roskakoriin, joka tyhjennetään viikkoa myöhemmin."},
+    )),
+    # 0.1.1.041 — EIN Punkt, INHALT VOM INHABER: Anlass 27.10.2026 („nur einen kleinen neuen Eintrag … Kurz und knapp“), Wortlaut DE
+    # und EN abgenommen 19:03:21; ES, IT, FR und FI von der Hauptsession (Opus) nach EN uebersetzt, das Wort fuer den Lernlauf je
+    # Sprache wie in core/texte/<sprache>.py.
+    ("0.1.1.041", (
+        {"de": "Lernlauf: Der Norm-Schritt bekommt jetzt immer eine volle Stunde, große Läufe brechen den Worker nicht mehr "
+               "mittendrin ab. Seine Erfolgsmeldungen stehen nicht mehr als Fehler im Log, echte Probleme bekommen eine eigene "
+               "Warnung.",
+         "en": "Learning run: the feature-norm step now always gets a full hour, so large runs no longer stop the worker "
+               "halfway through. Its success messages are no longer logged as errors; real problems get their own warning.",
+         "es": "Ciclo de aprendizaje: el paso de la norma de rasgos dispone ahora siempre de una hora completa, así que las "
+               "ejecuciones grandes ya no detienen el worker a mitad de camino. Sus mensajes de éxito ya no se registran como "
+               "errores; los problemas reales reciben su propio aviso.",
+         "it": "Ciclo di apprendimento: il passo della norma delle caratteristiche ha ora sempre un'ora intera, così i cicli "
+               "grandi non fermano più il worker a metà. I suoi messaggi di successo non vengono più registrati come errori; i "
+               "problemi reali ricevono un avviso proprio.",
+         "fr": "Passe d'apprentissage : l'étape de norme des caractéristiques dispose désormais toujours d'une heure entière, "
+               "les grandes passes n'arrêtent donc plus le worker en plein milieu. Ses messages de réussite ne sont plus "
+               "journalisés comme erreurs ; les vrais problèmes reçoivent leur propre avertissement.",
+         "fi": "Oppimisajo: piirrenormin vaihe saa nyt aina täyden tunnin, joten suuret ajot eivät enää pysäytä workeria "
+               "kesken. Sen onnistumisviestejä ei enää kirjata virheinä; todelliset ongelmat saavat oman varoituksensa."},
+    )),
+    # 0.1.1.040 — ZWEI Punkte, INHALT VOM INHABER: Anlass 26.10.2026 17:48:16 (die neu gebaute Seite Unbekannte und die Namen
+    # in Frigate bei mehreren Personen, "Alle kurz knapp"), Wortlaut DE und EN abgenommen mit dem Ketten-Go 18:26:32 ("Nummer
+    # mit CHANGELOG und Box nach Entwurf"; Entwurf backups/release_0_1_1_040/whatsnew_entwurf.md). ES, IT, FR und FI von der
+    # Hauptsession (Opus) nach EN uebersetzt, Seitennamen wie im Eintrag 0.1.1.039, das Wort fuer den Durchgang aus
+    # areas.kettung der jeweiligen Sprache. Der Eintrag 0.1.1.039 ging nie hinaus und geht hierin auf.
+    ("0.1.1.040", (
+        {"de": "Neue Seite Unbekannte (ersetzt „Zum Benennen“): Gesichter der letzten sieben Tage als Karten, gute Bilder "
+               "anhaken und benennen.",
+         "en": "New Unknown page (replaces \"To label\"): faces of the last seven days as cards; tick the good pictures and "
+               "name them.",
+         "es": "Nueva página Desconocidos (sustituye a «Por etiquetar»): los rostros de los últimos siete días como tarjetas; "
+               "marca las buenas imágenes y ponles nombre.",
+         "it": "Nuova pagina Sconosciuti (sostituisce «Da etichettare»): i volti degli ultimi sette giorni come schede; spunta "
+               "le immagini buone e assegna loro un nome.",
+         "fr": "Nouvelle page Inconnus (remplace « À étiqueter ») : les visages des sept derniers jours sous forme de cartes ; "
+               "cochez les bonnes images et nommez-les.",
+         "fi": "Uusi sivu Tuntemattomat (korvaa sivun ”Nimettävät”): viimeisen seitsemän päivän kasvot kortteina; valitse "
+               "hyvät kuvat ja anna niille nimi."},
+        {"de": "Mehrere Personen in einem Durchgang: suslik ordnet jetzt jedem Frigate-Ereignis den Namen seiner eigenen "
+               "Person zu; bisher bekamen oft alle denselben.",
+         "en": "Several people in one pass: suslik now gives each Frigate event the name of its own person; before, they "
+               "often all got the same one.",
+         "es": "Varias personas en un mismo recorrido: suslik da ahora a cada evento de Frigate el nombre de su propia "
+               "persona; antes, a menudo todos recibían el mismo.",
+         "it": "Più persone nello stesso passaggio: suslik ora assegna a ogni evento di Frigate il nome della sua persona; "
+               "prima spesso ricevevano tutti lo stesso.",
+         "fr": "Plusieurs personnes dans un même passage : suslik donne désormais à chaque événement Frigate le nom de sa "
+               "propre personne ; auparavant, ils recevaient souvent tous le même.",
+         "fi": "Useita henkilöitä samalla käynnillä: suslik antaa nyt jokaiselle Frigate-tapahtumalle sen oman henkilön "
+               "nimen; aiemmin ne saivat usein kaikki saman."},
+    )),
     # 0.1.1.034 — EIN Eintrag, INHALT VOM INHABER: abgenommen 22.10.2026 17:08:00 (Befehlsbuch: "Alles klar passt"), Anlass
     # 16:58:29 (Priorisierung je Kamera; der Umbau des Disponenten bleibt ungenannt). Stufennamen je Sprache wie in
     # core/texte/<sprache>.py (kameras.prio.*); Wortlaut in backups/release_0_1_1_034/whatsnew_changelog_freigegeben.md.

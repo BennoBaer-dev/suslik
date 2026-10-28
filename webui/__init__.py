@@ -45,9 +45,23 @@ _STATIK_STEMPEL = _statik_stempel()
 # Schluessel; verifyd.py uebergibt an layout() dieselben nav.*-Literale).
 def _nav():
     return [
+        # OA1 (Eigentuemer 24.10.2026, Bauplan analysen/bauplan_offen_ausblenden.md):
+        # der Unterreiter "To label" (/offen) ist aus dem Menue heraus. Beim
+        # Feldtester rechnete die Seite je Aufruf rund 18 Minuten im Dienst weiter,
+        # obwohl der Proxy nach 31 s abbrach. Seit Bauplan analysen/bauplan_benennen.md,
+        # Stufe BN3 ist die Seite selbst weg: /offen und /review leiten auf /unbekannte
+        # um, die Seite „Unbekannte“ zum Benennen (Faces, in Easy und Expert); die
+        # Texte stehen in archiv/unbekannte_offen_alt/.
+        # MU1 (Bauplan analysen/bauplan_menue_unbekannte.md): „Unbekannte“ steht
+        # zusaetzlich hier als dritter Unterreiter nach Events, wo bis 0.1.1.037
+        # /offen stand; der Eintrag unter Faces bleibt. Grund: der Eigentuemer
+        # suchte die Seite auf Prod neben Events (26.10.2026 14:13:34 „Der
+        # Menuepunkt Unbekannte soll wieder unter Aktivitaet rechts neben Events
+        # stehen“, 14:14:50 „Pack es einfach an beiden jetzt hin“). Auf
+        # /unbekannte leuchtet oben Aktivitaet, der erste passende Bereich.
         (t("nav.bereich.activity"), [("/heute", t("nav.heute")),
                                      ("/ereignisse", t("nav.ereignisse")),
-                                     ("/offen", t("nav.offen"))]),
+                                     ("/unbekannte", t("nav.unbekannte"))]),
         # .220 (User 16.08., Mockup-Abnahme): der Gesichts-Bereich "eingedampft" —
         # People + Face-Learn verschmelzen zu FACES mit Kachel-Startseite
         # (Avatar-Leiste, gefuehrter Lern-Fluss). Easy sieht nur die Startseite,
@@ -192,7 +206,10 @@ NUR_EXPERT_BLAETTER = {"/kameras", "/benachrichtigungen", "/kette", "/konfigurat
                        # die Kachel-Knoepfe der Startseite dorthin. .254:
                        # /lernlauf ist RAUS aus der Menge (eigener Learn-
                        # Hauptbereich, sein Unterreiter darf in Easy leuchten).
-                       "/gesichter", "/unbekannte", "/lernen",
+                       # BN3 (Bauplan analysen/bauplan_benennen.md, Entscheid 6
+                       # im Konzept): /unbekannte ist RAUS, die Seite zum
+                       # Benennen steht in Easy und Expert.
+                       "/gesichter", "/lernen",
                        "/lernlauf/anker"}   # .273: /qualitaet ist EASY (Bestands-QS-Knopf)
 
 # Sprach-Stufe 1, Deckungs-Vertrag Mischzustand (konzept_sprache.md §4.1):

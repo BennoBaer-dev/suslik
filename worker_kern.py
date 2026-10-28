@@ -1652,7 +1652,9 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
                           "front": None, "sharp": None, "fd": None, "kand": False,
                           "e": None, "t": None, "p": None, "norm": None, "sc": None,
                           "abbruch": None, "_bb": bb, "_box": d[:4], "_kp": kp,
-                          "_emb": None, "_winkel": None})
+                          "_emb": None, "_winkel": None,
+                          # NZ1 (analysen/bauplan_namenszuordnung.md): die Pixel-Lage ueberlebt das Loeschen unten
+                          "bb": bb})
         zaehler["gesichter"] += len(faces)
         # --- fd-Stufe (v8): front (1k3d68) und sharp (Laplace) fuer JEDE Detektion, in
         #     EINEM Aufruf je Portion. SIE LAEUFT VOR DER K-LATTE (Nachzug 13.09., Users

@@ -214,6 +214,14 @@ def _gt_offen(gtmap, eid):
     return eid not in gtmap
 
 
+def mit_gesicht(r):
+    """DIE eine Regel „mit Gesicht“ fuer eine Akten-Zeile: die geprueften Gesichter (faces_geprueft, Fehldetektionen
+    herausgefiltert, #42 Teil B) sind mehr als null; fehlt das Feld (alte Zeile), gilt faces.
+    -> bool. Leser: szenarien_des_tages und die Randspalte der Seite Today (Bauplan analysen/bauplan_today_statistik.md,
+    Stufe TS1); die Systemstatistik in verifyd behaelt ihren eigenen Ausdruck (Bauplan, Abschnitt „Nicht Teil“)."""
+    return r.get("faces_geprueft", r.get("faces", 0)) > 0
+
+
 def pass_key(by_h, eid, cfg, gtmap=None, now=None):
     """Der Szenario-Schluessel EINES Events: die Startzeit des DURCHGANGS, zu
     dem es gehoert, in ganzen Sekunden ("%d") — dieselbe Schreibweise, die die
@@ -527,7 +535,7 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
                         d["letzt_t"], d["letzt_cam"] = xt, cam
                     cl["erk"][p] += 1
                     cl["eid"].setdefault(p, x.get("eid"))
-            elif (x.get("faces_geprueft", x.get("faces", 0)) > 0
+            elif (mit_gesicht(x)
                   or gt_hat_fremd(gtmap, x["eid"])) and \
                     _gt_offen(gtmap, x["eid"]):   # #42 Teil B: gefilterte Zahl; F2: Label-KLASSE
                 # entscheidet; ein User-'Fremd'-Label haelt das Event auch dann sichtbar,

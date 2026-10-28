@@ -1080,7 +1080,7 @@ class EngineTor:
 
 
 # ----------------------------------------------------------------- Results-Kontrakt
-def detektionen_bauen(zeilen, schritt):
+def detektionen_bauen(zeilen, schritt, bild=None):
     """Die `detektionen`-Liste der Akte (analyze.py:943-953).
 
     VOLLSTAENDIG, W1-M1: jede Roh-Detektion, in derselben Reihenfolge wie gerechnet.
@@ -1097,7 +1097,15 @@ def detektionen_bauen(zeilen, schritt):
     die Raster-Punkte der Grundrate gelegt hat (Bildnummer kein Vielfaches von `schritt`), traegt
     `"grundrate": false`. Die Szenario-Zaehlung (szenarien.gesicht_gut_zaehlen) laesst sie aus und
     zaehlt damit genau die Bilder, die ohne Tuer geprueft worden waeren. Raster-Punkte bleiben ohne Feld,
-    auch wenn die Tuer-Kette sie lieferte; Bestandszeilen ohne das Feld gelten als Grundrate."""
+    auch wenn die Tuer-Kette sie lieferte; Bestandszeilen ohne das Feld gelten als Grundrate.
+
+    LAGE (Bauplan analysen/bauplan_namenszuordnung.md, Stufe NZ1): hinter den bestehenden Feldern traegt
+    jede Detektion die Bildnummer `i`; eine eigene Zeitangabe traegt sie nicht, die genaue Clip-Zeit ist
+    `i / fps` mit der Bildrate der Akte (Feld `bild`). Mit `bild` (Breite und Hoehe
+    des Clips, aus event_lauf) und einer Kernzeile mit `bb` (event_rechnen setzt es immer; Kernzeilen von
+    Attrappen ohne das Feld bleiben ohne Rahmen) dazu `rahmen`, die Pixel-Lage als links, oben, Breite,
+    Hoehe durch die Bildgroesse, vier Nachkommastellen, ohne Klemmen (am rechten oder unteren Rand kann
+    ein Wert knapp ueber 1 liegen, so wie gemessen). Leser alter Akten greifen per .get() zu."""
     aus = []
     for f in zeilen:
         d = {"t": round(f["zeit_s"], 1), "bw": f["bw"], "bh": f["bh"],
@@ -1111,6 +1119,12 @@ def detektionen_bauen(zeilen, schritt):
             d["guete_e"] = None if f["e"] is None else round(float(f["e"]), 3)
             d["guete_t"] = None if f["t"] is None else round(float(f["t"]), 3)
             d["pkopf"] = None if f["p"] is None else round(float(f["p"]), 3)
+        d["i"] = f["i"]
+        bb = f.get("bb")                                  # NZ1: additives Kernfeld, Leser per .get()
+        if bild is not None and bb is not None:
+            x1, y1, x2, y2 = bb
+            W, H = bild["breite"], bild["hoehe"]
+            d["rahmen"] = [round(x1 / W, 4), round(y1 / H, 4), round((x2 - x1) / W, 4), round((y2 - y1) / H, 4)]
         aus.append(d)
     return aus
 
@@ -1152,16 +1166,20 @@ def persons_fuer_akte(persons_voll, idx_karte):
 
 
 def results_zeile(label, eid, zeilen, persons, wache, lat, stat, profil,
-                  samples_moeglich=None, sample_deckel=0, stapel=None):
+                  samples_moeglich=None, sample_deckel=0, stapel=None, bild=None):
     """EINE results.jsonl-Zeile, Feld fuer Feld und in der REIHENFOLGE von
     analyze.py:940-1003. Die Reihenfolge ist kein Selbstzweck: die Akte wird
     gelesen, verglichen und von Menschen begutachtet, und ein Diff gegen Bestands-
-    zeilen soll auf Feld-Unterschiede zeigen statt auf Umsortierung."""
+    zeilen soll auf Feld-Unterschiede zeigen statt auf Umsortierung.
+
+    `bild` (Bauplan analysen/bauplan_namenszuordnung.md, Stufe NZ1): Breite, Hoehe und Bildrate des Clips
+    aus event_lauf; die Zeile traegt es einmal als letztes Feld, und detektionen_bauen rechnet daraus den
+    Rahmen je Detektion. Ohne `bild` (Direktaufrufe ohne Clip) fehlen beide."""
     fd_n = sum(1 for f in zeilen if f["fd"])
     z = {"label": label, "source": eid, "faces": len(zeilen),
          "faces_geprueft": len(zeilen) - fd_n,
          "max_bw": max((f["bw"] for f in zeilen if not f["fd"]), default=0),
-         "detektionen": detektionen_bauen(zeilen, wache.step),
+         "detektionen": detektionen_bauen(zeilen, wache.step, bild),
          "frames_gelesen": wache.gelesen, "frames_soll": wache.soll}
     # .540 DAS ZAHLENPAAR DES SAMPLE-BUDGETS. Bis hier stand die WIRKLICHE Zahl
     # abgetasteter Frames in KEINER Akte — nur im Klartext-Kopf der analyze.log
@@ -1205,6 +1223,8 @@ def results_zeile(label, eid, zeilen, persons, wache, lat, stat, profil,
     if stapel is not None:
         z["stapel"] = {"namen": stapel["namen"], "stimmen": stapel["stimmen"],
                        "je_name": stapel["je_name"]}
+    if bild is not None:
+        z["bild"] = bild                                  # NZ1: Bildgroesse und Bildrate einmal je Akte
     return z
 
 
@@ -4762,7 +4782,7 @@ class Dienst:
         zeile = results_zeile(label, eid, zeilen, persons_fuer_akte(persons_voll, idx_karte),
                               wache, lat, stat, profil, samples_moeglich=_s_moegl,
                               sample_deckel=(_deckel if (_gekappt or wache.geplant is None) else 0),
-                              stapel=stapel)
+                              stapel=stapel, bild={"breite": W, "hoehe": H, "fps": fps})
         # pro Clip SOFORT persistieren, geflusht (analyze.py:925-1004)
         with open(results_pfad, "a", encoding="utf-8") as rf:
             rf.write(json.dumps(zeile, default=float, ensure_ascii=False) + "\n")

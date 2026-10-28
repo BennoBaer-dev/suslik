@@ -302,8 +302,10 @@ nav .live .d { width: 7px; height: 7px; border-radius: 50%; background: var(--ok
 .ts-lab { font-size: 12px; color: var(--faint); }
 .ts-val { font-size: 28px; font-weight: 600; line-height: 1.1; }
 .ts-meta { font-size: 12px; color: var(--dim); margin-top: 4px; }
-.ts-zeile { display: flex; justify-content: space-between; font-size: 14px; padding: 2px 0; }
+.ts-zeile { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; padding: 2px 0; }
 .ts-zeile span:first-child { color: var(--dim); }
+/* Stufe TS3 (Bauplan analysen/bauplan_today_statistik.md): der Wert einer Zeile der Randspalte bricht nie um. */
+.ts-zeile .num { white-space: nowrap; }
 
 .kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 0 0 24px; }
 .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
@@ -688,6 +690,18 @@ a.pchip:hover, a.badge.warn:hover { filter: brightness(1.15); }
 .pass-kachel{display:flex;flex-direction:column;align-items:center;gap:2px}
 .pass-kachel .lb-status{font-size:11px;max-width:140px;text-align:center}
 .pass-knopf-klein{padding:1px 7px;font-size:11px;font-weight:400;gap:0}
+/* BN3 (Bauplan analysen/bauplan_benennen.md): auf der Seite „Unbekannte“ traegt die Kachel ein Bild mit Haken
+   (ubw aus auftritte.wahl_html) statt des Links; Groesse wie .pass-thumb, Haken oben links, Zeile darunter. */
+.pass-kachel .ubw{position:relative;display:block;cursor:pointer}
+.pass-kachel .ubw input{position:absolute;top:3px;left:3px;z-index:2;margin:0}
+.pass-kachel .ubw img{width:56px;height:56px;object-fit:cover;border-radius:6px;display:block}
+.pass-kachel .ubw input:checked + img{outline:2px solid var(--accent);outline-offset:2px}
+.pass-kachel > small{font-size:11px;color:var(--dim)}
+/* FU1 (Bauplan analysen/bauplan_fix_unbekannte.md): das Namensfeld der Karte zeigt seinen Platzhalter
+   (benennen.attr_name) in allen sechs Sprachen ganz, auf schmalen Schirmen hoechstens die Breite der Zeile;
+   die knappe Zeile der ausgeblendeten Gruppen (Entscheid E3) traegt kleine Bilder. */
+input.bn-name{width:42ch;max-width:100%}
+.bn-ausgeblendet img{width:28px;height:28px;object-fit:cover;border-radius:4px;vertical-align:middle;margin-left:4px}
 .folge-mehr{display:inline}
 .folge-mehr summary{display:inline;cursor:pointer;list-style:none}
 .folge-mehr summary::-webkit-details-marker{display:none}

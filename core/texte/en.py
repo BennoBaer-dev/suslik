@@ -354,38 +354,8 @@ T = {
     # "Frigate" und "suslik" sind reine Produktnamen; die Kategorie-Labels
     # kommen aus webui.bausteine.KAT_LABELS (zentrale Quelle, eigene
     # Tranche); das Datumsformat %d.%m bleibt in der Route (B19-Stufe).
-    "ereignisliste.offen.titel": "Open cases to label ({n})",
-    "ereignisliste.offen.satz":
-        "Filled automatically: all events with faces that nobody confirmed "
-        "and that you haven't labeled yet. Ones with nobody recognized "
-        "nearby come first — those are the ones worth looking at. After "
-        "labeling, the card fades and disappears on the next load.",
-    # {score} kommt vorformatiert (:.2f) aus der Route (Format-Regel §8.8).
-    "ereignisliste.offen.frigate_mit": "Frigate: {label} {score}",
-    "ereignisliste.offen.frigate_ohne": "Frigate: —",
-    # Stufe 0 = byte-treu: das Original sagt auch bei 1 "faces".
-    "ereignisliste.offen.zeile_faces": "{n} faces · best: {beste}",
-    "ereignisliste.offen.link_video": "Video",
-    "ereignisliste.offen.kontext_erkannt":
-        "recognized in the same time window: {wer}",
-    "ereignisliste.offen.kontext_fehlt": "no confirmed recognition nearby",
     "ereignisliste.blaettern.neuer": "← newer",
     "ereignisliste.blaettern.aelter": "older →",
-    "ereignisliste.offen.blaettern_stand": "Page {seite}/{max} ({n} open)",
-    # echter Plural schon im Original — t_n loest .eins/.viele auf.
-    "ereignisliste.offen.schwach_versteckt.eins":
-        "{n} weak-face event hidden — likely no usable face (nothing "
-        "confirmed nearby either).",
-    "ereignisliste.offen.schwach_versteckt.viele":
-        "{n} weak-face events hidden — likely no usable face (nothing "
-        "confirmed nearby either).",
-    "ereignisliste.offen.schwach_zeigen": "show them",
-    "ereignisliste.offen.schwach_alle":
-        "showing weak-face events too —",
-    "ereignisliste.offen.schwach_zurueck": "back to the worthwhile ones",
-    "ereignisliste.offen.leer_titel": "Nothing open — everything labeled.",
-    "ereignisliste.offen.leer_hinweis":
-        "New unconfirmed events with faces appear here automatically.",
     "ereignisliste.titel": "Events",
     "ereignisliste.filter.alle_areas": "all areas",
     "ereignisliste.filter.alle_kameras": "all cameras",
@@ -1690,7 +1660,6 @@ T = {
     "nav.bereich.system": "System",
     "nav.heute": "Today",
     "nav.ereignisse": "Events",
-    "nav.offen": "To label",
     "nav.faces": "Faces",
     "nav.gesichter": "Known",
     "nav.unbekannte": "Unknown",
@@ -2162,58 +2131,62 @@ T = {
     "leer.kamera_unbekannt_hinweis":
         "Tiles come from Frigate's camera list and saved watchers only.",
     "unbekannte.name": "Unknown {nummer}",
-    "unbekannte.meta_zeit": " appearances · {zeit}",
-    "unbekannte.zeit_unbekannt": "time unknown",
-    "unbekannte.mehr_bilder": "+{n} more pictures in this group",
-    "unbekannte.knopf_reaktivieren": "reactivate",
-    "unbekannte.attr_name": "Name (new or existing)",
-    "unbekannte.attr_wahl": "Pick this group for merging",
-    "unbekannte.knopf_zuweisen": "Assign person",
-    "unbekannte.knopf_teil": "Assign the {n} ticked",
-    "unbekannte.knopf_ignorieren": "Ignore",
-    "unbekannte.knopf_objekt": "No person",
-    "unbekannte.knopf_person": "Is a person",
-    "unbekannte.knopf_bulkmerge": "Merge the {n} picked groups",
-    "unbekannte.knopf_mehr": "Show {n} more groups",
-    "unbekannte.titel": "Unknown",
-    "unbekannte.anker": "{offen} of {gesamt} groups still waiting for you",
-    "unbekannte.sort_label": "Sort",
-    "unbekannte.sort_bilder": "most pictures",
-    "unbekannte.sort_neu": "newest",
-    "unbekannte.filter_label": "Show",
-    "unbekannte.f_offen": "open",
-    "unbekannte.f_wieder": "recurring",
-    "unbekannte.f_heute": "new today",
-    "unbekannte.f_vorschlag": "merge suggested",
-    "unbekannte.f_besucher": "muted",
-    "unbekannte.f_objekt": "not people",
-    "unbekannte.kopf_satz":
-        "Faces with no known match, grouped into recurring identities.",
-    # Kopf-Erklaerung an den <b>-Grenzen gesplittet; die Fett-Teile sind
-    # die knopf_*-Schluessel selbst (eine Quelle, kein Drift).
-    "unbekannte.kopf_satz_zuweisen":
-        " links a tile to a person (new or existing, type the name),",
-    "unbekannte.kopf_satz_ignorieren": " mutes a known stranger (no alert).",
-    "unbekannte.kopf_satz_auto":
-        "New faces are collected automatically after each pass.",
-    "unbekannte.knopf_reorg": "Reorganize now",
-    "unbekannte.hinweis_reorg":
-        "re-check the pool and rebuild the clusters — collection itself "
-        "runs automatically (1-2 min)",
-    "unbekannte.satz_objekte":
-        "Groups whose images are near-identical to each other and unlike "
-        "any person — typically a wheel arch, pavement or light pattern "
-        "the detector keeps mistaking for a face. They are frozen: new "
-        "finds are never added here (they form fresh, visible clusters "
-        "and get re-checked by the same rule) — the groups stay listed so "
-        "nothing is hidden. Marked by hand or found automatically; "
-        '"Is a person" puts one back.',
-    "unbekannte.leer": "No unknown faces collected yet.",
-    "unbekannte.leer_hinweis":
-        "Identities appear here after the next unknown visitor.",
-    "unbekannte.leer_filter": "Nothing in this view.",
-    "unbekannte.leer_filter_hinweis":
-        "Other groups are waiting under a different filter above.",
+    # ---- routes/unbekannte: Seite „Unbekannte“ zum Benennen (Bauplan analysen/bauplan_benennen.md, Stufe BN3) ---
+    # Die alten Texte unbekannte.* (ausser unbekannte.name), ereignisliste.offen.* und nav.offen stehen mit Wortlaut
+    # in archiv/unbekannte_offen_alt/texte_entfernt.json; die von Stufe FU1 (Bauplan analysen/bauplan_fix_unbekannte.md)
+    # entfernten in archiv/fix_unbekannte_fu1/texte_entfernt.json.
+    "benennen.titel": "Unknown faces to name",
+    "benennen.satz":
+        "Faces suslik saw in the last {tage} days and could not recognize, grouped the way suslik keeps them. Tick the pictures of one person and give them a name — they become references, and suslik recognizes the person from then on.",
+    "benennen.satz_expert":
+        "Shown are the best pictures from the most recent {ereignisse} events of a group, by time. Only pictures whose stored feature norm reaches the bar of their camera (the higher of the catalogue bar and the recognition bar) are shown; a group without such a picture is left out and counted below the cards.",
+    "benennen.reiter.aehnlich": "Looks like a known person ({n})",
+    "benennen.reiter.unbekannt": "Unknown ({n})",
+    "benennen.reiter.nicht_lernbar": "Not good enough to learn ({n})",
+    "benennen.blaettern.neuer": "← newer",
+    "benennen.blaettern.aelter": "older →",
+    "benennen.blaettern.stand": "Page {nr} of {seiten}",
+    "benennen.leer": "Everything named for the last {tage} days.",
+    "benennen.leer_hinweis": "New unknown faces appear here after the next pass.",
+    "benennen.leer_reiter": "Nothing in this tab.",
+    "benennen.leer_reiter_hinweis": "The other tab has open groups.",
+    "benennen.leer_ausgeblendet.eins": "Nothing to name: {n} group has only pictures below the bar.",
+    "benennen.leer_ausgeblendet.viele": "Nothing to name: {n} groups have only pictures below the bar.",
+    "benennen.teilmenge":
+        "Not everything could be read — groups or pictures may be missing on this page. Details in the log.",
+    "benennen.ziel_weg": "The group you came from is no longer open here (named, ignored, or older than {tage} days).",
+    "benennen.kopf.bilder.eins": "{n} picture",
+    "benennen.kopf.bilder.viele": "{n} pictures",
+    "benennen.kopf.zuletzt": "last seen {zeit}, {kamera}",
+    "benennen.vorschlag": "Suggestion: {person}",
+    "benennen.kein_vorschlag": "No suggestion — perhaps someone suslik does not know yet.",
+    "benennen.nicht_lernbar.hinweis": "suslik saw these faces, but their pictures are too weak to learn from.",
+    "benennen.nicht_lernbar.grund": "Quality {wert} · needs {latte}",
+    "benennen.nicht_lernbar.ohne_wert": "No measurement",
+    "benennen.nach_zeit": "Some pictures are ordered by time only (the ranking of their event is missing).",
+    "benennen.knopf.alle": "Tick all",
+    "benennen.knopf.sind": "Ticked ones are {person}",
+    "benennen.attr_name": "name (new or existing person)",
+    "benennen.knopf.name": "Ticked ones are this person",
+    "benennen.knopf.nicht": "Not {person}",
+    "benennen.knopf.nicht_auswahl": "Ticked ones are not {person}",
+    "benennen.knopf.ignorieren": "Ignore group",
+    "benennen.knopf.objekt": "No face",
+    "benennen.frage.nicht":
+        "Mark this whole group as not {person}? This affects all its pictures, also the ones not shown.",
+    "benennen.frage.ignorieren":
+        "Ignore this whole group as a known stranger? This affects all its pictures, also the ones not shown, and it no longer shows up here.",
+    "benennen.frage.objekt":
+        "Mark this whole group as no face (a bush, a reflection, a parked car)? This affects all its pictures, also the ones not shown.",
+    "benennen.reihe.gruppe": "Pictures of this group, newest first",
+    "benennen.reihe.vergleich": "This is how suslik knows {person}",
+    "benennen.mehr_bilder": "+{n} more pictures in this group",
+    "benennen.benannt": "named: {person}",
+    "benennen.bild.norm": "norm {norm} · bar {latte}",
+    "benennen.js.keine": "Tick at least one picture.",
+    "benennen.js.name": "Enter a name.",
+    "benennen.js.laeuft": "working…",
+    "benennen.js.fehler": "error — please try again",
     "livealerts.link_video": "&#9654; video {n}",
     "livealerts.person_unbekannt": "unknown",
     "livealerts.trigger.eins": "{n} trigger",
@@ -3211,6 +3184,33 @@ T = {
     "antwort.bruecke_nichts":
         "nothing to take — no helpful new picture in this pass (that is "
         "fine)",
+    # BN1 (bauplan_benennen.md, O807): at least one event of the check could
+    # not be fetched (reason from fertig.jsonl) — never "nothing to take".
+    # Alone when nothing else came back, as a tail behind a picked/borderline
+    # sentence otherwise.
+    "antwort.bruecke_nicht_abgeholt":
+        "{k} of {n} event(s) could not be fetched ({grund}) — click again "
+        "to try them once more",
+    "antwort.bruecke_nicht_abgeholt_zusatz":
+        " · {k} of {n} event(s) could not be fetched ({grund}) — click "
+        "again to try them once more",
+    # BN2 (bauplan_benennen.md): POST /benennen_zuweisen of the Unknown page — the selection
+    # must not be empty, only pictures of the group with a stored feature norm at or above the
+    # bar are taken; the reasons count the refused pictures (core/unbekanntpool.BENENN_GRUENDE).
+    "antwort.benennen_leer":
+        "nothing named — tick at least one picture of this group",
+    "antwort.benennen_keins":
+        "nothing named — none of the {n} ticked picture(s) can be taken: {gruende}",
+    "antwort.benennen_abgelehnt":
+        " · {n} picture(s) not taken: {gruende}",
+    "antwort.benennen_grund_fremd":
+        "{n} not in this group",
+    "antwort.benennen_grund_altformat":
+        "{n} stored before the new face storage",
+    "antwort.benennen_grund_ohne_norm":
+        "{n} without a stored feature norm",
+    "antwort.benennen_grund_unter_latte":
+        "{n} with a feature norm below the bar",
     "antwort.bruecke_undo": "{n} picture(s) removed again",
     # .521 mini harvest: nothing taken, and the run is transient — its
     # pictures are gone right away and the next click harvests again.
@@ -3808,10 +3808,12 @@ between.</p>""",
     "heute.pass.live_title": "a live watcher reported a name during this pass",
     "heute.rand.personen": "People",
     "heute.rand.personen_title": "people with at least one confirmation on this day — worker judgments and live-watcher names",
+    "heute.rand.passes": "Passes",
     "heute.rand.passes_title": "passes: events grouped by time and place; motion-only passes are not counted",
+    "heute.rand.events": "Events analysed",
     "heute.rand.events_title": "events analysed on this day, cameras of the current view",
-    "heute.rand.unmatched": "not matched inside passes",
-    "heute.rand.unmatched_title": "events with a face that matched no known person, inside passes where someone was recognized — normally the same people",
+    "heute.rand.gesicht": "Detection rate",
+    "heute.rand.gesicht_title": "{n} of {m} analysed events with at least one checked face (false detections filtered out), cameras of the current view",
     "heute.rand.unbek_title": "unknown identities of the pool with support on this day; without pool data: passes with nobody recognized",
     "heute.aehnlich.titel": "Probably recognized",
     "heute.aehnlich.cnt.eins": "{n} known person, not confirmed · sorted by last seen",

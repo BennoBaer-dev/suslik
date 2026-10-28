@@ -13,8 +13,11 @@ DIE SCHLANGE: ein Stueck je Tag unter state/, Name aus core.harvest_set.QUEUE_FI
 Dienst haengt nach der Buchung eines Ereignisses mit Unbekannt-Gruppen eine Zeile an (schlange_anhaengen): Zeit,
 Ereignis, Ordner, Zahl der Gruppen, Kamera, Start, Frigate-Ende oder Dauer, max_bw, Nachhol-Merkmal und die im Fenster
 erkannten Namen. Kein Umbenennen, kein Packen. Der Verbraucher liest die Stuecke nach Datum, je Stueck ab seinem
-Lesestand (Zeile und Byte); ein Stueck wird erst archiviert (nach state/archiv/unbekannt_schlange/), wenn es ganz
-gelesen und aelter als aufbewahrung_tage ist. Nichts geht verloren (ED011).
+Lesestand (Zeile und Byte); ein Stueck geht erst in den Papierkorb (Tagesordner aus core.refquelle.trash_dir, unter
+seinem Pfad relativ zum Datenordner), wenn es ganz gelesen und aelter als aufbewahrung_tage ist; ebenso Stuecke, die
+frueher nach state/archiv/unbekannt_schlange/ (ARCHIV_ORDNER) archiviert wurden und aelter sind (Bauplan
+analysen/bauplan_datenordner_klein.md Stufe DK3 Punkt 3). Der Papierkorb wird nach seiner Frist geleert; ein nicht ganz
+gelesenes Stueck bleibt, nichts Ungelesenes geht verloren (ED011).
 
 DER ZUSTAND state/unbekannt_verbraucher.json (core/atomar, ED011): Lesestand je Stueck, die gebuchten Ereignisse je
 Kette und Tag (fuer den Durchgang) mit den gemeldeten Paaren Durchgang und Identitaet, die faelligen Meldungen mit
@@ -25,7 +28,9 @@ harvest_set.event_unknown; zuerst loest eine Wiederholungsanalyse desselben Erei
 Laufs, die nicht mehr im Stapel stehen, und verwirft deren Saetze (W6); dann die Deckung je Gruppe; dann die
 Schreibfolge Bindungen im Katalog, Identitaetszeile (anlernen._speichere_unbekannte), Zustand mit Lesestand und
 Meldungen (W21, W25). Vor dem ersten Stapel raeumt der Verbraucher Bindungen nach, deren Identitaet fehlt (Abbruch
-zwischen Bindung und Identitaetszeile).
+zwischen Bindung und Identitaetszeile), nur bei vollstaendig gelesener Identitaetsdatei (Bauplan
+analysen/bauplan_datenordner_klein.md DK2 Punkt 3, O896); nach einem Lesefehler loest er keine Bindung, der Stapel
+wartet laut und die naechste Runde raeumt erneut.
 
 DECKUNG (deckung, reine Funktion): Kosinus jedes Gesichts der Gruppe zu jedem Mitglied gleichen Modells, je Identitaet
 das naechste Mitglied; ab unbekannt_latte haengt die Gruppe an, zuerst an eine Identitaet des offenen Durchgangs, dann
@@ -81,8 +86,14 @@ EHRLICHE GRENZEN:
   - Die Frist an pool_lock ist ein Versuch im Takt SPERRE_TAKT_S an derselben Dateisperre wie anlernen.pool_lock.
   - Der Altbestand bleibt im Speicher, bis Pool- oder Identitaetsdatei sich aendern; eine Statusaenderung seiner Saetze
     im Katalog allein liest ihn nicht neu.
-  - Eine unlesbare Zeile der Identitaetsdatei faellt beim Ersetzen der Datei weg, wie bei den anderen Schreibern (der
-    Aufraeum-Schritt schreibt dann nicht, er meldet den Lesefehler).
+  - Faellige Meldungen, Nachraeumen, Anlegen der Identitaetszeilen und der Aufraeum-Schritt lesen die Identitaetsdatei mit
+    Lesekontrolle (_identitaeten_zeilen: nicht lesbar oder eine Zeile verschluckt ist ein Lesefehler, eine fehlende Datei
+    ein leerer Bestand; Bauplan analysen/bauplan_datenordner_klein.md DK2 Punkt 3, O887, O896, O897). Nach einem
+    Lesefehler gehen faellige Meldungen fehlender Identitaeten raus (ERROR-Zeile); Nachraeumen und Anlegen schreiben
+    nichts, der Stapel wartet laut (ERROR-Zeile, fehler der Runde, Lesestand bleibt), schon gesetzte Bindungen des Stapels
+    bindet die Wiederholung um; der Aufraeum-Schritt schreibt nicht und meldet den Lesefehler. Eine dauerhaft unlesbare
+    Zeile haelt so die Schlange an, bis die Datei repariert ist. Schreiber in anlernen, die ueber lade_unbekannte lesen,
+    lassen eine unlesbare Zeile beim Ersetzen der Datei weiter fallen.
   - Eine wegen des Merkmals fallengelassene Meldung kommt im selben Durchgang nicht wieder, auch wenn das Merkmal danach
     wegfaellt (Bauplan analysen/bauplan_aehnlich.md, W3 V9).
   - Sammelbecken (AE6): ein neues Fremder-Urteil wirkt erst beim naechsten Aufraeum-Schritt (die Wache sieht die
@@ -230,23 +241,46 @@ def offene_zeilen(cfg, z):
 
 
 def stuecke_raeumen(cfg, z, jetzt):
-    """Schlangen-Stuecke archivieren, die ganz gelesen und aelter als aufbewahrung_tage sind (W17); nichts wird geloescht,
-    der Lesestand vergisst nur archivierte Stuecke. -> Liste der archivierten Tage"""
+    """Schlangen-Stuecke, die ganz gelesen und aelter als aufbewahrung_tage sind (W17), und archivierte Stuecke aelter
+    als die Frist in den Papierkorb, unter ihrem Pfad relativ zum Datenordner (Kopf, DK3 Punkt 3); der Lesestand vergisst
+    nur verschobene Stuecke. -> Liste der verschobenen Tage (Schlange, dann Archiv)"""
+    from core import refquelle as _rq                   # noqa: PLC0415
+    dd = _wert(cfg, "data_dir")
     grenze = tag_von(jetzt - float(_wert(cfg, "aufbewahrung_tage")) * 86400)
-    ziel = os.path.join(_wert(cfg, "data_dir"), ARCHIV_ORDNER)
+    tagesordner = _rq.trash_dir(cfg, jetzt)[1]
+
+    def in_den_korb(pfad):
+        ziel = os.path.join(tagesordner, os.path.relpath(pfad, dd))
+        os.makedirs(os.path.dirname(ziel), exist_ok=True)
+        basis, n = ziel, 1
+        while os.path.lexists(ziel):                    # derselbe Name am selben Tag zweimal: nie ueberschreiben
+            n += 1
+            ziel = f"{basis}.{n}"
+        os.rename(pfad, ziel)
     aus = []
     for tag in stuecke(cfg):
         pfad, stand = stueck_pfad(cfg, tag), z["lesestand"].get(tag)
         if tag >= grenze or not stand or stand["byte"] != os.path.getsize(pfad):
             continue
-        os.makedirs(ziel, exist_ok=True)
-        os.rename(pfad, os.path.join(ziel, os.path.basename(pfad)))
+        in_den_korb(pfad)
         aus.append(tag)
+    archiv = os.path.join(dd, ARCHIV_ORDNER)
+    vor, nach = _hs.QUEUE_FILE.split("{tag}")
+    try:
+        namen = sorted(os.listdir(archiv))
+    except FileNotFoundError:
+        namen = []
+    for name in namen:
+        tag = name[len(vor):len(name) - len(nach)] if name.startswith(vor) and name.endswith(nach) else ""
+        if (re.fullmatch(r"\d{4}-\d{2}-\d{2}", tag) and tag < grenze
+                and os.path.isfile(os.path.join(archiv, name))):
+            in_den_korb(os.path.join(archiv, name))
+            aus.append(tag)
     da = set(stuecke(cfg))
     z["lesestand"] = {t: s for t, s in z["lesestand"].items() if t in da}
     if aus:
-        _log.info(f"unknown consumer: {len(aus)} fully read queue piece(s) older than the retention moved to "
-                  f"{ARCHIV_ORDNER} ({', '.join(aus)})")
+        _log.info(f"unknown consumer: {len(aus)} fully read or archived queue piece(s) older than the retention moved "
+                  f"to the trash, day folder {os.path.basename(tagesordner)} ({', '.join(aus)})")
     return aus
 
 
@@ -395,12 +429,22 @@ def meldung_vormerken(z, fach, durchgang, zeile, uid, gruppe, ident, jetzt, kare
     return "neu"
 
 
-def faellige_meldungen(z, idents, jetzt):
-    """Die faelligen Meldungen (faellig_ab erreicht); wurde die Identitaet in der Karenz besucher oder objekt oder traegt
-    sie beim Versand das Merkmal „ähnlich zu P“ (Bauplan analysen/bauplan_aehnlich.md Entscheid 15), faellt die Meldung aus
-    dem Zustand (INFO-Zeile). -> Liste der faelligen Meldungen (Kopien)"""
+def faellige_meldungen(z, idents, jetzt, lesefehler=None):
+    """Die faelligen Meldungen (faellig_ab erreicht); gibt es die Identitaet nicht mehr (aufgeloest, Bauplan
+    analysen/bauplan_datenordner_klein.md DK2 Punkt 3), wurde sie in der Karenz besucher oder objekt oder traegt sie beim
+    Versand das Merkmal „ähnlich zu P“ (Bauplan analysen/bauplan_aehnlich.md Entscheid 15), faellt die Meldung aus dem
+    Zustand (INFO-Zeile). Wegen fehlender Identitaet nur, wenn idents vollstaendig gelesen wurde (lesefehler None); sonst
+    nennt lesefehler den Grund, und die Meldung bleibt laut (ERROR-Zeile, DK2 Punkt 3 Nachtrag O887).
+    -> Liste der faelligen Meldungen (Kopien)"""
     aus, bleibt = [], []
     for m in z["faellig"]:
+        if m["uid"] not in idents and lesefehler is None:
+            _log.info(f"unknown consumer: notification for {m['uid']} ({m['eid']}) dropped — the identity no longer "
+                      "exists")
+            continue
+        if m["uid"] not in idents:
+            _log.error(f"unknown consumer: notification for {m['uid']} ({m['eid']}) kept although the identity is "
+                       f"missing — the identity file was not fully read ({lesefehler})")
         ident = idents.get(m["uid"]) or {}
         aehnlich = _aeh.merkmal_von(ident)
         if ident.get("status") == STATUS_BESUCHER or ident.get(MERKMAL_OBJEKT) or aehnlich:
@@ -517,7 +561,11 @@ class Verbraucher:
             out["archiviert"] = stuecke_raeumen(self.cfg, z, jetzt)
             if out["verarbeitet"] or (not erst and self.aufraeumen_faellig(jetzt)):   # Entscheid 17, vor den Meldungen
                 self._aufraeumen(z, jetzt)
-            out["meldungen"] = faellige_meldungen(z, self._identitaeten(), jetzt)
+            try:                                        # O887: Meldungen fallen nur bei vollstaendig gelesenem Bestand
+                idents, lesefehler = {u["id"]: u for u in self._identitaeten_zeilen() if u.get("id")}, None
+            except (OSError, ValueError) as e:          # laut in faellige_meldungen, je betroffene Meldung
+                idents, lesefehler = self._identitaeten(), f"{type(e).__name__}: {e}"
+            out["meldungen"] = faellige_meldungen(z, idents, jetzt, lesefehler)
             _zustand_schreiben(self.cfg, z)
             return out
 
@@ -734,10 +782,15 @@ class Verbraucher:
         return {u["id"]: u for u in _up._cluster_lesen(_wert(self.cfg, "data_dir")) if u.get("id")}
 
     def _nachraeumen(self):
-        """Bindungen, deren Identitaet fehlt, loesen (Abbruch zwischen Bindung und Identitaetszeile, W21).
-        -> Zahl der geloesten Saetze"""
+        """Bindungen, deren Identitaet fehlt, loesen (Abbruch zwischen Bindung und Identitaetszeile, W21); nur bei
+        vollstaendig gelesener Identitaetsdatei (Bauplan analysen/bauplan_datenordner_klein.md DK2 Punkt 3, O896).
+        -> Zahl der geloesten Saetze; Lesefehler: keine Bindung geloest, RuntimeError (der Stapel wartet laut)"""
         from core import refquelle as _rq               # noqa: PLC0415
-        ids = set(self._identitaeten())
+        try:
+            ids = {u.get("id") for u in self._identitaeten_zeilen()}
+        except (OSError, ValueError) as e:
+            raise RuntimeError(f"no orphaned binding released, the identity file was not fully read "
+                               f"({type(e).__name__}: {e})") from e
         waisen = [r for uid, ms in _rq.unknown_members(self.cfg).items() if uid not in ids for r, _e in ms]
         if not waisen:
             return 0
@@ -786,7 +839,10 @@ class Verbraucher:
 
     def _decken(self, gruppen, im_gang):
         """Die Deckung je Gruppe gegen die Matrix (zuerst der Durchgang, harte Regel je Stapel-Zeile); eine neue
-        Identitaet bekommt die naechste freie Nummer. -> Liste (uid, Gruppe, neu)"""
+        Identitaet bekommt ihre Nummer aus der gemeinsamen Vergabe core.unbekanntpool.next_group_id (nie wieder
+        vergeben, Bauplan analysen/bauplan_datenordner_klein.md DK2 Punkt 4; der Aufrufer haelt pool_lock).
+        -> Liste (uid, Gruppe, neu)"""
+        from core import unbekanntpool as _up           # noqa: PLC0415
         latte = float(_wert(self.cfg, "unbekannt_latte"))
         fp = self._fingerabdruecke([r for _i, g in gruppen for r in g["ref_ids"]])
         aus, verboten = [], {}
@@ -802,7 +858,7 @@ class Verbraucher:
                                 verboten.get(i, ()))
             neu = uid is None
             if neu:
-                uid = f"U{max([_uid_nummer(u) for u in self._m['uid'] + list(self._identitaeten())] + [0]) + 1}"
+                uid = _up.next_group_id(_wert(self.cfg, "data_dir"), self._m["uid"] + list(self._identitaeten()))
             verboten.setdefault(i, set()).add(uid)
             im_gang.add(uid)
             self._m["vek"] = np.concatenate([self._m["vek"], vek])
@@ -813,11 +869,15 @@ class Verbraucher:
 
     def _identitaeten_schreiben(self, zuordnung, zeile):
         """Identitaetszeilen anlegen oder erweitern (first_seen, last_seen; eine archivierte lebt wieder auf) und die Datei
-        ueber anlernen._speichere_unbekannte ersetzen (unter pool_lock, W25). -> {uid: Identitaet}"""
+        ueber anlernen._speichere_unbekannte ersetzen (unter pool_lock, W25); nur bei vollstaendig gelesener Datei (Bauplan
+        analysen/bauplan_datenordner_klein.md DK2 Punkt 3, O897).
+        -> {uid: Identitaet}; Lesefehler: Datei nicht geschrieben, RuntimeError (der Stapel wartet laut, W21)"""
         import anlernen                                 # noqa: PLC0415
-        from core import unbekanntpool as _up           # noqa: PLC0415
         start = float(zeile["start"])
-        liste = list(_up._cluster_lesen(_wert(self.cfg, "data_dir")))
+        try:
+            liste = self._identitaeten_zeilen()
+        except (OSError, ValueError) as e:
+            raise RuntimeError(f"identity file not written, it was not fully read ({type(e).__name__}: {e})") from e
         nach_id = {u.get("id"): u for u in liste}
         for uid, _g, _neu in zuordnung:
             u = nach_id.get(uid)

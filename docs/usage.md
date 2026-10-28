@@ -51,7 +51,9 @@ version that introduced the page — earlier days stay empty.
   look: nobody recognized with a serious face, or an alert went out (at most three). Inside,
   each camera line shows at most three names plus "+N", eight camera lines are visible and
   the rest folds behind "all N cameras". The side column counts People, Passes, Events
-  analysed, "not matched inside passes" and Unidentified — every number explains in its
+  analysed, the detection rate (the share of the analysed events with at least one face,
+  the count in its tooltip) and
+  Unidentified — every number explains in its
   tooltip what it counts. Live-watcher statistics live on the Live tab and in System stats.
   A scenario still in progress is shown live and finalizes once the walk ends.
 - **Events** — the flat event list with filters and paging, category badges, ground-truth

@@ -336,41 +336,8 @@ T = {
     "frigate.js.url_fehlt": "Frigate-URL eingeben",
     "frigate.js.fehler": "Fehler:",
     # ------------------------------------------- routes/ereignisliste ---
-    "ereignisliste.offen.titel": "Offene Fälle zum Benennen ({n})",
-    "ereignisliste.offen.satz":
-        "Füllt sich automatisch: alle Events mit Gesichtern, die "
-        "niemand bestätigt hat und die du noch nicht benannt hast. "
-        "Events ohne erkannte Person in der Nähe kommen zuerst — "
-        "die lohnen den Blick. Nach dem Benennen verblasst die Karte "
-        "und verschwindet beim nächsten Laden.",
-    "ereignisliste.offen.frigate_mit": "Frigate: {label} {score}",
-    "ereignisliste.offen.frigate_ohne": "Frigate: —",
-    "ereignisliste.offen.zeile_faces": "{n} Gesichter · bestes: {beste}",
-    "ereignisliste.offen.link_video": "Video",
-    "ereignisliste.offen.kontext_erkannt":
-        "im selben Zeitfenster erkannt: {wer}",
-    "ereignisliste.offen.kontext_fehlt":
-        "keine bestätigte Erkennung in der Nähe",
     "ereignisliste.blaettern.neuer": "← neuere",
     "ereignisliste.blaettern.aelter": "ältere →",
-    "ereignisliste.offen.blaettern_stand":
-        "Seite {seite}/{max} ({n} offen)",
-    "ereignisliste.offen.schwach_versteckt.eins":
-        "{n} Event mit schwachem Gesicht ausgeblendet — vermutlich kein "
-        "brauchbares Gesicht (in der Nähe auch nichts "
-        "bestätigt).",
-    "ereignisliste.offen.schwach_versteckt.viele":
-        "{n} Events mit schwachen Gesichtern ausgeblendet — vermutlich "
-        "kein brauchbares Gesicht (in der Nähe auch nichts "
-        "bestätigt).",
-    "ereignisliste.offen.schwach_zeigen": "anzeigen",
-    "ereignisliste.offen.schwach_alle":
-        "Events mit schwachen Gesichtern werden mit angezeigt —",
-    "ereignisliste.offen.schwach_zurueck": "zurück zu den lohnenden",
-    "ereignisliste.offen.leer_titel": "Nichts offen — alles benannt.",
-    "ereignisliste.offen.leer_hinweis":
-        "Neue unbestätigte Events mit Gesichtern erscheinen hier "
-        "automatisch.",
     "ereignisliste.titel": "Events",
     "ereignisliste.filter.alle_areas": "alle Bereiche",
     "ereignisliste.filter.alle_kameras": "alle Kameras",
@@ -1642,7 +1609,6 @@ T = {
     "nav.bereich.system": "System",
     "nav.heute": "Heute",
     "nav.ereignisse": "Events",
-    "nav.offen": "Zum Benennen",
     "nav.faces": "Gesichter",
     "nav.gesichter": "Bekannte Personen",
     "nav.unbekannte": "Unbekannte",
@@ -2116,60 +2082,64 @@ T = {
         "Kacheln kommen nur aus Frigates Kameraliste und von "
         "gespeicherten Wächtern.",
     "unbekannte.name": "Unbekannt {nummer}",
-    "unbekannte.meta_zeit": " Auftritte · {zeit}",
-    "unbekannte.zeit_unbekannt": "Zeit unbekannt",
-    "unbekannte.mehr_bilder": "+{n} weitere Bilder in dieser Gruppe",
-    "unbekannte.knopf_reaktivieren": "wieder aktivieren",
-    "unbekannte.attr_name": "Name (neu oder bestehend)",
-    "unbekannte.attr_wahl": "Diese Gruppe zum Zusammenführen auswählen",
-    "unbekannte.knopf_zuweisen": "Person zuweisen",
-    "unbekannte.knopf_teil": "Die {n} angehakten zuweisen",
-    "unbekannte.knopf_ignorieren": "Ignorieren",
-    "unbekannte.knopf_objekt": "Keine Person",
-    "unbekannte.knopf_person": "Ist eine Person",
-    "unbekannte.knopf_bulkmerge": "Die {n} gewählten Gruppen zusammenführen",
-    "unbekannte.knopf_mehr": "{n} weitere Gruppen zeigen",
-    "unbekannte.titel": "Unbekannte",
-    "unbekannte.anker": "{offen} von {gesamt} Gruppen warten noch",
-    "unbekannte.sort_label": "Sortierung",
-    "unbekannte.sort_bilder": "meiste Bilder",
-    "unbekannte.sort_neu": "neueste",
-    "unbekannte.filter_label": "Anzeige",
-    "unbekannte.f_offen": "offen",
-    "unbekannte.f_wieder": "wiederkehrend",
-    "unbekannte.f_heute": "heute neu",
-    "unbekannte.f_vorschlag": "Vorschlag vorhanden",
-    "unbekannte.f_besucher": "stumm",
-    "unbekannte.f_objekt": "keine Personen",
-    "unbekannte.kopf_satz":
-        "Gesichter ohne bekannten Treffer, gruppiert zu wiederkehrenden "
-        "Identitäten.",
-    "unbekannte.kopf_satz_zuweisen":
-        " verknüpft eine Kachel mit einer Person (neu oder bestehend, den "
-        "Namen eintippen),",
-    "unbekannte.kopf_satz_ignorieren":
-        " schaltet einen bekannten Fremden stumm (keine Meldung).",
-    "unbekannte.kopf_satz_auto":
-        "Neue Gesichter werden nach jedem Durchgang automatisch "
-        "gesammelt.",
-    "unbekannte.knopf_reorg": "Jetzt neu gruppieren",
-    "unbekannte.hinweis_reorg":
-        "prüft die gesammelten Gesichter noch einmal und baut die Gruppen "
-        "neu auf — das Sammeln selbst läuft automatisch (1–2 min)",
-    "unbekannte.satz_objekte":
-        "Gruppen, deren Bilder untereinander fast identisch sind und "
-        "keiner Person ähneln — typischerweise ein Radkasten, ein "
-        "Pflasterstein oder ein Lichtmuster, das der Detektor immer "
-        "wieder für ein Gesicht hält. Sie sind eingefroren: Neue Funde "
-        "landen nie hier (sie bilden frische, sichtbare Gruppen und "
-        "werden nach derselben Regel neu geprüft) — die Gruppen bleiben "
-        "gelistet, damit nichts versteckt wird. Von Hand markiert oder automatisch gefunden; \"Ist eine Person\" holt eine Gruppe zurück.",
-    "unbekannte.leer": "Noch keine unbekannten Gesichter gesammelt.",
-    "unbekannte.leer_hinweis":
-        "Identitäten erscheinen hier nach dem nächsten unbekannten "
-        "Besucher.",
-    "unbekannte.leer_filter": "In dieser Ansicht ist nichts.",
-    "unbekannte.leer_filter_hinweis": "Andere Gruppen warten oben unter einem anderen Filter.",
+    # ---- routes/unbekannte: Seite „Unbekannte“ zum Benennen (Bauplan analysen/bauplan_benennen.md, Stufe BN3) ---
+    # Die alten Texte unbekannte.* (ausser unbekannte.name), ereignisliste.offen.* und nav.offen stehen mit Wortlaut
+    # in archiv/unbekannte_offen_alt/texte_entfernt.json; die von Stufe FU1 (Bauplan analysen/bauplan_fix_unbekannte.md)
+    # entfernten in archiv/fix_unbekannte_fu1/texte_entfernt.json.
+    "benennen.titel": "Unbekannte Gesichter benennen",
+    "benennen.satz":
+        "Gesichter, die suslik in den letzten {tage} Tagen gesehen und nicht erkannt hat, so gruppiert, wie suslik sie führt. Hake die Bilder einer Person an und gib ihnen einen Namen — sie werden Referenzen, und suslik erkennt die Person von da an.",
+    "benennen.satz_expert":
+        "Gezeigt werden die besten Bilder aus den jüngsten {ereignisse} Ereignissen einer Gruppe, nach Zeit. Es erscheinen nur Bilder, deren gespeicherte Feature-Norm die Latte ihrer Kamera schafft (die höhere aus Katalog-Latte und Erkennen-Latte); eine Gruppe ohne ein solches Bild fehlt und wird unter den Karten gezählt.",
+    "benennen.reiter.aehnlich": "Ähnelt einer bekannten Person ({n})",
+    "benennen.reiter.unbekannt": "Unbekannt ({n})",
+    "benennen.reiter.nicht_lernbar": "Nicht gut genug zum Lernen ({n})",
+    "benennen.blaettern.neuer": "← neuer",
+    "benennen.blaettern.aelter": "älter →",
+    "benennen.blaettern.stand": "Seite {nr} von {seiten}",
+    "benennen.leer": "Alles benannt für die letzten {tage} Tage.",
+    "benennen.leer_hinweis": "Neue unbekannte Gesichter erscheinen hier nach dem nächsten Durchgang.",
+    "benennen.leer_reiter": "In diesem Reiter steht nichts.",
+    "benennen.leer_reiter_hinweis": "Im anderen Reiter warten offene Gruppen.",
+    "benennen.leer_ausgeblendet.eins": "Nichts zu benennen: {n} Gruppe hat nur Bilder unter der Latte.",
+    "benennen.leer_ausgeblendet.viele": "Nichts zu benennen: {n} Gruppen haben nur Bilder unter der Latte.",
+    "benennen.teilmenge":
+        "Nicht alles ließ sich lesen — auf dieser Seite können Gruppen oder Bilder fehlen. Einzelheiten im Log.",
+    "benennen.ziel_weg":
+        "Die Gruppe, von der du kommst, ist hier nicht mehr offen (benannt, ignoriert oder älter als {tage} Tage).",
+    "benennen.kopf.bilder.eins": "{n} Bild",
+    "benennen.kopf.bilder.viele": "{n} Bilder",
+    "benennen.kopf.zuletzt": "zuletzt {zeit}, {kamera}",
+    "benennen.vorschlag": "Vorschlag: {person}",
+    "benennen.kein_vorschlag": "Kein Vorschlag — vielleicht jemand, den suslik noch nicht kennt.",
+    "benennen.nicht_lernbar.hinweis":
+        "Diese Gesichter hat suslik gesehen, aber ihre Bilder sind zu schwach, um daraus zu lernen.",
+    "benennen.nicht_lernbar.grund": "Qualität {wert} · nötig {latte}",
+    "benennen.nicht_lernbar.ohne_wert": "Kein Messwert",
+    "benennen.nach_zeit": "Einige Bilder sind nur nach Zeit geordnet (die Rangfolge ihres Ereignisses fehlt).",
+    "benennen.knopf.alle": "Alle anhaken",
+    "benennen.knopf.sind": "Angehakte sind {person}",
+    "benennen.attr_name": "Name (neue oder bekannte Person)",
+    "benennen.knopf.name": "Angehakte sind diese Person",
+    "benennen.knopf.nicht": "Nicht {person}",
+    "benennen.knopf.nicht_auswahl": "Angehakte sind nicht {person}",
+    "benennen.knopf.ignorieren": "Gruppe ignorieren",
+    "benennen.knopf.objekt": "Kein Gesicht",
+    "benennen.frage.nicht":
+        "Diese ganze Gruppe als „nicht {person}“ markieren? Das betrifft alle ihre Bilder, auch die nicht gezeigten.",
+    "benennen.frage.ignorieren":
+        "Diese ganze Gruppe als bekannte fremde Person ignorieren? Das betrifft alle ihre Bilder, auch die nicht gezeigten, und sie erscheint hier nicht mehr.",
+    "benennen.frage.objekt":
+        "Diese ganze Gruppe als „kein Gesicht“ markieren (ein Busch, eine Spiegelung, ein parkendes Auto)? Das betrifft alle ihre Bilder, auch die nicht gezeigten.",
+    "benennen.reihe.gruppe": "Bilder dieser Gruppe, die neuesten zuerst",
+    "benennen.reihe.vergleich": "So kennt suslik {person}",
+    "benennen.mehr_bilder": "+{n} weitere Bilder in dieser Gruppe",
+    "benennen.benannt": "benannt: {person}",
+    "benennen.bild.norm": "Norm {norm} · Latte {latte}",
+    "benennen.js.keine": "Bitte mindestens ein Bild anhaken.",
+    "benennen.js.name": "Bitte einen Namen eingeben.",
+    "benennen.js.laeuft": "läuft …",
+    "benennen.js.fehler": "Fehler — bitte noch einmal versuchen",
     "livealerts.link_video": "&#9654; Video {n}",
     "livealerts.person_unbekannt": "unbekannt",
     "livealerts.trigger.eins": "{n} Trigger",
@@ -3218,6 +3188,29 @@ T = {
     "antwort.bruecke_nichts":
         "nichts zu übernehmen — kein hilfreiches neues Bild in diesem "
         "Durchgang (das ist in Ordnung)",
+    # BN1 (bauplan_benennen.md, O807): mindestens ein Ereignis der Prüfung
+    # konnte nicht abgeholt werden (Grund aus fertig.jsonl) — nie „nichts zu
+    # übernehmen". Allein, wenn sonst nichts kam, sonst hinter dem Satz.
+    "antwort.bruecke_nicht_abgeholt":
+        "{k} von {n} Ereignis(sen) konnten nicht abgeholt werden ({grund}) — "
+        "ein neuer Klick versucht es noch einmal",
+    "antwort.bruecke_nicht_abgeholt_zusatz":
+        " · {k} von {n} Ereignis(sen) konnten nicht abgeholt werden "
+        "({grund}) — ein neuer Klick versucht es noch einmal",
+    "antwort.benennen_leer":
+        "nichts benannt — bitte mindestens ein Bild dieser Gruppe anhaken",
+    "antwort.benennen_keins":
+        "nichts benannt — keines der {n} angehakten Bilder kann übernommen werden: {gruende}",
+    "antwort.benennen_abgelehnt":
+        " · {n} Bild(er) nicht übernommen: {gruende}",
+    "antwort.benennen_grund_fremd":
+        "{n} nicht in dieser Gruppe",
+    "antwort.benennen_grund_altformat":
+        "{n} aus der Zeit vor der neuen Gesichterspeicherung",
+    "antwort.benennen_grund_ohne_norm":
+        "{n} ohne gespeicherte Feature-Norm",
+    "antwort.benennen_grund_unter_latte":
+        "{n} mit Feature-Norm unter der Latte",
     "antwort.bruecke_undo": "{n} Bild(er) wieder entfernt",
     # .521 Mini-Ernte-Lauf: der Nutzer schliesst die Auswahl, ohne etwas zu
     # nehmen. Der Lauf ist FLUECHTIG — seine Bilder fallen sofort, der naechste
@@ -3833,10 +3826,12 @@ Personen zwischendurch auffüllen.</p>""",
     "heute.pass.live_title": "ein Live-Wächter hat während dieses Durchgangs einen Namen gemeldet",
     "heute.rand.personen": "Personen",
     "heute.rand.personen_title": "Personen mit mindestens einer Bestätigung an diesem Tag — Worker-Urteile und Live-Wächter-Namen",
+    "heute.rand.passes": "Durchgänge",
     "heute.rand.passes_title": "Durchgänge: Events nach Zeit und Ort gruppiert; reine Bewegungs-Durchgänge zählen nicht",
+    "heute.rand.events": "Events analysiert",
     "heute.rand.events_title": "an diesem Tag analysierte Events, Kameras der aktuellen Sicht",
-    "heute.rand.unmatched": "nicht zugeordnet in Durchgängen",
-    "heute.rand.unmatched_title": "Events mit Gesicht ohne Treffer auf eine bekannte Person, innerhalb von Durchgängen mit Erkennung — meist dieselben Leute",
+    "heute.rand.gesicht": "Gesichtsquote",
+    "heute.rand.gesicht_title": "{n} von {m} analysierten Events mit mindestens einem geprüften Gesicht (Fehldetektionen herausgefiltert), Kameras der aktuellen Sicht",
     "heute.rand.unbek_title": "Unbekannt-Identitäten des Pools mit Stütze an diesem Tag; ohne Pool-Daten: Durchgänge ohne jede Erkennung",
     "heute.aehnlich.titel": "Vermutlich erkannt",
     "heute.aehnlich.cnt.eins": "{n} bekannte Person, nicht bestätigt · nach letzter Sichtung sortiert",

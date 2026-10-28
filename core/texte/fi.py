@@ -339,40 +339,8 @@ T = {
     "frigate.fr.beweis_unbekannt": "tila tuntematon — {detail}",
     "frigate.js.url_fehlt": "syötä Frigaten URL",
     "frigate.js.fehler": "virhe:",
-    "ereignisliste.offen.titel": "Avoimet nimettävät tapaukset ({n})",
-    "ereignisliste.offen.satz":
-        "Täyttyy automaattisesti: kaikki tapahtumat, joissa on kasvot, "
-        "joita kukaan ei ole vahvistanut ja joita et ole vielä nimennyt. "
-        "Ensin tulevat ne, joiden lähellä ei tunnistettu ketään — ne "
-        "kannattaa katsoa. Nimeämisen jälkeen kortti haalistuu ja katoaa "
-        "seuraavassa latauksessa.",
-    "ereignisliste.offen.frigate_mit": "Frigate: {label} {score}",
-    "ereignisliste.offen.frigate_ohne": "Frigate: —",
-    "ereignisliste.offen.zeile_faces": "{n} kasvoa · paras: {beste}",
-    "ereignisliste.offen.link_video": "Video",
-    "ereignisliste.offen.kontext_erkannt":
-        "tunnistettu samassa aikaikkunassa: {wer}",
-    "ereignisliste.offen.kontext_fehlt": "ei vahvistettua tunnistusta lähellä",
     "ereignisliste.blaettern.neuer": "← uudemmat",
     "ereignisliste.blaettern.aelter": "vanhemmat →",
-    "ereignisliste.offen.blaettern_stand": "Sivu {seite}/{max} ({n} avointa)",
-    "ereignisliste.offen.schwach_versteckt.eins":
-        "{n} heikkojen kasvojen tapahtuma piilotettu — todennäköisesti ei "
-        "käyttökelpoisia kasvoja (lähellä ei myöskään vahvistettu "
-        "mitään).",
-    "ereignisliste.offen.schwach_versteckt.viele":
-        "{n} heikkojen kasvojen tapahtumaa piilotettu — todennäköisesti "
-        "ei käyttökelpoisia kasvoja (lähellä ei myöskään vahvistettu "
-        "mitään).",
-    "ereignisliste.offen.schwach_zeigen": "näytä ne",
-    "ereignisliste.offen.schwach_alle":
-        "heikkojen kasvojen tapahtumat näytetään mukana —",
-    "ereignisliste.offen.schwach_zurueck":
-        "takaisin niihin, jotka kannattavat",
-    "ereignisliste.offen.leer_titel": "Ei mitään avointa — kaikki nimetty.",
-    "ereignisliste.offen.leer_hinweis":
-        "Uudet vahvistamattomat tapahtumat, joissa on kasvot, ilmestyvät "
-        "tänne automaattisesti.",
     "ereignisliste.titel": "Tapahtumat",
     "ereignisliste.filter.alle_areas": "kaikki alueet",
     "ereignisliste.filter.alle_kameras": "kaikki kamerat",
@@ -1751,7 +1719,6 @@ T = {
     "nav.bereich.system": "Järjestelmä",
     "nav.heute": "Tänään",
     "nav.ereignisse": "Tapahtumat",
-    "nav.offen": "Nimettävät",
     "nav.faces": "Kasvot",
     "nav.gesichter": "Tunnetut",
     "nav.unbekannte": "Tuntemattomat",
@@ -2276,61 +2243,64 @@ T = {
         "Ruudut tulevat vain Frigaten kameralistasta ja tallennetuista "
         "vahdeista.",
     "unbekannte.name": "Tuntematon {nummer}",
-    "unbekannte.meta_zeit": " esiintymistä · {zeit}",
-    "unbekannte.zeit_unbekannt": "aika tuntematon",
-    "unbekannte.mehr_bilder": "+{n} kuvaa lisää tässä ryhmässä",
-    "unbekannte.knopf_reaktivieren": "aktivoi uudelleen",
-    "unbekannte.attr_name": "Nimi (uusi tai olemassa oleva)",
-    "unbekannte.attr_wahl": "Valitse tämä ryhmä yhdistämiseen",
-    "unbekannte.knopf_zuweisen": "Liitä henkilö",
-    "unbekannte.knopf_teil": "Liitä {n} merkittyä",
-    "unbekannte.knopf_ignorieren": "Sivuuta",
-    "unbekannte.knopf_objekt": "Ei henkilö",
-    "unbekannte.knopf_person": "On henkilö",
-    "unbekannte.knopf_bulkmerge": "Yhdistä {n} valittua ryhmää",
-    "unbekannte.knopf_mehr": "Näytä {n} ryhmää lisää",
-    "unbekannte.titel": "Tuntemattomat",
-    "unbekannte.anker": "{offen}/{gesamt} ryhmää odottaa vielä sinua",
-    "unbekannte.sort_label": "Järjestys",
-    "unbekannte.sort_bilder": "eniten kuvia",
-    "unbekannte.sort_neu": "uusimmat",
-    "unbekannte.filter_label": "Näytä",
-    "unbekannte.f_offen": "avoimet",
-    "unbekannte.f_wieder": "toistuvat",
-    "unbekannte.f_heute": "uudet tänään",
-    "unbekannte.f_vorschlag": "ehdotus olemassa",
-    "unbekannte.f_besucher": "vaimennetut",
-    "unbekannte.f_objekt": "ei henkilöitä",
-    "unbekannte.kopf_satz":
-        "Kasvot ilman tunnettua osumaa, ryhmiteltyinä toistuviksi "
-        "identiteeteiksi.",
-    "unbekannte.kopf_satz_zuweisen":
-        " liittää ruudun henkilöön (uusi tai olemassa oleva, kirjoita "
-        "nimi),",
-    "unbekannte.kopf_satz_ignorieren":
-        " vaimentaa tunnetun tuntemattoman henkilön (ei ilmoitusta).",
-    "unbekannte.kopf_satz_auto":
-        "Uudet kasvot kerätään automaattisesti jokaisen käynnin jälkeen.",
-    "unbekannte.knopf_reorg": "Ryhmittele nyt uudelleen",
-    "unbekannte.hinweis_reorg":
-        "tarkistaa kerätyt kasvot uudelleen ja rakentaa ryhmät uudestaan "
-        "— kerääminen itse tapahtuu automaattisesti (1–2 min)",
-    "unbekannte.satz_objekte":
-        'Ryhmät, joiden kuvat ovat keskenään lähes samanlaisia eivätkä '
-        'muistuta ketään henkilöä — tyypillisesti lokasuoja, katukiveys '
-        'tai valokuvio, jota detektori pitää kerta toisensa jälkeen '
-        'kasvoina. Ne ovat jäädytettyjä: uusia löytöjä ei koskaan lisätä '
-        'tänne (ne muodostavat tuoreita, näkyviä ryhmiä ja ne '
-        'tarkistetaan saman säännön mukaan uudelleen) — ryhmät pysyvät '
-        'listassa, jotta mitään ei piiloteta. Merkitty käsin tai löydetty '
-        'automaattisesti; "On henkilö" palauttaa ryhmän takaisin.',
-    "unbekannte.leer": "Tuntemattomia kasvoja ei ole vielä kerätty.",
-    "unbekannte.leer_hinweis":
-        "Identiteetit ilmestyvät tähän seuraavan tuntemattoman "
-        "vierailijan jälkeen.",
-    "unbekannte.leer_filter": "Tässä näkymässä ei ole mitään.",
-    "unbekannte.leer_filter_hinweis":
-        "Muita ryhmiä odottaa ylhäällä toisen suodattimen alla.",
+    # ---- routes/unbekannte: Seite „Unbekannte“ zum Benennen (Bauplan analysen/bauplan_benennen.md, Stufe BN3) ---
+    # Die alten Texte unbekannte.* (ausser unbekannte.name), ereignisliste.offen.* und nav.offen stehen mit Wortlaut
+    # in archiv/unbekannte_offen_alt/texte_entfernt.json; die von Stufe FU1 (Bauplan analysen/bauplan_fix_unbekannte.md)
+    # entfernten in archiv/fix_unbekannte_fu1/texte_entfernt.json.
+    "benennen.titel": "Nimeä tuntemattomat kasvot",
+    "benennen.satz":
+        "Kasvot, jotka suslik näki viimeisten {tage} päivän aikana mutta ei tunnistanut, ryhmiteltyinä niin kuin suslik ne säilyttää. Merkitse yhden henkilön kuvat ja anna niille nimi — niistä tulee vertailukuvia, ja siitä lähtien suslik tunnistaa henkilön.",
+    "benennen.satz_expert":
+        "Näytetään ryhmän {ereignisse} viimeisimmän tapahtuman parhaat kuvat aikajärjestyksessä. Näytetään vain kuvat, joiden tallennettu piirrenormi ylittää kameransa rajan (luettelon rajasta ja tunnistuksen rajasta korkeampi); ryhmä ilman tällaista kuvaa jätetään pois ja lasketaan korttien alle.",
+    "benennen.reiter.aehnlich": "Muistuttaa tunnettua henkilöä ({n})",
+    "benennen.reiter.unbekannt": "Tuntematon ({n})",
+    "benennen.reiter.nicht_lernbar": "Ei tarpeeksi hyviä oppimiseen ({n})",
+    "benennen.blaettern.neuer": "← uudemmat",
+    "benennen.blaettern.aelter": "vanhemmat →",
+    "benennen.blaettern.stand": "Sivu {nr}/{seiten}",
+    "benennen.leer": "Kaikki nimetty viimeisten {tage} päivän osalta.",
+    "benennen.leer_hinweis": "Uudet tuntemattomat kasvot ilmestyvät tähän seuraavan läpikulun jälkeen.",
+    "benennen.leer_reiter": "Tällä välilehdellä ei ole mitään.",
+    "benennen.leer_reiter_hinweis": "Toisella välilehdellä on avoimia ryhmiä.",
+    "benennen.leer_ausgeblendet.eins": "Ei nimettävää: {n} ryhmällä on vain rajan alittavia kuvia.",
+    "benennen.leer_ausgeblendet.viele": "Ei nimettävää: {n} ryhmällä on vain rajan alittavia kuvia.",
+    "benennen.teilmenge": "Kaikkea ei voitu lukea — tältä sivulta voi puuttua ryhmiä tai kuvia. Lisätiedot lokissa.",
+    "benennen.ziel_weg":
+        "Ryhmä, josta tulit, ei ole täällä enää avoin (nimetty, sivuutettu tai vanhempi kuin {tage} päivää).",
+    "benennen.kopf.bilder.eins": "{n} kuva",
+    "benennen.kopf.bilder.viele": "{n} kuvaa",
+    "benennen.kopf.zuletzt": "viimeksi {zeit}, {kamera}",
+    "benennen.vorschlag": "Ehdotus: {person}",
+    "benennen.kein_vorschlag": "Ei ehdotusta — ehkä joku, jota suslik ei vielä tunne.",
+    "benennen.nicht_lernbar.hinweis":
+        "suslik näki nämä kasvot, mutta niiden kuvat ovat liian heikkoja oppimiseen.",
+    "benennen.nicht_lernbar.grund": "Laatu {wert} · tarvitaan {latte}",
+    "benennen.nicht_lernbar.ohne_wert": "Ei mittausta",
+    "benennen.nach_zeit":
+        "Osa kuvista on järjestetty vain ajan mukaan (niiden tapahtuman paremmuusjärjestys puuttuu).",
+    "benennen.knopf.alle": "Merkitse kaikki",
+    "benennen.knopf.sind": "Merkityt ovat {person}",
+    "benennen.attr_name": "nimi (uusi tai olemassa oleva henkilö)",
+    "benennen.knopf.name": "Merkityt ovat tämä henkilö",
+    "benennen.knopf.nicht": "Ei {person}",
+    "benennen.knopf.nicht_auswahl": "Merkityt eivät ole {person}",
+    "benennen.knopf.ignorieren": "Sivuuta ryhmä",
+    "benennen.knopf.objekt": "Ei kasvoja",
+    "benennen.frage.nicht":
+        "Merkitäänkö koko ryhmä: ei {person}? Tämä koskee kaikkia sen kuvia, myös niitä, joita ei näytetä.",
+    "benennen.frage.ignorieren":
+        "Sivuutetaanko koko ryhmä tunnettuna vieraana? Tämä koskee kaikkia sen kuvia, myös niitä, joita ei näytetä, eikä ryhmä enää näy täällä.",
+    "benennen.frage.objekt":
+        "Merkitäänkö koko ryhmä kohdaksi ilman kasvoja (pensas, heijastus, pysäköity auto)? Tämä koskee kaikkia sen kuvia, myös niitä, joita ei näytetä.",
+    "benennen.reihe.gruppe": "Tämän ryhmän kuvat, uusimmat ensin",
+    "benennen.reihe.vergleich": "Näin suslik tuntee henkilön {person}",
+    "benennen.mehr_bilder": "+{n} kuvaa lisää tässä ryhmässä",
+    "benennen.benannt": "nimetty: {person}",
+    "benennen.bild.norm": "normi {norm} · raja {latte}",
+    "benennen.js.keine": "Merkitse vähintään yksi kuva.",
+    "benennen.js.name": "Syötä nimi.",
+    "benennen.js.laeuft": "käynnissä…",
+    "benennen.js.fehler": "virhe — yritä uudelleen",
     "livealerts.link_video": "&#9654; video {n}",
     "livealerts.person_unbekannt": "tuntematon",
     "livealerts.trigger.eins": "{n} trigger",
@@ -3318,6 +3288,27 @@ T = {
     "antwort.bruecke_nichts":
         "ei mitään otettavaa — tässä käynnissä ei ollut hyödyllistä uutta "
         "kuvaa (se on ihan hyvä)",
+    # BN1 (bauplan_benennen.md, O807): katso en.py.
+    "antwort.bruecke_nicht_abgeholt":
+        "{n} tapahtumasta {k} ei voitu hakea ({grund}) — napsauta "
+        "uudelleen yrittääksesi vielä kerran",
+    "antwort.bruecke_nicht_abgeholt_zusatz":
+        " · {n} tapahtumasta {k} ei voitu hakea ({grund}) — napsauta "
+        "uudelleen yrittääksesi vielä kerran",
+    "antwort.benennen_leer":
+        "mitään ei nimetty — valitse vähintään yksi tämän ryhmän kuva",
+    "antwort.benennen_keins":
+        "mitään ei nimetty — yhtäkään {n} valitusta kuvasta ei voi ottaa käyttöön: {gruende}",
+    "antwort.benennen_abgelehnt":
+        " · {n} kuvaa jäi ottamatta: {gruende}",
+    "antwort.benennen_grund_fremd":
+        "{n} ei tässä ryhmässä",
+    "antwort.benennen_grund_altformat":
+        "{n} tallennettu ennen uutta kasvojen tallennustapaa",
+    "antwort.benennen_grund_ohne_norm":
+        "{n} ilman tallennettua feature normia",
+    "antwort.benennen_grund_unter_latte":
+        "{n} feature normi alle rajan",
     "antwort.bruecke_undo": "{n} kuvaa poistettu taas",
     "antwort.passernte_verworfen":
         "tarkistus hylätty, kuvat ovat poissa — uusi napsautus tarkistaa "
@@ -3731,16 +3722,17 @@ T = {
     "heute.rand.personen_title":
         "henkilöt, joilla on vähintään yksi vahvistus tänä päivänä — "
         "workerin päätelmät ja live-vahtien nimet",
+    "heute.rand.passes": "Käynnit",
     "heute.rand.passes_title":
         "käynnit: tapahtumat ryhmiteltyinä ajan ja paikan mukaan; pelkät "
         "liikekäynnit eivät laskennassa",
+    "heute.rand.events": "Analysoidut tapahtumat",
     "heute.rand.events_title":
         "tänä päivänä analysoidut tapahtumat, nykyisen näkymän kamerat",
-    "heute.rand.unmatched": "ilman kohdennusta käynneissä",
-    "heute.rand.unmatched_title":
-        "tapahtumat, joiden kasvot eivät osuneet yhteenkään tunnettuun "
-        "henkilöön, sellaisissa käynneissä joissa joku tunnistettiin — "
-        "yleensä samat ihmiset",
+    "heute.rand.gesicht": "Havaitsemisaste",
+    "heute.rand.gesicht_title":
+        "{n}/{m} analysoidusta tapahtumasta, joissa on vähintään yhdet tarkistetut "
+        "kasvot (virhetunnistukset suodatettu pois), nykyisen näkymän kamerat",
     "heute.rand.unbek_title":
         "poolin tuntemattomat identiteetit, joilla on tukea tänä päivänä; "
         "ilman poolidataa: käynnit ilman yhtään tunnistusta",

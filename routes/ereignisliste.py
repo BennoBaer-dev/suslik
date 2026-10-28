@@ -1,7 +1,8 @@
-"""routes/ereignisliste — die zwei Log-Listen /offen (Abend-Arbeitsliste) und
-/ereignisse (Event-Tabelle mit Filtern), Modulumbau R1, byte-treu aus verifyd
-extrahiert (Muster auftritte.py: log_path + Daten als Parameter, kein
-Dienst-Import). gt_schnellpersonen/master_persons bleiben im Kern (dritter
+"""routes/ereignisliste — die Log-Liste /ereignisse (Event-Tabelle mit Filtern),
+Modulumbau R1, byte-treu aus verifyd extrahiert. Die zweite Liste /offen
+(Abend-Arbeitsliste, render_offen) ist mit Bauplan analysen/bauplan_benennen.md,
+Stufe BN3 entfallen; die Adresse leitet auf /unbekannte um, der Code bleibt in git.
+Muster auftritte.py: log_path + Daten als Parameter, kein Dienst-Import. gt_schnellpersonen/master_persons bleiben im Kern (dritter
 Nutzer: /event/-Seite) und kommen als CALLABLES herein — modulplan §2c
 (Callback-Injektion, nie Rueckimport) statt einer zweiten Quelle.
 KAT_LABELS/KAT_FARBE kommen aus webui/bausteine (Helfer-Heimat, mit R1 dorthin
@@ -20,11 +21,10 @@ import os
 import urllib.parse
 
 import szenarien
-import webui
 from core import areas as _areas_mod
 from core import harvest_set as _hs
 from core.lernlauf import bild_url
-from core.sprache import t, t_n
+from core.sprache import t
 from webui.bausteine import KAT_FARBE, bild_nn, gt_leiste, kat_map, kat_wort
 from core import logbuch as _logbuch
 _log = _logbuch.logger(__name__)
@@ -98,133 +98,6 @@ def crop_zellen(cfg, ed, edir, bestaetigt, hinweis_leer):
     if not zellen:
         return f'<span class="dim" title="{html.escape(hinweis_leer)}">—</span>'
     return "".join(zellen)
-
-def render_offen(cfg, log_path, qs, gt_schnellpersonen, master_persons):
-    """-> Seiten-INHALT (layout/banner bleiben beim Handler)."""
-    rows, gtmap = [], {}
-    if os.path.exists(log_path):
-        with open(log_path) as f:
-            for l in f:
-                try:
-                    rows.append(json.loads(l))
-                except Exception:
-                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
-    gtmap = szenarien.gt_labelmap(             # .313: EINE Lese-Quelle
-        os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl"))
-    gt_schnell = gt_schnellpersonen(rows, cfg)
-    andere = [p for p in master_persons(cfg) if p not in gt_schnell]
-    by = {}
-    for r in rows:                             # --once-Duplikate: letzter Eintrag gewinnt
-        if r.get("eid"):
-            by[r["eid"]] = r
-    kand = [r for r in by.values()          # kategorien-agnostisch (Schema v1+v2, AP2)
-            if r.get("faces_geprueft", r.get("faces", 0)) > 0 and not r.get("bestaetigt")
-            and r["eid"] not in gtmap]      # #42 Teil B: gefilterte Zahl, faces-Fallback fuer Altzeilen
-    # Zeitfenster-Kontext (User-Punkt 18.07.): wurde im ±3-min-Fenster auf
-    # IRGENDEINER Kamera jemand bestaetigt? Nur ANZEIGE/Sortierung — kein
-    # Verstecken (Zusteller-waehrend-Gartenarbeit-Falle; echte Fusion = v1.1).
-    bestaetigt_ts = [((r.get("start") or r.get("ts", 0)),
-                      ", ".join(r.get("bestaetigt") or []), r.get("camera", "?"))
-                     for r in by.values() if r.get("bestaetigt")]
-
-    def _fenster_kontext(wann):
-        nahe = [(abs(wann - bt), wer, cam) for bt, wer, cam in bestaetigt_ts
-                if abs(wann - bt) <= 180]
-        if not nahe:
-            return None
-        _, wer, cam = min(nahe)
-        return f"{wer} ({cam})"
-    for r in kand:
-        r["_kontext"] = _fenster_kontext(r.get("start") or r.get("ts", 0))
-    # Issue #16: schwache Gesichter OHNE bestaetigten Kontext sind
-    # fast immer Fehlausloeser — standardmaessig einklappen statt
-    # den Nutzer zum Labeln zu bitten (?schwach=1 zeigt sie).
-    zeige_schwach = (qs.get("schwach", ["0"])[0] == "1")
-    schwach_n = 0
-    if not zeige_schwach:
-        schwach = [r for r in kand
-                   if r.get("kategorie") == "unbekannt_schwach"
-                   and not r.get("_kontext")]
-        schwach_n = len(schwach)
-        if schwach_n:
-            sch_ids = {id(r) for r in schwach}
-            kand = [r for r in kand if id(r) not in sch_ids]
-    kand.sort(key=lambda r: (r["_kontext"] is not None,
-                             -(r.get("start") or r.get("ts", 0))))
-    # BLAETTERN (25.07.): vorher wurden ALLE Kandidaten gerendert — gemessen 564
-    # Karten, 704 KB und rund 2800 Knoepfe auf einer Seite. Das ist keine Arbeitsliste
-    # mehr, das ist eine Wand. 50 je Seite, dieselbe Groesse wie /ereignisse, damit
-    # sich beide gleich anfuehlen.
-    # Ehrliche Einschraenkung: geblaettert wird ueber die POSITION, nicht ueber einen
-    # Zeitanker. Wer auf Seite 3 etwas labelt, verschiebt die Liste um einen Eintrag —
-    # an der Seitengrenze kann dadurch beim naechsten Laden einer uebersprungen
-    # erscheinen. Ein Zeitanker ginge hier nicht, weil zweistufig sortiert wird
-    # (erst "hat Kontext im Zeitfenster", dann Zeit).
-    offen_gesamt = len(kand)
-    try:
-        o_seite = max(1, int(qs.get("seite", ["1"])[0] or 1))
-    except (ValueError, TypeError):
-        o_seite = 1
-    o_max = max(1, -(-offen_gesamt // 50))
-    o_seite = min(o_seite, o_max)
-    kand = kand[(o_seite - 1) * 50:o_seite * 50]
-    cards = []
-    for r in kand:
-        eid = r["eid"]
-        ed = eid.replace("/", "_")
-        zeit = datetime.datetime.fromtimestamp(r.get("start") or r.get("ts", 0)).strftime("%d.%m %H:%M:%S")
-        f = r.get("frigate") or {}
-        ftxt = (t("ereignisliste.offen.frigate_mit", label=f.get("label"), score=f"{f['score']:.2f}")
-                if f.get("label") and f.get("score") is not None
-                else t("ereignisliste.offen.frigate_ohne"))  # Frigate-Label bleibt wie geliefert
-        ours = ", ".join(f"{p} {(v.get('max') or 0):+.2f}/{v.get('win3s', 0)}×" for p, v in
-                         sorted((r.get("ours") or {}).items(),
-                                key=lambda x: -(x[1].get("max") or 0))[:3]) or "—"
-        edir = os.path.join(cfg["data_dir"], "events", ed)
-        # .313: dieselbe Crop-Wahl wie die Events-Tabelle (Gesicht statt groesste Datei)
-        crop = crop_zellen(cfg, ed, edir, r.get("bestaetigt") or [],
-                           t("ereignisliste.tabelle.attr_kein_crop"))
-        vid = (f' <a href="/video/{urllib.parse.quote(ed)}">&#9654; '
-               f'{t("ereignisliste.offen.link_video")}</a>'
-               if any(os.path.isfile(os.path.join(cfg["data_dir"], "clips", ed + s))
-                      for s in ("_review.mp4", ".mp4")) else "")
-        gtb = gt_leiste(eid, gt_schnell, andere, [], vorschlag=r.get("bestaetigt") or [])
-        ktx = (f' · <span style="color:var(--dim)">'
-               f'{t("ereignisliste.offen.kontext_erkannt", wer=html.escape(r["_kontext"]))}</span>'
-               if r.get("_kontext") else
-               f' · <b style="color:var(--warn)">{t("ereignisliste.offen.kontext_fehlt")}</b>')
-        cards.append(f"<div class=card data-fade-on-label=1>{zeit} · "
-                     f"{html.escape(str(r.get('camera', '?')))} · "
-                     f"{html.escape(ftxt)} · "
-                     + t("ereignisliste.offen.zeile_faces",
-                         n=r.get("faces_geprueft", r.get("faces", 0)),
-                         beste=html.escape(ours)) + f"{ktx}"
-                     f"<div class=crops>{crop}{vid}</div><div>{gtb}</div></div>")
-    _ol = lambda s, txt: f'<a class="gtb" href="/offen?seite={s}">{txt}</a>'
-    o_blaettern = (" · ".join(
-        ([_ol(o_seite - 1, t("ereignisliste.blaettern.neuer"))] if o_seite > 1 else []) +
-        [t("ereignisliste.offen.blaettern_stand",
-           seite=o_seite, max=o_max, n=offen_gesamt)] +
-        ([_ol(o_seite + 1, t("ereignisliste.blaettern.aelter"))] if o_seite < o_max else []))
-        if offen_gesamt > 50 else "")
-    sch_hinweis = ""
-    if schwach_n:
-        sch_hinweis = (f'<p class="pnote">'
-                       f'{t_n("ereignisliste.offen.schwach_versteckt", schwach_n)}'
-                       f' <a href="/offen?schwach=1">'
-                       f'{t("ereignisliste.offen.schwach_zeigen")}</a></p>')
-    elif zeige_schwach:
-        sch_hinweis = (f'<p class="pnote">{t("ereignisliste.offen.schwach_alle")} '
-                       f'<a href="/offen">{t("ereignisliste.offen.schwach_zurueck")}</a></p>')
-    inhalt = (f"<h2>{t('ereignisliste.offen.titel', n=offen_gesamt)}</h2>"
-              f"<p>{t('ereignisliste.offen.satz')}</p>" + sch_hinweis
-              + (f'<p class="pnote">{o_blaettern}</p>' if o_blaettern else "")
-              + ("".join(cards) if cards else
-                 webui.leer(t("ereignisliste.offen.leer_titel"),
-                            t("ereignisliste.offen.leer_hinweis")))
-              + (f'<p class="pnote">{o_blaettern}</p>' if o_blaettern else ""))
-    return inhalt
-
 
 def render_ereignisse(cfg, log_path, qs, gt_schnellpersonen, master_persons):
     """-> Seiten-INHALT (layout/banner bleiben beim Handler)."""

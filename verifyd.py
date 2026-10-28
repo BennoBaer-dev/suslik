@@ -282,8 +282,9 @@ def _unbekannt_karten(uid_mitglieder, uids, szenarien, fenster, gap_s, tag_s, nu
         paesse = list({id(pass_von[str(m["eid"])]): pass_von[str(m["eid"])] for m in heute
                        if str(m["eid"]) in pass_von}.values())
         s_letzt = pass_von.get(str(heute[-1]["eid"]))
+        # Bauplan analysen/bauplan_benennen.md BN3 Punkt 4: uk waehlt Reiter und Seite der Karte auf /unbekannte.
         ziel = (f'/auftritte?u={urllib.parse.quote(uid)}&amp;tag={tag_s}&amp;p={s_letzt["start"]}' if s_letzt
-                else f'/unbekannte#uk-{urllib.parse.quote(uid)}')
+                else f'/unbekannte?uk={urllib.parse.quote(uid)}#uk-{urllib.parse.quote(uid)}')
         extra = None if aehnlich is None else (schluessel, [(u, aehnlich[u]) for u in sorted(
             glieder, key=lambda u: (int(u[1:]) if u[1:].isdigit() else 0, u))])
         roh.append((heute[-1]["ts"], uid, heute, vorher, paesse, ziel, extra))
@@ -1496,6 +1497,9 @@ def load_config(path):
     # freigegeben fuer diese drei Schluessel): die Grenzen der Regel „ähnlich zu P“ stehen EINMAL in
     # core.registry.AEHNLICH_WERK, hier nur gezogen.
     from core.registry import AEHNLICH_WERK as _aw          # noqa: PLC0415
+    # Bauplan analysen/bauplan_benennen.md Stufe BN2 Punkt 4, Entscheid E2 (ED004, freigegeben fuer diese fuenf Schluessel,
+    # Eigentuemer 25.10.2026 17:56:43): die Werte der Seite „Unbekannte“ stehen EINMAL in core.registry.BENENNEN_WERK.
+    from core.registry import BENENNEN_WERK as _bw          # noqa: PLC0415
     # Bauplan analysen/bauplan_abfragetakt_wartezeit.md, Stufe TW1 Punkt 2 (ED004, freigegeben fuer diese zwei
     # Schluessel): Werkswerte aus TAKT_WERK_NEU, die alten Werte stellt _migration_takt_wartezeit einmal um.
     for key, default in [("poll_interval", TAKT_WERK_NEU["poll_interval"]),
@@ -2070,6 +2074,13 @@ def load_config(path):
                          ("aehnlich_latte", _aw["aehnlich_latte"]),
                          ("aehnlich_abstand", _aw["aehnlich_abstand"]),
                          ("aehnlich_min_gesichter", _aw["aehnlich_min_gesichter"]),
+                         # Bauplan analysen/bauplan_benennen.md Entscheid E2: die fuenf Werte der Seite „Unbekannte“
+                         # (core/unbekanntpool.py, benennen_werte); Werkswert und Herkunft in core.registry.BENENNEN_WERK.
+                         ("benennen_karten_je_seite", _bw["benennen_karten_je_seite"]),
+                         ("benennen_bilder_je_karte", _bw["benennen_bilder_je_karte"]),
+                         ("benennen_tage", _bw["benennen_tage"]),
+                         ("benennen_vergleichsbilder", _bw["benennen_vergleichsbilder"]),
+                         ("benennen_ereignisse_je_karte", _bw["benennen_ereignisse_je_karte"]),
                          # Bauplan GPU-Wartefrist, Stufe 1 (F1, Eigentuemer 28.09.2026
                          # 16:16:13 „10 Sekunden"): wie lange der Worker auf EINEN
                          # eingereichten GPU-Auftrag wartet, bevor er ihn als Haenger meldet
@@ -7237,7 +7248,7 @@ VORLAUF_TAKT_S = 2.0
 VORLAUF_MIN_WERK = 20
 VORLAUF_MAX_WERK = 50
 VORLAUF_PARALLEL_WERK = 2
-VORLAUF_PARALLEL_MAX = 3
+VORLAUF_PARALLEL_MAX = 4
 VORLAUF_MIN_GRENZE = 200
 VORLAUF_MAX_GRENZE = 500
 # Wie lange eine Antwort von Frigate zu einem Ereignis gilt, bevor erneut gefragt wird: bei einem noch offenen
@@ -8536,9 +8547,28 @@ class Service:
                         _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         return seen
 
+    # Bauplan analysen/bauplan_datenordner_klein.md DK3 Punkt 4: das Schreibprotokoll nach Frigate an einer Stelle,
+    # gelesen von _load_own_writes, _writes_append, dem Leser in _maybe_sublabel und _writes_kuerzen.
+    _WRITES_DATEI = os.path.join("state", "sublabel_writes.jsonl")
+
+    def _writes_pfad(self):
+        return os.path.join(self.cfg["data_dir"], self._WRITES_DATEI)
+
+    @contextlib.contextmanager
+    def _writes_sperre(self):
+        """Die gemeinsame Sperrdatei neben dem Schreibprotokoll fuer Anhaengen und Kuerzen (Bauplan
+        analysen/bauplan_datenordner_klein.md, Baustein „Kuerzen neben Anhaengern", DK3 Punkt 4). -> Kontext"""
+        import fcntl
+        with open(self._writes_pfad() + ".lock", "a") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
     def _load_own_writes(self):
         eids = set()
-        p = os.path.join(self.cfg["data_dir"], "state", "sublabel_writes.jsonl")
+        p = self._writes_pfad()
         if os.path.exists(p):
             with open(p) as f:
                 for l in f:
@@ -8549,27 +8579,136 @@ class Service:
         return eids
 
     def _writes_append(self, **d):
-        with open(os.path.join(self.cfg["data_dir"], "state", "sublabel_writes.jsonl"), "a") as f:
+        with self._writes_sperre(), open(self._writes_pfad(), "a") as f:
             f.write(json.dumps({"ts": round(time.time(), 1), **d}, ensure_ascii=False) + "\n")
             f.flush()
+
+    def _writes_kuerzen(self, jetzt, rq_cfg):
+        """Das Schreibprotokoll kuerzen (DK3 Punkt 4): Zeilen mit ts aelter als aufbewahrung_tage Byte fuer Byte in den
+        Papierkorb, der Rest atomar neu, unter der Sperrdatei der Anhaenger; eine Zeile ohne lesbare Zeit und eine halbe
+        Schlusszeile bleiben (der Speicher own_writes behaelt die Kennungen bis zum naechsten Start). -> dict zeilen
+        (vorher), behalten, entfernt, unlesbar"""
+        from core import atomar as _at_w
+        from core import refquelle as _rq_w
+        pfad = self._writes_pfad()
+        if not os.path.exists(pfad):
+            return {"zeilen": 0, "behalten": 0, "entfernt": 0, "unlesbar": 0}
+        frist = jetzt - float(self.cfg["aufbewahrung_tage"]) * 86400
+
+        def zeit(z):
+            try:
+                d = json.loads(z)
+            except ValueError:
+                return None
+            ts = d.get("ts") if isinstance(d, dict) else None
+            return ts if isinstance(ts, (int, float)) and not isinstance(ts, bool) else None
+        with self._writes_sperre():
+            with open(pfad, "rb") as f:
+                roh = f.read().split(b"\n")
+            rest = roh.pop()                            # nach dem letzten Zeilenende: leer oder eine halbe Zeile
+            zeiten = [zeit(z) for z in roh]
+            raus = [z for z, t in zip(roh, zeiten) if t is not None and t < frist]
+            zahlen = {"zeilen": len(roh) + bool(rest), "behalten": len(roh) - len(raus) + bool(rest),
+                      "entfernt": len(raus), "unlesbar": zeiten.count(None) + bool(rest)}
+            if raus:
+                _rq_w.trash_lines(rq_cfg, jetzt, os.path.splitext(os.path.basename(pfad))[0], raus)
+                _at_w.bytes_schreiben(pfad, b"".join(z + b"\n" for z, t in zip(roh, zeiten)
+                                                     if t is None or t >= frist) + rest)
+        return zahlen
 
     def _maybe_sublabel(self, entry, nachhol=0):
         """AP2 (User-Entscheid: sofort aktiv): bestaetigte Person nach Frigate schreiben.
         Echo-Freiheit nach Plan §1: writes-Protokoll VOR dem POST; Gegenpruefung mit
-        Retry (Frigate persistiert asynchron, AP0-Befund ~3 s)."""
+        Retry (Frigate persistiert asynchron, AP0-Befund ~3 s).
+
+        Bauplan analysen/bauplan_namenszuordnung.md, Stufe NZ3 Punkte 2 und 3: process legt bei einer
+        Frigate-Personenzahl ab zwei unter seiner Sperre `_nz_lauf` an (Kennung, `zuordnung` = Ergebnis von
+        core.namenszuordnung.zuordnen fuer die Frigate-Ereignisse dieser Kamera, `nachbarn` = Akte-Zeilen des
+        Durchgangs je Kennung fuer den Wert einer Berichtigung); gelesen wird es nur fuer dasselbe Ereignis mit dem
+        Akte-Feld `namenszuordnung`, sonst bleibt alles wie bisher. Die Parameter bleiben `entry` und `nachhol`, weil
+        Proben die Funktion durch eine mit genau diesen ersetzen. Traegt die Zuordnung fuer dieses Ereignis einen
+        Namen, wird er geschrieben, sonst der
+        staerkste Name des Clips (Ersatzweg; die WARNING steht in process). Dazu berichtigt der Lauf eigene fruehere
+        Schreibvorgaenge mit einem anderen Namen, auch den eines frueheren Laufs dieses Ereignisses: nur, wenn die
+        letzte Zeile des Schreibprotokolls fuer das Ereignis von suslik stammt, und in der Spur erst, wenn Frigate
+        noch genau diesen Namen traegt (ein fremder oder inzwischen geaenderter Name bleibt). Ein Nachhol-Lauf
+        berichtigt nichts (dort wird ein Name in Frigate nie ueberschrieben); im Nur-Lesen wird nur protokolliert.
+        -> der fuer dieses Ereignis beschlossene Name oder None"""
         cfg = self.cfg
-        if not cfg["sub_label_schreiben"] or not entry["bestaetigt"] or self.dry_alert:
+        if not cfg["sub_label_schreiben"] or self.dry_alert:
             return None
         eid = entry["eid"]
-        top = max(entry["bestaetigt"], key=lambda p: (entry["ours"].get(p) or {}).get("max") or 0)
+        lauf = self.__dict__.get("_nz_lauf") or {}
+        zuordnung = lauf.get("zuordnung") if lauf.get("eid") == eid and "namenszuordnung" in entry else None
+        nachbarn = lauf.get("nachbarn") if zuordnung is not None else None
+
+        def _score(cos):
+            return round(1.0 / (1.0 + math.exp(-20.0 * (cos - 0.3))), 3)
+
+        def _senden(ziel, name, sc, alt=None):
+            # NZ3 Punkt 3: eine Berichtigung (`alt` gesetzt) schreibt nur, wenn Frigate noch unseren Namen traegt
+            if alt is not None:
+                ist = api(cfg, f"/api/events/{ziel}").get("sub_label")
+                if ist != alt:
+                    self.log.info(f"{ziel}: name correction '{alt}' -> '{name}' NOT written — Frigate carries "
+                                  f"'{ist}', not our '{alt}' (a name suslik did not write is never overwritten)")
+                    return
+            api_post(cfg, f"/api/events/{ziel}/sub_label", {"subLabel": name, "subLabelScore": sc})
+            for wartezeit in (2, 6):
+                time.sleep(wartezeit)
+                if api(cfg, f"/api/events/{ziel}").get("sub_label") == name:
+                    self.log.info(f"{ziel}: sub_label -> '{name}' ({sc}) written + verified")
+                    return
+            self.log.warning(f"{ziel}: sub_label write without GET echo (async? check later)")
+
+        berichtigt = None
+        if zuordnung is not None and not nachhol:
+            letzte = {}                           # Kennung -> letzte Zeile des eigenen Schreibprotokolls
+            p = self._writes_pfad()
+            if os.path.exists(p):
+                with open(p) as f:
+                    for l in f:
+                        try:
+                            d = json.loads(l)
+                        except Exception:
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
+                            continue
+                        if d.get("eid") in zuordnung:
+                            letzte[d["eid"]] = d
+            nur_lesen = frigate_read_only(cfg)
+            for ziel, r in sorted(zuordnung.items()):
+                alt = (letzte.get(ziel) or {}).get("label")
+                if (not r["name"] or not alt or alt == r["name"]
+                        or bool(letzte[ziel].get("readonly")) != nur_lesen
+                        or (ziel == eid if nur_lesen else ziel not in self.own_writes)):
+                    continue
+                cos = ((((nachbarn or {}).get(ziel) or {}).get("ours") or {}).get(r["name"]) or {}).get("max") or 0
+                if nur_lesen:
+                    self._writes_append(eid=ziel, label=r["name"], score=_score(cos), cos=cos, readonly=True,
+                                        berichtigt=alt, grund=r["grund"])
+                    self.log.info(f"{ziel}: read-only — would correct sub_label '{alt}' -> '{r['name']}' "
+                                  f"({r['grund']}, recomputed with {eid}), Frigate NOT modified")
+                    continue
+                self._writes_append(eid=ziel, label=r["name"], score=_score(cos), cos=cos, berichtigt=alt,
+                                    grund=r["grund"])
+                self.log.info(f"{ziel}: name assignment correction sub_label '{alt}' -> '{r['name']}' "
+                              f"({r['grund']}, recomputed with {eid})")
+                self._spur(f"sub_label {ziel}",
+                           lambda z=ziel, n=r["name"], s=_score(cos), a=alt: _senden(z, n, s, a))
+                if ziel == eid:
+                    berichtigt = r["name"]
+        if not entry["bestaetigt"]:
+            return berichtigt
+        top = (((zuordnung or {}).get(eid) or {}).get("name")
+               or max(entry["bestaetigt"], key=lambda p: (entry["ours"].get(p) or {}).get("max") or 0))
         if eid in self.own_writes or entry["frigate"].get("label") == top:
-            return None                       # schon von uns geschrieben / Frigate sagt es selbst
+            return berichtigt                 # schon von uns geschrieben / Frigate sagt es selbst
         if nachhol and entry["frigate"].get("label"):
             self.log.info(f"{eid}: catch-up — Frigate meanwhile carries "
                      f"'{entry['frigate']['label']}', will NOT be overwritten")
             return None                       # rueckwirkend nie eine zwischenzeitliche Korrektur ueberschreiben
         cos = (entry["ours"].get(top) or {}).get("max") or 0
-        score = round(1.0 / (1.0 + math.exp(-20.0 * (cos - 0.3))), 3)
+        score = _score(cos)
         if frigate_read_only(cfg):                # Vertrauensphase: NICHT schreiben, nur protokollieren
             self._writes_append(eid=eid, label=top, score=score, cos=cos, readonly=True)
             self.log.info(f"{eid}: read-only — would set sub_label -> '{top}' ({score}), Frigate NOT modified")
@@ -8585,15 +8724,7 @@ class Service:
         # sub_label auch dann, wenn der POST spaeter scheitert — der
         # Fehlschlag steht laut im Log (bis .398 stand dann None in der
         # Akte, der writes-Protokoll-Eintrag existierte aber genauso).
-        def _senden():
-            api_post(cfg, f"/api/events/{eid}/sub_label", {"subLabel": top, "subLabelScore": score})
-            for wartezeit in (2, 6):
-                time.sleep(wartezeit)
-                if api(cfg, f"/api/events/{eid}").get("sub_label") == top:
-                    self.log.info(f"{eid}: sub_label -> '{top}' ({score}) written + verified")
-                    return
-            self.log.warning(f"{eid}: sub_label write without GET echo (async? check later)")
-        self._spur(f"sub_label {eid}", _senden)
+        self._spur(f"sub_label {eid}", lambda: _senden(eid, top, score))
         return top
 
     # Modulumbau R3: MQTT-Publisher lebt in core/melden.py (Docstrings/
@@ -8719,11 +8850,17 @@ class Service:
             return
         self.log.info(f"QS report written ({len(by)} events / {tage} days)")
 
+    # Bauplan analysen/bauplan_datenordner_klein.md DK3 Punkt 2: Archivordner (relativ zum Datenordner) und Name der
+    # Monatsdatei der Ereignisakte (monat = JJJJ-MM, der Monat der Rotation); gelesen von deckung_rotieren und vom
+    # DK3-Teil in daten_aufraeumen.
+    _DECKUNG_ARCHIV = os.path.join("state", "archiv")
+    _DECKUNG_MONAT = "deckung_{monat}.jsonl"
+
     def deckung_rotieren(self):
         """AP7: monatlich — Zeilen aelter 7 Tage ins Archiv, aktive Datei behaelt den
         Ueberlapp (processed/last_seen/Sweep bleiben korrekt, QS-Auflage)."""
         grenze = time.time() - 7 * 86400
-        adir = os.path.join(self.cfg["data_dir"], "state", "archiv")
+        adir = os.path.join(self.cfg["data_dir"], self._DECKUNG_ARCHIV)
         os.makedirs(adir, exist_ok=True)
         # Read-Rewrite-Replace MUSS unter self.lock: sonst kann eine Zeile, die process()
         # zwischen Lesen und Ersetzen anhaengt, verlorengehen (Bestandsfehler). Fuer den
@@ -8743,7 +8880,8 @@ class Service:
                         behalten.append(l)
             if not archiv:
                 return
-            with open(os.path.join(adir, f"deckung_{datetime.datetime.now():%Y-%m}.jsonl"), "a") as f:
+            with open(os.path.join(adir, self._DECKUNG_MONAT.format(monat=f"{datetime.datetime.now():%Y-%m}")),
+                      "a") as f:
                 f.writelines(archiv)
             tmp = self.log_path + ".neu"
             with open(tmp, "w") as f:
@@ -8770,7 +8908,7 @@ class Service:
                     except Exception:
                         _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         basis = os.path.join(self.cfg["data_dir"], "events")
-        tage = self.cfg["aufbewahrung_tage"]      # V3: dieselbe Frist wie der Satz-Verfall
+        tage = self.cfg["aufbewahrung_tage"]      # dieselbe Frist fuer alles, was an Ereignissen haengt (DK3, Entscheid 2)
         grenze = time.time() - tage * 86400
         n = n_saetze = 0
         weg = [d for d in os.listdir(basis) if os.path.isdir(os.path.join(basis, d)) and d not in gt
@@ -9770,7 +9908,9 @@ class Service:
             return False
 
     def start_wartung(self):
-        """06:00-Job: QS-Bericht + Crops-Retention + Altdaten-Aufraeumen + Update-Pruefung + (monatlich)
+        """06:00-Job: QS-Bericht + Crops-Retention + Datenordner-Aufraeumen (Schritt „data cleanup“, daten_aufraeumen,
+        Stufen DK1 bis DK3) +
+        Altdaten-Aufraeumen + Update-Pruefung + (monatlich)
         Rotation; beim Start laeuft alles einmal sofort. Das Auffangnetz-Sammeln ist mit Stufe V1b
         abgebaut (Bauplan analysen/bauplan_verbraucher_unbekannt.md, Entscheid 12): die Unbekannten
         kommen ueber den Verbraucher der Unbekannt-Stapel, kein zweiter Clip-Durchlauf.
@@ -9784,6 +9924,9 @@ class Service:
                 # Backup wochenlang ausbleibt, ohne dass es jemand merkt.
                 jobs = [("QS report", self.qs_bericht_erzeugen),
                         ("crops retention", self.crops_retention),
+                        # Bauplan analysen/bauplan_datenordner_klein.md, Baustein „Ablauf" (Stufe DK1): Saetze in
+                        # den Papierkorb, Anlern-Warteschlange kuerzen, Papierkorb leeren; je Teil ein eigener Fang.
+                        ("data cleanup", self.daten_aufraeumen),
                         # .341 (User 25.08.): Lernlaeufe, Waisen-Pins, Kompilat-Caches —
                         # die drei Stellen, die bisher unbegrenzt wuchsen.
                         ("stale data cleanup", self.alt_aufraeumen),
@@ -11555,7 +11698,7 @@ class Service:
         "bg_platz_getrennt": (int, 0, 1, "1 gives background work (collecting, harvesting, your clicks, the live body judgment, the wall-clock measurement) its own slot instead of one of the analysis slots. It is computed in a separate thread of the worker anyway, so a background job that holds an analysis slot blocks a compute thread for nothing — measured on 15.09.2026: a collection run held one of two analysis slots for eight minutes while events were waiting. Since 0.1.0.536 WHEN it starts changed too: with its own slot it takes its turn right away instead of waiting for an idle moment that never comes on a busy installation (46 postponed collection runs in one morning). 0 restores the behaviour of 0.1.0.533 and is load-bearing: every class then sits on the analysis slots again, the old idle rule and the rule that keeps one slot free for events apply word for word, and a collection run can take an analysis slot again"),
         "vorlauf_max": (int, 0, VORLAUF_MAX_GRENZE, "how many finished clips the service keeps ready on disk ahead of the analysis. Live analyses read their clip only from the local clip cache; the service's dispatcher fetches all of them from Frigate, so no compute thread stands still while a clip is pulled. The dispatcher fetches in the order the clips will be needed: weighted by camera priority (High 7, Mid 2, Low 1 out of every ten), and within one priority the newest event first. It fetches until vorlauf_max clips are ready, then pauses until fewer than vorlauf_min are ready; a newer event without a clip is fetched right away. 50 is the default, derived from a field measurement: about 20 events per minute on two compute threads and about 3 s per fetch, so 50 gives short refill bursts instead of one long pull. 0 switches the stock off: the dispatcher then fetches only as many clips as there are compute threads, and it does the same while the clip cache is at its size cap. The clips go into the normal clip cache and obey its size cap"),
         "vorlauf_min": (int, 0, VORLAUF_MIN_GRENZE, "the lower mark of the stock (see vorlauf_max): once fewer than this many clips are ready, the dispatcher fetches again until vorlauf_max is reached; a newer event without a clip is fetched right away in any case. 20 is the default, about one minute of stock at the measured rate. The gap between the two marks keeps the service from asking Frigate for a new clip after every single analysed event"),
-        "vorlauf_parallel": (int, 1, 3, "how many clips the dispatcher fetches from Frigate at the same time. 2 is the default. Frigate 0.18 serves clip streams and authentication from one thread pool, so more parallel pulls make the whole installation slower, not faster. Up to this number the dispatcher may use every place of the clip gate; none is kept free for live analyses any more, because they no longer fetch their own clips"),
+        "vorlauf_parallel": (int, 1, VORLAUF_PARALLEL_MAX, "how many clips the dispatcher fetches from Frigate at the same time. 2 is the default. Frigate 0.18 serves clip streams and authentication from one thread pool, so more parallel pulls make the whole installation slower, not faster. Up to this number the dispatcher may use every place of the clip gate; none is kept free for live analyses any more, because they no longer fetch their own clips"),
         "zeitprotokoll": (int, 0, 1, "1 writes one balance line per event to the log and keeps the same figures in the record and in /health: how long the event waited in the queue, how long its clip took to fetch (with size), how long the handover to the worker took, how long until the first decoded frame (and which decoder), the analysis itself, writing the record, and the total time the analysis slot was busy. It costs one line per event and answers the question the record cannot: where the time goes when the accelerator sits idle while events are waiting. 0 turns the line off"),
         "api_event_max_min": (int, 1, 1440, "how long one of suslik's OWN Frigate events may stay open before the service closes it after the fact, in minutes. 30 is the default. The live watchers can create their own events in Frigate (per camera switch) and close them when the appearance is over; if that close is lost — Frigate creates API events asynchronously and can answer the close with a 404 — the event would stay open for ever, and an event without an end has no usable clip. The service keeps a list of its own open events, retries the close, and checks afterwards that the end really arrived"),
         "offen_max_min": (int, 0, 1440, "how long an event that Frigate never finished (no end_time) is held back before it is skipped for good, in minutes. 60 is the default. Such an event has no end, so the analysis reads its clip until the job deadline expires and the worker is shot — one of them can stall the whole queue. While it is held back nothing is computed and nothing is written; after this many minutes the record gets one honest line (\"skipped, event never ended in Frigate\") and the event is done. 0 keeps holding it back for ever"),
@@ -11592,6 +11735,14 @@ class Service:
         "aehnlich_latte": (float, 0.0, 1.0, "unknown faces probably of a known person: the unknown-face consumer marks an unknown identity as probably P when it has at least aehnlich_min_gesichter faces, most of them have their best match with the same known person P, the median of their recognition scores to P reaches this bar and the median lead over the next known person reaches aehnlich_abstand. The mark is stored at the identity: the Today page and the Unknown page show these identities under Probably recognized, one group per person P; the Faces page, the learning-run hint, the passes and the line 'more in archived clusters' on the Today page do not count them as unknown, and no unknown-person alert (MQTT, Telegram) goes out for them; Pushover stays as it is. A user verdict 'not P' on the Unknown page, or a pass confirmed as a stranger, keeps the rule from marking P for that identity. All identities are checked again at start, after new unknown faces and within a minute after this value changes. FACTORY VALUE 0.30, calculated on the stored references: with 0.30 and a lead of 0.10 a group of 1 to 5 faces of a stranger is wrongly called similar in 0.9 to 2.3 % of the cases (at 0.25: 1.2 to 3.9 %). Takes effect without a restart"),
         "aehnlich_abstand": (float, 0.0, 1.0, "unknown faces probably of a known person: the second bar of the same rule. For each face the score to the person P minus the best score to any other known person (negative when the face points to someone else); the median of these leads must reach this value. The mark is stored at the identity, moves it to Probably recognized on the Today and Unknown pages, keeps it out of the line 'more in archived clusters' on the Today page and stops the unknown-person alert, see aehnlich_latte. FACTORY VALUE 0.10, from the same calculation as aehnlich_latte. Takes effect without a restart, all identities are checked again within a minute"),
         "aehnlich_min_gesichter": (int, 1, 20, "unknown faces probably of a known person: the rule judges an unknown identity only from this many faces on (faces with a fingerprint of the running recognition model); with fewer it stays unknown on all pages (also in the line 'more in archived clusters' on the Today page) and alerts as before. With two faces both must point to the same person. 1 means one picture is enough. FACTORY VALUE 2, set by the owner. Takes effect without a restart, all identities are checked again within a minute"),
+        # Bauplan analysen/bauplan_benennen.md Entscheid E2, Stufe BN2 Punkt 4 (ED004, freigegeben fuer diese fuenf
+        # Schluessel): die Werte der Seite „Unbekannte“. Werkswerte und Herkunft in core.registry.BENENNEN_WERK; die
+        # Spannen sind gewaehlt, nicht gemessen. Alle fuenf wirken ohne Neustart (config_schreiben, _live_keys).
+        "benennen_karten_je_seite": (int, 1, 20, "Unknown page: how many group cards one tab shows per page, the most recently seen group first; further groups are on the next pages. FACTORY VALUE 5, set by the owner. Takes effect without a restart"),
+        "benennen_bilder_je_karte": (int, 1, 24, "Unknown page: how many pictures the picture row of one group card shows at most. The pictures are the best ones (by detection score times face area, as the analysis worker ranks the unknown faces) from the most recent events of the group, shown by time with the newest first. FACTORY VALUE 12, as many as the picture row of the Appearances page. Takes effect without a restart"),
+        "benennen_tage": (int, 1, 30, "Unknown page: how many local calendar days the page looks back, today included; 7 means today and the six days before. A group is shown when it has faces from these days; archived identities are not shown, whatever the value. FACTORY VALUE 7, set by the owner. Takes effect without a restart"),
+        "benennen_vergleichsbilder": (int, 0, 12, "Unknown page: how many pictures of the suggested known person the comparison row of a card shows, the most recently added reference first. FACTORY VALUE 6, set by the owner. 0 shows no comparison row. Takes effect without a restart"),
+        "benennen_ereignisse_je_karte": (int, 1, 100, "Unknown page: from how many of the most recent events of a group the picture choice of its card reads the ranking file of the unknown faces; only the cards on the page that is shown are read. FACTORY VALUE 20, set by the owner. Takes effect without a restart"),
         # Bauplan GPU-Wartefrist, Stufe 1 (F1, Eigentuemer 28.09.2026 16:16:13): Werkswert 10,
         # Spanne 2-120; die Herleitung steht am Werkswert in load_config.
         "inferenz_frist_s": (int, 2, 120, "deadline for ONE computation the analysis worker hands to the Intel GPU, in seconds. If the GPU does not return it in time, the worker logs an ERROR ('inference HANG'), answers the event as a GPU hang, and the service replaces the worker process, because the GPU context is not trusted after an abandoned request; the event is treated as after the analysis watchdog, the other events in the worker go back into the queue. The default 10 is measured, not guessed: on the Intel test machine the longest of 3966 computations took 128 ms; 10 s also stays above the kernel's compute preemption timeout (7.5 s), where a legitimate computation may be held back, and below the driver's own abort of a GPU request (20 s). Raise it only if 'inference HANG' lines appear on a machine that is merely slow. analyse_timeout_s stays the outer limit for the whole event"),
@@ -11770,7 +11921,10 @@ class Service:
         # Bauplan analysen/bauplan_abfragetakt_wartezeit.md, Stufe TW1 Punkt 3: Abfragetakt und Clip-Wartezeit lesen
         # poll_loop (vor jedem Schlaf), sweep (je Kandidat) und event_einreihen (je neuem Eintrag) aus cfg; ein
         # laufender Schlaf und schon eingereihte Faelligkeiten bleiben. Namen aus TAKT_WERK_NEU.
-        _live_keys = {*LOG_SWITCH_KEYS, *_kk_ernte.ACHSE_GLOBAL.values(), *_reg.AEHNLICH_WERK, *TAKT_WERK_NEU}
+        # Bauplan analysen/bauplan_benennen.md Stufe BN2 Punkt 4: die fuenf Werte der Seite „Unbekannte“ liest die Seite je
+        # Aufruf aus cfg (core.unbekanntpool.benennen_werte); Namen aus core.registry.BENENNEN_WERK.
+        _live_keys = {*LOG_SWITCH_KEYS, *_kk_ernte.ACHSE_GLOBAL.values(), *_reg.AEHNLICH_WERK, *TAKT_WERK_NEU,
+                      *_reg.BENENNEN_WERK}
         if not geaendert and not _fa_geaendert:
             # .378: kein Wert weicht von der laufenden Config ab — ein Neustart
             # haette nichts zu laden. Wichtig fuer das Kalibrier-Uebernehmen
@@ -15054,12 +15208,17 @@ class Service:
                     return total, "nvidia-smi"
                 if failure:
                     return 0, "unbekannt"
+                # Bauplan KS1: diese erste Abfrage je Prozess (im Aufbau des Dienstes) wartet bis zur
+                # Startgrenze aus der Registry; Freimessung und Absetzweg behalten die 2 s der Sonde.
+                limit = _reg.KARTE_START_ZEITGRENZE_S
                 try:
                     from core import systemstat as _st
-                    d = (_st.SONDEN.get(kind) or (lambda: {}))() or {}
+                    d = (_st.SONDEN.get(kind) or (lambda **_k: {}))(zeitgrenze_s=limit) or {}
                     mb = int(d.get("speicher_max_mb") or 0) if d.get("grund") is None else 0
                     reason = (f"grund={d.get('grund')}, messgrund={d.get('messgrund')}"
                               if d.get("grund") is not None else "card size 0")
+                    if d.get("messgrund") == "timeout":
+                        reason = f"{reason}, time limit {limit:g} s"
                 except Exception as e:                    # noqa: BLE001
                     mb, reason = 0, f"{type(e).__name__}: {e}"
                 if mb > 0:
@@ -18339,7 +18498,7 @@ class Service:
                 return evs
         return [eid]          # Akte da, aber keinem Durchgang zugeordnet: eigener Pass
 
-    def bruecke_vorrat(self, person, eid, ganzer_pass=False):
+    def bruecke_vorrat(self, person, eid, ganzer_pass=False, lauf_id=None):
         """Pass-Check als MINI-ERNTE-LAUF (.521, User-Go 10.09.2026:
         „Pass-Knopf = Mini-Erntelauf").
 
@@ -18387,7 +18546,27 @@ class Service:
           Das Manifest traegt weiter ALLE Durchgangs-eids: die Bewertung braucht
           die Durchgangs-Kette (Konsens ueber mehrere Kameras, core/vorrat.py:10-19).
 
-        -> ("fertig", {nehmen, grenz, v_gesamt}) | ("laeuft", fortschritt_dict)
+        BN1 (Bauplan analysen/bauplan_benennen.md, 25.10.2026) — ABFRAGE OHNE
+        AKTE UND EHRLICHE BUCHFUEHRUNG:
+          `lauf_id` schickt das Blatt bei der Abfrage im 2,5-s-Takt mit (die
+          laufende Antwort traegt sie seit .524). Gehoert der Ordner zu dieser
+          Person und diesem Ereignis (Manifest), kommen Ordner und Durchgang aus
+          dem Manifest; Fortschritt und Ergebnis lesen nur den Lauf-Ordner und
+          den Wartestand im Speicher. Die Akte (`_deckung_by_eid`) und die
+          Tages-Kettung (`_bruecke_durchgang`) liest nur noch der KLICK ohne
+          `lauf_id` — einmal, wie bis BN1. Rechnet nichts mehr und liegt kein
+          Ergebnis vor (Dienst neu gestartet, Ordner geraeumt), wird die Abfrage
+          zum Klick: derselbe Start wie bis BN1, auch er liest die Akte einmal.
+          Ein Ereignis mit Fehler in `fertig.jsonl` (die LETZTE Buchung zaehlt)
+          ist auf diesem Weg NICHT erledigt: der naechste Klick holt es ueber
+          den Worker neu, und die Kette bildet die Auswahl neu. Die Abfrage
+          startet dagegen nie neu — sie meldet das Ergebnis mit den
+          gescheiterten Ereignissen (`gescheitert`, `n_eids`), damit die
+          Antwort „k von n nicht abgeholt" sagen kann statt „nothing to take".
+          `core.ernte.fertig_lesen` bleibt unangetastet (andere Aufrufer).
+
+        -> ("fertig", {nehmen, grenz, v_gesamt, diagnose, lauf_id, pass_n,
+           n_eids, gescheitert}) | ("laeuft", fortschritt_dict)
            | ("fehler", text)."""
         import hashlib
         from core import ernte as _ern
@@ -18407,8 +18586,21 @@ class Service:
             self.log.info("pass check not started: the persistent worker is "
                      "disabled (config 'worker')")
             return "fehler", self.BRUECKE_WORKER_AUS
-        akte = self._deckung_by_eid()          # EINE Leseart, EIN Lesen je Aufruf
-        pass_eids = self._bruecke_durchgang(eid, akte)
+        # BN1: die ABFRAGE (mit `lauf_id`) nimmt Ordner und Durchgang aus dem
+        # Manifest ihres Laufs — nur wenn es zu dieser Person und diesem
+        # Ereignis gehoert. Sonst (fremder oder geraeumter Ordner, alter Tab)
+        # gilt der Aufruf als Klick und liest die Akte wie bis BN1.
+        import re as _re_bv
+        akte, pass_eids, bid = None, None, None
+        _lid = str(lauf_id or "").strip()
+        if _lid and _re_bv.fullmatch(r"B[A-Za-z0-9_]+", _lid):
+            _man = _ern.manifest_lesen(os.path.join(dd, "state", "lernlauf", _lid)) or {}
+            _man_eids = [str(x) for x in (_man.get("eids") or [])]
+            if _man.get("bruecke") and _man.get("person") == person and eid in _man_eids:
+                bid, pass_eids = _lid, _man_eids
+        if bid is None:
+            akte = self._deckung_by_eid()          # EINE Leseart, EIN Lesen je Aufruf
+            pass_eids = self._bruecke_durchgang(eid, akte)
         if pass_eids is None:
             # Ehrlicher Fehlerfall (.507 B2): ohne Akten-Start ist das Ereignis
             # fuer die Durchgangs-Kette unsichtbar — geerntet wuerde, bewertet
@@ -18436,8 +18628,9 @@ class Service:
             # S2-Fix 01.09.: die Person gehoert in die Identitaet — zwei Personen
             # desselben Durchgangs (Bulk-Benennung) bekamen sonst denselben Ordner
             # (199x FileNotFoundError beim Feldtester).
-            bid = "B" + hashlib.sha1(
-                (person + "\n" + pass_eids[0]).encode()).hexdigest()[:10]
+            if bid is None:
+                bid = "B" + hashlib.sha1(
+                    (person + "\n" + pass_eids[0]).encode()).hexdigest()[:10]
             bdir = os.path.join(wurzel, bid)
             laeuft = os.path.join(bdir, "laeuft.json")
             fehler = os.path.join(bdir, "fehler.json")
@@ -18513,16 +18706,66 @@ class Service:
                              f"— NOT starting a second harvest for this folder")
                 return "laeuft", self._bruecke_fortschritt(laeuft, self._plaetze,
                                                            bid)
-            geerntet, _summe = _ern.fertig_lesen(bdir) if os.path.isdir(bdir) else (set(), {})
-            fehlend = [e for e in eids if e not in geerntet]
-            if not fehlend and os.path.isfile(_pe.auswahl_pfad(bdir)):
+            # BN1: die BUCHFUEHRUNG dieses Wegs. Je Ereignis zaehlt die LETZTE
+            # Zeile in `fertig.jsonl` (ein neu geholtes Ereignis steht dort
+            # zweimal): None = gelungen, sonst der Grund des Workers. Bis BN1
+            # galt hier jede Zeile als erledigt (`core.ernte.fertig_lesen`) —
+            # ein gescheiterter Clip-Abruf war damit fuer immer „fertig", und
+            # das Overlay sagte „nothing to take" (O807). `fertig_lesen` selbst
+            # bleibt, wie es ist: der Lernlauf und der Norm-Schritt lesen es.
+            # Eine kaputte Zeile laesst ihr Ereignis offen (wie dort).
+            buchung = {}
+            try:
+                with open(os.path.join(bdir, "fertig.jsonl"), encoding="utf-8") as f:
+                    for _zeile in f:
+                        try:
+                            _bz = json.loads(_zeile)
+                            buchung[str(_bz["eid"])] = (
+                                None if _bz.get("ok")
+                                else str(_bz.get("fehler") or "no reason recorded"))
+                        except (ValueError, KeyError, TypeError):
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
+            except FileNotFoundError:
+                pass                                   # noch nichts gebucht
+            except OSError:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "nothing booked")
+            gescheitert = [{"eid": e, "grund": buchung[e]} for e in eids
+                           if buchung.get(e) is not None]
+
+            def _ergebnis():
                 # FERTIG-MARKE ist seit .521 die Auswahl-Datei des
                 # Identitaets-Schritts (bis .520: die `vorrat.jsonl` der
                 # Angebots-Bewertung). Sie wird atomar getauscht — eine halb
                 # geschriebene Auswahl kann hier also nicht als fertiger Lauf
-                # durchgehen.
-                return "fertig", self._passernte_auswahl(
-                    bdir, bid, person, None if ganzer_pass else {eid})
+                # durchgehen. BN1: dazu der Umfang aus dem Manifest (die Zeile
+                # „1 event of N" braucht keine Akte mehr) und die gescheiterten
+                # Ereignisse fuer die ehrliche Meldung.
+                return dict(self._passernte_auswahl(
+                    bdir, bid, person, None if ganzer_pass else {eid}),
+                    pass_n=len(pass_eids), n_eids=len(eids), gescheitert=gescheitert)
+            _auswahl_da = os.path.isfile(_pe.auswahl_pfad(bdir))
+            if akte is None:
+                # BN1, ABFRAGE: hier rechnet nichts mehr und nichts wartet.
+                # Sind alle Ereignisse gebucht — gelungen ODER gescheitert —,
+                # ist das das Ergebnis dieses Laufs; neu geholt wird erst auf
+                # den naechsten Klick, sonst finge die Abfrage im Takt immer
+                # wieder von vorn an.
+                if _auswahl_da and all(e in buchung for e in eids):
+                    return "fertig", _ergebnis()
+                # Kein Lauf und kein Ergebnis (Dienst neu gestartet, Ordner
+                # geraeumt): die Abfrage wird zum Klick — derselbe Start wie
+                # bis BN1. Die Sperre ist ein RLock, der Klick nimmt sie erneut.
+                self.log.info(f"PASS CHECK ({bid}, {person}): no run is active and "
+                         f"no result is there — starting the check like a click")
+                return self.bruecke_vorrat(person, eid, ganzer_pass)
+            fehlend = [e for e in eids if e not in buchung or buchung[e] is not None]
+            if not fehlend and _auswahl_da:
+                return "fertig", _ergebnis()
+            if gescheitert:
+                self.log.info(f"PASS CHECK ({bid}, {person}): {len(gescheitert)} of "
+                         f"{len(eids)} event(s) could not be fetched last time — "
+                         f"fetching them again through the worker, the selection "
+                         f"is formed anew")
             # Start (oder Nachernte der fehlenden Events): Regime einfrieren,
             # Event-Menge im Manifest fuehren, Hintergrund-Ernte
             os.makedirs(bdir, exist_ok=True)
@@ -19673,6 +19916,13 @@ class Service:
                         eintrag["mkbilanz"] = antwort["mkbilanz"]
                     if not antwort.get("ok"):
                         eintrag["fehler"] = str(antwort.get("fehler"))[:160]
+                if not eintrag["ok"]:
+                    # BN1 (O807): je gescheitertem Ereignis EINE laute Zeile, am
+                    # Ort des Geschehens — die Abfrage meldet das Ergebnis nur
+                    # einmal und darf dafuer nicht selbst loggen.
+                    self.log.warning(f"PASS CHECK ({bid}, {person}): event {eid} could "
+                             f"not be fetched — {eintrag.get('fehler')}; the next "
+                             f"click on the check fetches it again")
                 with buch_lock:
                     _ern.fertig_anhaengen(bdir, eintrag)
                     buch["i"] += 1
@@ -19948,11 +20198,18 @@ class Service:
             _ll.lauf_fortschreiben(dd, fortschritt={
                 "stock offers": erg["angebote"],
                 "stock faces": erg["v_gesamt"]})
-            self.log.error(f"stock stage finished (run {lauf_id}): "
+            self.log.info(f"stock stage finished (run {lauf_id}): "
                      f"{erg['angebote']} catalog offers from {erg['v_gesamt']} "
                      f"stock faces across {erg['durchgaenge']} passes"
                      + (f"; rejected: {erg['gruende']}" if erg["gruende"] else "")
                      + (f"; {erg['fehlend']} candidate files missing" if erg["fehlend"] else ""))
+            if erg["fehlend"] or erg["gruende"]:
+                self.log.warning(f"stock stage (run {lauf_id}): "
+                         + "; ".join(
+                             ([f"{erg['fehlend']} candidate files missing"]
+                              if erg["fehlend"] else [])
+                             + ([f"{sum(erg['gruende'].values())} offers rejected "
+                                 f"({erg['gruende']})"] if erg["gruende"] else [])))
         except Exception as e:
             self.log.error(f"stock stage failed (run {lauf_id}): {type(e).__name__}: {e}")
             try:
@@ -19976,7 +20233,6 @@ class Service:
     LERNLAUF_NORM_RUNDEN = 5
     LERNLAUF_NORM_DECKEL_MIN_S = 300
     LERNLAUF_NORM_DECKEL_MAX_S = 3600
-    LERNLAUF_NORM_S_JE_KANDIDAT = 0.1     # grosszuegig; die Messung liegt darunter
 
     def _norm_schritt(self, kennung, lauf_dir, eids, events_liste, schwellen,
                       lebt=None, fortschritt=None, puls=None, art="ernte"):
@@ -20044,10 +20300,12 @@ class Service:
             if k and k not in latten:
                 latten[k] = _kk_ernte.sieb_latten(_kl, k)
         _n_kand = int((_ern.fertig_lesen(lauf_dir)[1] or {}).get("m") or 0)
-        deckel_s = min(self.LERNLAUF_NORM_DECKEL_MAX_S,
-                       max(self.LERNLAUF_NORM_DECKEL_MIN_S,
-                           int(self.LERNLAUF_NORM_S_JE_KANDIDAT * _n_kand)
-                           + 180))
+        # Die Job-Frist ist IMMER die Hoechstfrist (Bauplan
+        # analysen/bauplan_lernlauf_korrekturen.md, Stufe N1). Bis dahin
+        # schaetzte sie sich aus der Kandidatenzahl (0,1 s je Kandidat plus
+        # 180 s); beim Feldtester (27.10.2026, 2.421 Kandidaten) gab das 422 s,
+        # und die Job-Wache beendete den Worker dreimal mitten in der Analyse.
+        deckel_s = self.LERNLAUF_NORM_DECKEL_MAX_S
         self.log.info(f"norm step starting ({kennung}): {_n_kand} handover "
                  f"candidate(s) from {len(eids)} event(s), one bundled "
                  f"feature-norm session")
@@ -20374,10 +20632,14 @@ class Service:
                 fehler += 1
                 self.log.info(f"end check: group {satz.get('anker_id')} not "
                          f"pre-checked ({type(e).__name__}: {e})")
-        self.log.error(f"end check (run {lauf_id}): picture check prepared for "
+        self.log.info(f"end check (run {lauf_id}): picture check prepared for "
                  f"{fertig} group{'s' if fertig != 1 else ''}"
                  + (f", {fehler} failed" if fehler else "")
                  + " — nothing is set aside automatically")
+        if fehler:
+            self.log.warning(f"end check (run {lauf_id}): picture check failed for "
+                     f"{fehler} group{'s' if fehler != 1 else ''} (see the lines "
+                     "'not pre-checked' above)")
 
     def _lernlauf_ernte(self):
         """Frontal-Ernte (Konzept §P1): 1 Event je Worker-Job; das Regime
@@ -21528,7 +21790,7 @@ class Service:
                          # und die Zeile soll das nicht behaupten.
                          nachmess=manifest.get("profil_nachmess"))
                      + f" [{manifest.get('profil_quelle', '?')}]")
-            self.log.error(f"harvest finished (run {lauf_id}): "
+            self.log.info(f"harvest finished (run {lauf_id}): "
                      f"{summe.get('kandidaten', 0)} candidates "
                      f"({summe.get('m', 0)} crop-worthy, {summe.get('s', 0)} anchor-ready, "
                      f"{summe.get('gesiebt', 0)} sieved out) "
@@ -21536,6 +21798,11 @@ class Service:
                      f"{summe.get('unlesbar', 0)} not readable, "
                      f"{summe.get('unvollstaendig', 0)} partly readable, "
                      f"{summe.get('fehler', 0)} errors")
+            if summe.get("unlesbar") or summe.get("unvollstaendig") or summe.get("fehler"):
+                self.log.warning(f"harvest (run {lauf_id}): of {n} events "
+                         f"{summe.get('unlesbar', 0)} not readable, "
+                         f"{summe.get('unvollstaendig', 0)} partly readable, "
+                         f"{summe.get('fehler', 0)} errors")
             # B4 (.513, Inventur §I-7): DIE Bilanz-Zeile des Laufs. Bis .512
             # gab es auf dem Lernpfad keine einzige Zahl dafuer, wie viel des
             # Materials die Guete-Latte ueberhaupt beurteilen konnte — nur der
@@ -21848,10 +22115,198 @@ class Service:
                         _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         return q
 
+    @contextlib.contextmanager
+    def _enroll_sperre(self):
+        """Die gemeinsame Sperrdatei neben der Anlern-Warteschlange fuer Anhaengen und Kuerzen (Bauplan
+        analysen/bauplan_datenordner_klein.md, Baustein „Kuerzen neben Anhaengern", DK1 Punkt 6). -> Kontext"""
+        import fcntl
+        with open(self._enroll_queue_pfad() + ".lock", "a") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
     def _enroll_append(self, d):
-        with open(self._enroll_queue_pfad(), "a") as f:
+        with self._enroll_sperre(), open(self._enroll_queue_pfad(), "a") as f:
             f.write(json.dumps(d, ensure_ascii=False) + "\n")
             f.flush()
+
+    _ENROLL_ENTSCHIEDEN = ("abgelehnt", "aufgenommen")      # die Status eines entschiedenen Vorschlags (enroll_entscheiden)
+
+    def _enroll_weg(self, d, im_katalog, gelesen_ab, frist):
+        """Faellt die letzte Zeile einer id beim Kuerzen weg (DK1 Punkt 6)? Ihr Satz steht nicht im Katalog (nur fuer
+        Zeilen, die vor dem Lesen des Katalogs da waren), oder sie ist entschieden und aelter als die Angebotsfrist. -> bool"""
+        def zahl(x):
+            return x if isinstance(x, (int, float)) and not isinstance(x, bool) else None
+        ts = zahl(d.get("ts"))
+        if d.get("ref_id") and ts is not None and ts < gelesen_ab and d["ref_id"] not in im_katalog:
+            return True
+        entschieden = zahl(d.get("ts_entschieden")) or ts
+        return d.get("status") in self._ENROLL_ENTSCHIEDEN and entschieden is not None and entschieden < frist
+
+    def _enroll_queue_kuerzen(self, jetzt):
+        """Die Anlern-Warteschlange neu schreiben (DK1 Punkt 6): je id nur die letzte Zeile, ohne _enroll_weg; eine unlesbare
+        Zeile bleibt, Herausgenommenes geht Byte fuer Byte in den Papierkorb, die Datei wird unter der Sperrdatei der
+        Anhaenger atomar ersetzt. Den Katalog liest refquelle.catalog_ref_ids (Nachtrag 28.10.); ist er nicht vollstaendig
+        lesbar, bleibt die Warteschlange unveraendert und der Fehler geht an den Aufrufer.
+        -> dict zeilen (vorher), behalten, entfernt, unlesbar"""
+        from core import lernlauf as _ll_q
+        from core import refquelle as _rq_q
+        pfad = self._enroll_queue_pfad()
+        if not os.path.exists(pfad):
+            return {"zeilen": 0, "behalten": 0, "entfernt": 0, "unlesbar": 0}
+        rq_cfg = _ll_q.datenort_cfg(self.cfg["data_dir"])
+        gelesen_ab = time.time() - 1.0                  # ts der Zeilen ist auf 0,1 s gerundet
+        im_katalog = _rq_q.catalog_ref_ids(rq_cfg)
+        frist = jetzt - _reg.ANGEBOT_TAGE_WERK * 86400
+        with self._enroll_sperre():
+            with open(pfad, "rb") as f:
+                roh = f.read().split(b"\n")
+            rest = roh.pop()                            # nach dem letzten Zeilenende: leer oder eine halbe Zeile
+            gelesen, letzte = [], {}
+            for i, z in enumerate(roh):
+                try:
+                    d = json.loads(z)
+                    gelesen.append(d if isinstance(d, dict) and isinstance(d.get("id"), str) else None)
+                except ValueError:
+                    gelesen.append(None)
+                if gelesen[-1] is not None:
+                    letzte[gelesen[-1]["id"]] = i
+            raus = [i for i, d in enumerate(gelesen) if d is not None and (
+                letzte[d["id"]] != i or self._enroll_weg(d, im_katalog, gelesen_ab, frist))]
+            zahlen = {"zeilen": len(roh) + bool(rest), "behalten": len(roh) - len(raus) + bool(rest),
+                      "entfernt": len(raus), "unlesbar": gelesen.count(None) + bool(rest)}
+            if not raus:
+                return zahlen
+            _rq_q.trash_lines(rq_cfg, jetzt, os.path.splitext(os.path.basename(pfad))[0], [roh[i] for i in raus])
+            weg = set(raus)
+            hilfe = pfad + ".neu"
+            with open(hilfe, "wb") as f:
+                f.write(b"".join(z + b"\n" for i, z in enumerate(roh) if i not in weg) + rest)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(hilfe, pfad)
+        return zahlen
+
+    def _unbekannt_schutz(self):
+        """Die Schutzmenge der Unbekannt-Gruppen fuer den Papierkorb (DK1 Punkt 1): die alten Gruppen hat DK2 vorher im
+        selben Wartungsschritt aufgeloest, jede verbleibende Gruppe in learn/unbekannte.jsonl gilt als lebend; die Saetze
+        ihrer Altbestand-Mitglieder kommen ueber anlernen.pool_ref_ids.
+        -> (Kennungen der Gruppen, ref_ids) oder None, wenn Gruppenbestand oder Pool nicht vollstaendig lesbar sind (ERROR)"""
+        import anlernen as _al_s
+        from core import unbekanntpool as _ubp_s
+        dd = self.cfg["data_dir"]
+        zaehler, fehler = {}, []
+        idents = _ubp_s.identitaeten(dd, zaehler)
+        mitglieder = _ubp_s.mitglieder(dd, idents, log=fehler.append)
+        with _al_s.pool_lock():                          # die Pool-Schreiber ersetzen die Datei unter dieser Sperre
+            try:
+                with open(_al_s.GES_PATH, "rb") as f:
+                    zeilen = sum(1 for z in f if z.strip())
+            except FileNotFoundError:
+                zeilen = 0
+            gelesen = len(_al_s.lade_gesichter())
+            karte = _al_s.pool_ref_ids()
+        if zaehler or fehler or gelesen != zeilen:
+            self.log.error(f"data cleanup: unknown groups or pool not fully readable (groups {zaehler or 'ok'}, "
+                           f"{len(fehler)} member error(s), pool {gelesen} of {zeilen} line(s) read) — no set moved "
+                           "to the trash")
+            return None
+        ids = {m["ref_id"] or karte.get(m["id"]) for ms in mitglieder.values() for m in ms}
+        ids.discard(None)
+        return set(idents), ids
+
+    def daten_aufraeumen(self):
+        """Wartungsschritt „data cleanup" (Bauplan analysen/bauplan_datenordner_klein.md, Baustein „Ablauf", Stufen DK1 bis
+        DK3): Unbekannt-Gruppen ohne Auftritt aufloesen (DK2, vor den Saetzen, damit frei gewordene Saetze im selben Lauf
+        in den Papierkorb gehen; die Schutzmenge bildet sich danach aus dem neuen Gruppenbestand), Saetze in den
+        Papierkorb, Anlern-Warteschlange kuerzen, dann die Teile der Stufe DK3 (Messjournal, Archiv der Ereignisakte,
+        Schreibprotokoll nach Frigate; die Unbekannt-Schlange raeumt der Verbraucher in seiner Runde,
+        core.unbekannt_verbraucher.stuecke_raeumen), Papierkorb leeren; je Teil eigener Fang und eine INFO-Zeile mit
+        Zahlen, ein Fehler eine ERROR-Zeile. -> None"""
+        import anlernen as _al_d
+        from core import lernlauf as _ll_d
+        from core import refquelle as _rq_d
+        from core import unbekanntpool as _ubp_d
+        from core.refquelle import nutzung as _nz_d
+        rq_cfg = _ll_d.datenort_cfg(self.cfg["data_dir"])
+        jetzt = time.time()
+        try:
+            g = _al_d.resolve_old_groups(jetzt)
+            je = ", ".join(f"{n} {s}" for s, n in sorted(g["groups"].items())) or "none"
+            self.log.info(f"data cleanup: {sum(g['groups'].values())} unknown group(s) without an appearance for "
+                          f"{_ubp_d.ARCHIV_TAGE} days resolved ({je}), {g['released']} binding(s) released, "
+                          f"{g['pool']} pool line(s) moved to the trash ({g['pool_without_group']} of them without a "
+                          f"group), day {g['day']}")
+        except Exception as e:
+            self.log.error(f"data cleanup: unknown groups not resolved ({type(e).__name__}: {e})")
+        try:
+            schutz = self._unbekannt_schutz()
+            if schutz is not None:
+                r = _rq_d.trash_sets(rq_cfg, jetzt, *schutz)
+                self.log.info(f"data cleanup: {len(r['ref_ids'])} candidate or discarded set(s) older than "
+                              f"{_reg.ANGEBOT_TAGE_WERK} days moved to the trash ({r['ordner']} set folder(s), "
+                              f"{r['zeilen']} catalog line(s), day {r['tag']}); {len(r['vollendet'])} folder(s) of an "
+                              f"interrupted run moved after; protected: {len(schutz[0])} unknown group(s), "
+                              f"{len(schutz[1])} set(s) of legacy pool members")
+        except Exception as e:
+            self.log.error(f"data cleanup: sets not moved to the trash ({type(e).__name__}: {e})")
+        try:
+            q = self._enroll_queue_kuerzen(jetzt)
+            self.log.info(f"data cleanup: enrollment queue rewritten — {q['entfernt']} of {q['zeilen']} line(s) moved "
+                          f"to the trash, {q['behalten']} kept ({q['unlesbar']} unreadable kept)")
+        except Exception as e:
+            self.log.error(f"data cleanup: enrollment queue not rewritten ({type(e).__name__}: {e})")
+        try:                                            # DK3 Punkt 1
+            q = _nz_d.usage_trim(rq_cfg, jetzt)
+            self.log.info(f"data cleanup: usage journal trimmed — {q['entfernt']} of {q['zeilen']} line(s) older than "
+                          f"{_reg.ANGEBOT_TAGE_WERK} days moved to the trash, {q['behalten']} kept ({q['unlesbar']} "
+                          "without a readable time kept)")
+        except Exception as e:
+            self.log.error(f"data cleanup: usage journal not trimmed ({type(e).__name__}: {e})")
+        try:                                            # DK3 Punkt 2: Monat ganz aelter als aufbewahrung_tage
+            tage = self.cfg["aufbewahrung_tage"]
+            grenze = jetzt - float(tage) * 86400
+            adir = os.path.join(self.cfg["data_dir"], self._DECKUNG_ARCHIV)
+            vor, nach = self._DECKUNG_MONAT.split("{monat}")
+            muster = re.compile(re.escape(vor) + r"(\d{4})-(\d{2})" + re.escape(nach))
+            weg = behalten = 0
+            namen = sorted(os.listdir(adir)) if os.path.isdir(adir) else []
+            for m in filter(None, map(muster.fullmatch, namen)):
+                jahr, monat = int(m.group(1)), int(m.group(2))
+                pfad = os.path.join(adir, m.group(0))
+                if not 1 <= monat <= 12 or not os.path.isfile(pfad):
+                    continue
+                if datetime.datetime(jahr + monat // 12, monat % 12 + 1, 1).timestamp() > grenze:
+                    behalten += 1
+                    continue
+                ziel = os.path.join(_rq_d.trash_dir(rq_cfg, jetzt)[1], self._DECKUNG_ARCHIV, m.group(0))
+                os.makedirs(os.path.dirname(ziel), exist_ok=True)
+                basis, n = ziel, 1
+                while os.path.lexists(ziel):            # derselbe Name am selben Tag zweimal: nie ueberschreiben
+                    n += 1
+                    ziel = f"{basis}.{n}"
+                os.rename(pfad, ziel)
+                weg += 1
+            self.log.info(f"data cleanup: event file archive — {weg} monthly file(s) whose month is older than {tage} "
+                          f"days moved to the trash, {behalten} kept")
+        except Exception as e:
+            self.log.error(f"data cleanup: event file archive not cleaned ({type(e).__name__}: {e})")
+        try:                                            # DK3 Punkt 4
+            q = self._writes_kuerzen(jetzt, rq_cfg)
+            self.log.info(f"data cleanup: sub_label write log trimmed — {q['entfernt']} of {q['zeilen']} line(s) older "
+                          f"than {self.cfg['aufbewahrung_tage']} days moved to the trash, {q['behalten']} kept "
+                          f"({q['unlesbar']} without a readable time kept)")
+        except Exception as e:
+            self.log.error(f"data cleanup: sub_label write log not trimmed ({type(e).__name__}: {e})")
+        try:
+            r = _rq_d.empty_trash(rq_cfg, jetzt)
+            self.log.info(f"data cleanup: trash emptied — {len(r['geleert'])} day folder(s) older than "
+                          f"{_reg.PAPIERKORB_TAGE_WERK} days deleted, {r['behalten']} kept, {r['fremd']} other "
+                          "name(s) left alone")
+        except Exception as e:
+            self.log.error(f"data cleanup: trash not emptied ({type(e).__name__}: {e})")
 
     def _enroll_uebernehmen(self, eid, event_dir, camera):
         """Kandidaten bekannter Personen aus analyze (kandidaten.jsonl) in die Queue — mit Tages-Drossel
@@ -23327,6 +23782,10 @@ class Service:
             # nicht und fragt deshalb auch nicht. Unbrauchbar (3.5) heisst: kein fruehes Ende, eine
             # WARNING je Ereignis und ein Zaehler in /health.
             _pzahl = None
+            # Bauplan analysen/bauplan_namenszuordnung.md, Stufe NZ3 Punkt 1: die Frigate-Ereignisse, die die Zahl
+            # ergeben haben (mit `data`: Weg, Rahmen, Schnappschuss), fuer die Namenszuordnung vor `_maybe_sublabel`.
+            # Nur die Frigate-Abfrage liefert sie; Einspiel-Zweig, kein Worker oder gescheiterter Abruf: keine.
+            _pz_evs = []
             # KP3 Punkt 5 (Gesammelte Befunde 13): die Abfrage ist keine Analysezeit, sie faellt aus
             # dauer_s heraus wie die Wartezeit am Platz (_warte_s, unten)
             _pz_s = 0.0
@@ -23342,7 +23801,7 @@ class Service:
                     _pzahl, _pz_grund = _einspiel.personenzahl_lesen(ev)
                     _pz_teile = {"quelle": "metadata"}
                 else:
-                    _pzahl, _pz_grund, _pz_teile = _personenzahl.aus_frigate(
+                    _pzahl, _pz_grund, _pz_teile, _pz_evs = _personenzahl.aus_frigate(
                         lambda _p: api(cfg, _p), ev, float(cfg["lookback_h"]) * 3600)
                 _pz_s = time.time() - _t_pz
                 self.log.debug(f"{eid} ({camera}): person count {_pzahl} — {json.dumps(_pz_teile)}")
@@ -23850,7 +24309,83 @@ class Service:
             _m7.append(("alert", time.monotonic()))
             entry["presence_push"] = False if nachhol else self._maybe_presence(entry, event_dir)
             _m7.append(("presence", time.monotonic()))
-            entry["sublabel"] = self._maybe_sublabel(entry, nachhol=nachhol)
+            # Bauplan analysen/bauplan_namenszuordnung.md, Stufe NZ3 Punkte 2 und 3: meldet Frigate fuer die Spanne des
+            # Clips zwei oder mehr Personen, rechnet core/namenszuordnung vor dem Schreiben den Namen jedes Ereignisses
+            # dieser Kamera, aus den Akten der schon gerechneten Ereignisse derselben Kamera im Durchgang und den Wegen
+            # aus Punkt 1. Der Durchgang kommt aus der EINEN Gruppierung (szenarien.szenarien_des_tages mit der Regel
+            # durchgang_anhaengen) ueber die Akte-Zeilen des Tages aus der Akten-Sicht wie bei /heute; die Akte je
+            # Ereignis ist seine results.jsonl, gelesen wie in run_analyze. Die Sperre haelt Rechnung, Beschluss und
+            # Schreibprotokoll zusammen: ein zweites Ereignis rechnet erst danach und sieht das erste ueber
+            # `_nz_offen`, auch bevor dessen Akte-Zeile geschrieben ist. Bei einer Person bleibt alles wie bisher, ebenso bei einem
+            # eingespielten Ereignis: es hat keine Frigate-Personenzahl (seine Zahl kommt aus den Metadaten, `_pz_evs`
+            # bleibt leer) und laeuft ohne Zuordner und ohne WARNING (Hauptsession 26.10.2026 18:43:05).
+            _nz, _nz_akten = None, None
+            _nz_sperre = (self.__dict__.setdefault("_nz_sperre", threading.Lock())
+                          if _pz_evs and isinstance(_pzahl, int) and _pzahl >= 2 and res is not None else None)
+            with _nz_sperre or contextlib.nullcontext():
+                if _nz_sperre is not None:
+                    from core import namenszuordnung as _namenszuordnung
+                    try:
+                        # Nachzug 19:05:31: die Akte-Zeilen des Tages kommen aus der Akten-Sicht wie bei /heute
+                        # (core/akte.py, Stufe ST1), nicht aus einem Lesen der ganzen Akte je Ereignis
+                        from core import akte as _akte
+                        _nz_tag = datetime.datetime.fromtimestamp(float(entry["start"])).replace(
+                            hour=0, minute=0, second=0, microsecond=0)
+                        _nz_t0, _nz_t1 = _nz_tag.timestamp(), (_nz_tag + datetime.timedelta(days=1)).timestamp()
+                        _nz_akten = _akte.sicht(self.log_path).heute(_nz_t0, _nz_t1)[0]
+                        _nz_offen = self.__dict__.setdefault("_nz_offen", {})
+                        for _k in [k for k, v in _nz_offen.items()
+                                   if k in _nz_akten or float(v.get("start") or 0) < _nz_t0]:
+                            del _nz_offen[_k]               # steht inzwischen in der Akte oder liegt vor diesem Tag
+                        _nz_akten.update(_nz_offen)
+                        _nz_akten[eid] = entry
+                        _nz_gang = next((s.get("evs") or [] for s in _szenarien.szenarien_des_tages(
+                            _nz_akten, _nz_t0, _nz_t1, cfg, {})
+                            if any(x.get("eid") == eid for x in s.get("evs") or [])), [])
+                        _nz_res = [res]
+                        for _x in _nz_gang:                 # Zeilen der Durchgangs-Liste: eid, t, cam, conf
+                            if _x.get("eid") == eid or str((_nz_akten.get(_x.get("eid")) or {}).get("camera")) \
+                                    != str(camera):
+                                continue
+                            _r = None
+                            try:
+                                with open(os.path.join(cfg["data_dir"], "events", str(_x["eid"]).replace("/", "_"),
+                                                       "results.jsonl")) as f:
+                                    for _z in f:
+                                        try:
+                                            _r = json.loads(_z)
+                                            break
+                                        except ValueError:
+                                            continue    # halb geschriebene Zeile; die naechste vollstaendige zaehlt
+                            except OSError:
+                                _r = None               # noch keine Akte: das Ereignis zaehlt ohne Gesichter
+                            if isinstance(_r, dict):
+                                _nz_res.append(_r)
+                        # das Ereignis selbst steht unter `_pz_evs` (sonst gaebe aus_frigate keine Zahl): Ergebnis je Kennung
+                        _nz = _namenszuordnung.zuordnen(_nz_res, _pz_evs, int(cfg.get("stapel_stimmen") or 0))
+                        _nz_offen[eid] = entry
+                    except Exception as e:                  # noqa: BLE001  nie die Analyse reissen, laut
+                        self.log.error(f"{eid} ({camera}): name assignment failed ({type(e).__name__}: {e}) — "
+                                       f"the strongest name of the clip applies")
+                        _nz = None
+                    if _nz is not None:
+                        _nz_eig = _nz[eid]
+                        entry["namenszuordnung"] = {k: _nz_eig[k] for k in ("name", "grund", "t0", "schaerfe")}
+                        _namenszuordnung.zaehlen(_nz_eig["grund"])
+                        if _nz_eig["name"] is None:
+                            self.log.warning(f"{eid} ({camera}): name assignment without a name "
+                                             f"({_nz_eig['grund']}) — fallback, the strongest name of the clip "
+                                             f"applies")
+                        else:
+                            self.log.info(f"{eid} ({camera}): name assignment '{_nz_eig['name']}' "
+                                          f"({_nz_eig['grund']}, start {_nz_eig['t0']}, sharpness "
+                                          f"{_nz_eig['schaerfe']})")
+                        # Uebergabe an _maybe_sublabel unter der Sperre, ohne seinen Aufruf zu aendern (Proben ersetzen
+                        # es durch eine Funktion mit genau den Parametern entry und nachhol)
+                        self.__dict__["_nz_lauf"] = {"eid": eid, "zuordnung": _nz, "nachbarn": _nz_akten}
+                entry["sublabel"] = self._maybe_sublabel(entry, nachhol=nachhol)
+                if _nz_sperre is not None:
+                    self.__dict__.pop("_nz_lauf", None)     # nur unter der Sperre, die sie gesetzt hat
             _m7.append(("sublabel", time.monotonic()))
             if not nachhol:
                 self.publish_erkennung(entry)     # kein Live-Echo fuer alte Ereignisse
@@ -27341,6 +27876,55 @@ def make_handler(svc):
                        if gestartet else _sprache.t("antwort.reorg_laeuft"))
                 return self._send(200, json.dumps({"ok": bool(gestartet), "msg": msg},
                                   ensure_ascii=False), "application/json")
+            if pfad == "/benennen_zuweisen":
+                # Bauplan analysen/bauplan_benennen.md Stufe BN2 Punkt 3: Benennen auf der Seite „Unbekannte“, nur mit
+                # Auswahl. Sie darf nicht leer sein und muss zur Einheit gehoeren; uebernommen werden nur Bilder mit
+                # gespeicherter Norm ueber der Latte nach E1 (core.unbekanntpool.auswahl_pruefen). Danach wie
+                # /unbekannt_benennen: Qualitaetspruefung, Nachpruefung der betroffenen Ereignisse, Anhang der Antwort.
+                try:
+                    d = self._body_json(65536, default={}, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
+                    from core import unbekanntpool as _ubp_bz
+                    _uid = str(d.get("uid") or "")
+                    _person = str(d.get("person") or "").strip()
+                    _ids = ([str(x) for x in d["ids"] if str(x)] if isinstance(d.get("ids"), list) else [])
+                    if not _ids:
+                        svc.log.info(f"naming unknown {_uid} refused: no picture ticked")
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": _sprache.t("antwort.benennen_leer"), "uebernommen": [],
+                             "abgelehnt": []}, ensure_ascii=False), "application/json")
+                    _pr = _ubp_bz.auswahl_pruefen(cfg, _uid, _ids)
+                    _abg = _pr["abgelehnt"]
+                    _abg_text = ", ".join(_sprache.t(_ubp_bz.BENENN_GRUENDE[g][1], n=n)
+                                          for g, n in _ubp_bz.gruende_zaehlen(_abg))
+                    _abg_log = "; ".join(f"{a['ref_id'][:12]} {_ubp_bz.BENENN_GRUENDE[a['grund']][0]}" for a in _abg)
+                    if not _pr["gut"]:
+                        svc.log.info(f"naming unknown {_uid} refused: none of {len(_abg)} ticked picture(s) can be "
+                                     f"taken ({_abg_log})")
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": _sprache.t("antwort.benennen_keins", n=len(_abg), gruende=_abg_text),
+                             "uebernommen": [], "abgelehnt": _abg}, ensure_ascii=False), "application/json")
+                    import anlernen
+                    ok, msg, betroffen = anlernen.unbekannt_benennen(_uid, _person, emb=svc._emb, ids=_pr["gut"])
+                    if ok:
+                        svc.qs_neu_starten()
+                        svc.anlern_nachpruefung_starten(_person, betroffen)
+                        msg += _sprache.t("antwort.nachpruefung_anhang")
+                        svc.log.info(f"UNKNOWN NAMED (selection): {_uid} -> {_person}: {len(_pr['gut'])} picture(s) "
+                                     f"adopted, {len(_abg)} refused" + (f" ({_abg_log})" if _abg else "")
+                                     + f" — {msg}")
+                    else:
+                        svc.log.warning(f"naming unknown {_uid} -> {_person} failed: {msg}"
+                                        + (f"; {len(_abg)} refused ({_abg_log})" if _abg else ""))
+                    if _abg:
+                        msg += _sprache.t("antwort.benennen_abgelehnt", n=len(_abg), gruende=_abg_text)
+                    return self._send(200 if ok else 400, json.dumps(
+                        {"ok": ok, "msg": msg, "uebernommen": _pr["gut"] if ok else [], "abgelehnt": _abg},
+                        ensure_ascii=False), "application/json")
+                except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
+                    return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad in ("/unbekannt_reconcile", "/unbekannt_besucher", "/unbekannt_verwerfen",
                         "/unbekannt_merge", "/unbekannt_benennen", "/unbekannt_merge_viele",
                         "/unbekannt_objekt", "/unbekannt_seite",
@@ -27352,41 +27936,13 @@ def make_handler(svc):
                     d = self._body_json(65536, default={}, erwartet=dict)
                     if d is _ABGEWIESEN:
                         return
-                    # .380 Rueckweg fuer die Seite ohne Reload: JEDE Aktion liefert
-                    # den neuen Stand der betroffenen Kachel(n) mit — gerendert von
-                    # DERSELBEN routes.unbekannte.kachel(), die die Seite baut (eine
-                    # zweite Bauart waere sofort auseinandergelaufen). Ist die Gruppe
-                    # weg ODER passt sie nicht mehr in den gerade gezeigten Filter,
-                    # sagt der Server das ("weg"), statt die Seite raten zu lassen.
-                    _sort_a = str(d.get("sort") or _r_unbek.SORT[0])
-                    _filt_a = str(d.get("f") or _r_unbek.FILTER[0])
-
-                    from core import unbekanntpool as _ubp_a   # Stufe V1c: Saetze ueber das Modul
-
-                    # Bauplan analysen/bauplan_aehnlich.md Entscheid 19 (Fassung 6, W5 V4): die Antwort nennt den neuen
-                    # Platz jeder betroffenen Identitaet: in der Liste (kachel), in der Gruppe „Vermutlich P“ (gruppe:
-                    # Person, Kachel und der leere Rahmen der Gruppe) oder weg.
+                    # Rueckweg fuer die Seite ohne Reload: JEDE Aktion liefert den neuen Stand der betroffenen
+                    # Einheit(en) mit. Seit Bauplan analysen/bauplan_benennen.md Stufe BN3 Punkt 2 ist das die Karte
+                    # der Seite „Unbekannte“ im Design von Heute und Auftritte, gerendert von DERSELBEN
+                    # routes.unbekannte.karte, die die Seite baut: karte und reiter je offener Einheit, weg fuer die
+                    # anderen (benannt, ignoriert, kein Gesicht, aus dem Fenster), zahl je Reiter.
                     def _unb_stand(uids):
-                        alle = _r_unbek.infos(anlernen.lade_unbekannte(),
-                                              anlernen.lade_gesichter(),
-                                              _ubp_a.mitglieder(cfg["data_dir"], log=svc.log))
-                        vs_ = anlernen.lade_unbekannt_vorschlaege()
-                        sicht = {i["id"]: i for i in
-                                 _r_unbek.auswahl(alle, vs_, _sort_a, _filt_a)}
-                        in_gr = {i["id"]: i for i in alle if _r_unbek.in_gruppe(i)}
-                        offen, gesamt = _r_unbek.zaehler(alle)
-                        kach, gr, weg = {}, {}, []
-                        for u_ in uids:
-                            if u_ in sicht:
-                                kach[u_] = _r_unbek.kachel(sicht[u_])
-                            elif u_ in in_gr:
-                                _p = in_gr[u_]["aehnlich"]["person"]
-                                gr[u_] = {"person": _p, "html": _r_unbek.kachel(in_gr[u_]),
-                                          "rahmen": _r_unbek.gruppe_html(_p)}
-                            else:
-                                weg.append(u_)
-                        return {"kachel": kach, "gruppe": gr, "weg": weg,
-                                "offen": offen, "gesamt": gesamt}
+                        return _r_unbek.stand(cfg, [str(u_) for u_ in uids])
                     # Bauplan analysen/bauplan_aehnlich.md Entscheid 26 (Fassung 8, W7 V9): am Sammelbecken „ähnlich P“
                     # gibt es nur Zuweisen und „nicht P“, beide mit Auswahl; Benennen ohne Auswahl, Zusammenlegen,
                     # Besucher, Objekt, Verwerfen und „nicht P“ der ganzen Identitaet lehnt der Server ab und sagt warum.
@@ -27426,26 +27982,12 @@ def make_handler(svc):
                         _a.update(_unb_stand([_uid] + ([_neu] if _neu else [])))
                         return self._send(200, json.dumps(_a, ensure_ascii=False), "application/json")
                     if pfad == "/unbekannt_seite":
-                        # Nachladen (B1): der Server schneidet die Seite zu, der
-                        # Browser bekommt NUR die naechsten Kacheln.
-                        alle = _r_unbek.infos(anlernen.lade_unbekannte(),
-                                              anlernen.lade_gesichter(),
-                                              _ubp_a.mitglieder(cfg["data_dir"], log=svc.log))
-                        liste = _r_unbek.auswahl(alle, anlernen.lade_unbekannt_vorschlaege(),
-                                                 _sort_a, _filt_a)
-                        try:
-                            off = max(0, int(d.get("offset") or 0))
-                        except (TypeError, ValueError):
-                            off = 0
-                        teil = liste[off:off + _r_unbek.SEITE_N]
-                        offen, gesamt = _r_unbek.zaehler(alle)
-                        rest = max(0, len(liste) - (off + len(teil)))
-                        return self._send(200, json.dumps(
-                            {"ok": True, "html": _r_unbek.kacheln(teil),
-                             "offset": off + len(teil), "rest": rest,
-                             "n_naechste": min(_r_unbek.SEITE_N, rest),
-                             "offen": offen, "gesamt": gesamt},
-                            ensure_ascii=False), "application/json")
+                        # Bauplan analysen/bauplan_benennen.md BN3: das Nachladen der alten Liste ist entfallen; der
+                        # Pfad liefert den Stand der genannten Einheiten (uids), die Seite holt damit nach dem
+                        # Benennen ueber /benennen_zuweisen die neue Karte.
+                        _a = {"ok": True}
+                        _a.update(_unb_stand([str(x) for x in (d.get("uids") or []) if str(x)]))
+                        return self._send(200, json.dumps(_a, ensure_ascii=False), "application/json")
                     if pfad == "/unbekannt_objekt":
                         _uid = str(d.get("uid", ""))
                         _an = bool(d.get("an", True))
@@ -27972,7 +28514,13 @@ def make_handler(svc):
                     # Doppel-Siebung, die die Sechs-Achsen-Verfassung verbietet.
                     # `vorschlaege_person` selbst bleibt unangetastet: die
                     # Bestands-Suche der Personenseite ruft sie weiter.
-                    _zst, _nutz = svc.bruecke_vorrat(person, eid, ganzer_pass)
+                    # BN1: die Abfrage im 2,5-s-Takt schickt den Ordner des
+                    # Laufs mit (`lauf_id` der vorigen Antwort) — dann liest
+                    # der Dienst nur den Lauf-Ordner, nicht die Akte. Der
+                    # erste Klick schickt keinen und startet wie bisher.
+                    _zst, _nutz = svc.bruecke_vorrat(
+                        person, eid, ganzer_pass,
+                        lauf_id=str(d.get("lauf_id") or "").strip() or None)
                     if _zst == "laeuft":
                         # .507: der Regelfall. Bis .506 war der Vorrat meist
                         # schon da (Auto-Ernte nach Durchgangs-Ende); die
@@ -28029,25 +28577,44 @@ def make_handler(svc):
                     if dg:
                         dg["dominant"] = anlernen.diagnose_dominant(dg)
                     grund = _bruecke_grund(dg)
+                    # BN1 (O807): ist in diesem Lauf mindestens ein Ereignis
+                    # gescheitert, sagt die Antwort das mit Zahl und Grund aus
+                    # `fertig.jsonl` — nie „nothing to take". Ohne Bild steht
+                    # der Satz allein, mit Bildern haengt er hinten an.
+                    _weg = list(_nutz.get("gescheitert") or [])
+                    _nicht = {}
+                    if _weg:
+                        _nicht = {"k": len(_weg),
+                                  "n": int(_nutz.get("n_eids") or len(_weg)),
+                                  "grund": "; ".join(dict.fromkeys(
+                                      str(x.get("grund") or "") for x in _weg))[:160]}
+                    _nicht_zusatz = (_sprache.t("antwort.bruecke_nicht_abgeholt_zusatz",
+                                                **_nicht) if _weg else "")
                     if nehmen:
                         msg = (_sprache.t("antwort.bruecke_nimmt", n=len(nehmen))
                                + (_sprache.t("antwort.bruecke_grenz_zusatz",
-                                             n=len(grenz)) if grenz else ""))
+                                             n=len(grenz)) if grenz else "")
+                               + _nicht_zusatz)
                     elif grenz:
                         msg = (_sprache.t("antwort.bruecke_nur_grenz",
                                           n=len(grenz))
                                + (_sprache.t("antwort.bruecke_grund_zusatz",
-                                             grund=grund) if grund else ""))
+                                             grund=grund) if grund else "")
+                               + _nicht_zusatz)
+                    elif _weg:
+                        msg = _sprache.t("antwort.bruecke_nicht_abgeholt", **_nicht)
                     elif grund:
                         msg = _sprache.t("antwort.bruecke_nichts_grund",
                                          grund=grund)
                     else:
                         msg = _sprache.t("antwort.bruecke_nichts")
                     # .507: der Umfang steht in der Zeile, nicht mehr eine
-                    # Event-Zahl, die der Browser geschickt hat.
-                    _pass = svc._bruecke_durchgang(eid) or [eid]
-                    _umfang = (f"{len(_pass)} event(s) of this pass" if ganzer_pass
-                               else f"1 event of {len(_pass)} in this pass")
+                    # Event-Zahl, die der Browser geschickt hat. BN1: die Zahl
+                    # kommt aus dem Manifest des Laufs (`eids`), nicht mehr aus
+                    # einer zweiten Tages-Kettung ueber die ganze Akte.
+                    _pass_n = int(_nutz.get("pass_n") or 1)
+                    _umfang = (f"{_pass_n} event(s) of this pass" if ganzer_pass
+                               else f"1 event of {_pass_n} in this pass")
                     # .525 (Prod-Pruefung 10.09., Befund B-2): das Etikett hinter
                     # der Zahl benannte die FALSCHE Siebstufe. `v_gesamt` ist die
                     # Zeilenzahl der `auswahl.jsonl` dieses Zuschnitts — also was
@@ -30489,11 +31056,17 @@ def make_handler(svc):
                 _ar_aktiv, _nk = _areas_mod.sicht_aufloesen(
                     _areas_h, qs.get("area", [""])[0], _kams_h)
                 _aq = f'&amp;area={urllib.parse.quote(_ar_aktiv)}' if _nk is not None else ''
+                # Bauplan analysen/bauplan_today_statistik.md Stufe TS1: dieselben Ereignisse und dieselbe Sicht wie
+                # z_events, gezaehlt die mit mindestens einem Gesicht nach der einen Regel szenarien.mit_gesicht.
+                import szenarien as _szen
+                z_gesicht = 0
                 for r in by_h.values():
                     if _nk is not None and str(r.get("camera", "?")) not in _nk:
                         continue
                     if heute0 <= (r.get("start") or r.get("ts", 0)) < tag_ende:
                         z_events += 1
+                        if _szen.mit_gesicht(r):
+                            z_gesicht += 1
                 # Live-Waechter-Namen des Tages (.412 T1, Konzept §6.10/§9.9,
                 # User-Nachtrag 9.5: KEIN Live-Zaehler mehr auf Today — die
                 # Melde-Leistung steht auf /live und in der Systemstatistik).
@@ -31175,6 +31748,9 @@ def make_handler(svc):
                 # Randspalte: alles, was NICHT "wer war da" ist — bewusst leise.
                 unbek_txt = (f'{len(unbek_echt)} pass{"es" if len(unbek_echt) != 1 else ""} '
                              f'with nobody recognized' if unbek_echt else 'none unidentified')
+                # TS3 (Bauplan analysen/bauplan_today_statistik.md): nur der Anteil an „Events analysed“ in ganzen Prozent,
+                # gerundet wie in TS1; ohne analysierte Ereignisse „–“. Die Zahl steht im Tooltip.
+                gesicht_txt = f'{round(100 * z_gesicht / z_events)} %' if z_events else '–'
                 neben = (
                     '<aside class="tagseite">'
                     # Areas: die Randspalte traegt die aktive Sicht im Kopf — sonst laese sich
@@ -31238,7 +31814,9 @@ def make_handler(svc):
                         if unbek_nebenbei else ''))
                     + '</div>'
                     # .412 (§3 Randspalte, §9.5 Nachtrag): Personen / Durchgaenge /
-                    # Events analysed / not matched — je Zahl ein Tooltip mit dem
+                    # Events analysed / Gesichtsquote (seit TS1 und TS3, Bauplan
+                    # analysen/bauplan_today_statistik.md; Beschriftungen aus den
+                    # Schluesseln heute.rand.* der Sprache) — je Zahl ein Tooltip mit dem
                     # Zaehl-Bezug. KEIN Live-Zaehler mehr, keine Pushover-Zeilen
                     # (Mockup 02.09., von User abgenommen): Melde-Leistung steht
                     # auf /live, /benachrichtigungen und in der Systemstatistik.
@@ -31246,15 +31824,16 @@ def make_handler(svc):
                     f'<span><a href="#recognized" class="ts-link">{html.escape(_sprache.t("heute.rand.personen"))}</a></span>'
                     f'<span class="num">{len(pers_tag)}</span></div>'
                     f'<div class="ts-zeile" title="{html.escape(_sprache.t("heute.rand.passes_title"), quote=True)}">'
-                    f'<span><a href="#passes" class="ts-link">Passes</a></span>'
+                    f'<span><a href="#passes" class="ts-link">{html.escape(_sprache.t("heute.rand.passes"))}</a></span>'
                     f'<span class="num">{len(interessant)}</span></div>'
                     f'<div class="ts-zeile" title="{html.escape(_sprache.t("heute.rand.events_title"), quote=True)}">'
                     f'<span><a class="ts-link" '
-                    f'href="/ereignisse?tag={tag_dt.strftime("%Y-%m-%d")}{_aq}">Events analysed</a></span>'
+                    f'href="/ereignisse?tag={tag_dt.strftime("%Y-%m-%d")}{_aq}">'
+                    f'{html.escape(_sprache.t("heute.rand.events"))}</a></span>'
                     f'<span class="num">{z_events}</span></div>'
-                    f'<div class="ts-zeile" title="{html.escape(_sprache.t("heute.rand.unmatched_title"), quote=True)}">'
-                    f'<span>{html.escape(_sprache.t("heute.rand.unmatched"))}</span>'
-                    f'<span class="num">{unbek_nebenbei}</span></div>'
+                    f'<div class="ts-zeile" title="{html.escape(_sprache.t("heute.rand.gesicht_title", n=z_gesicht, m=z_events), quote=True)}">'
+                    f'<span>{html.escape(_sprache.t("heute.rand.gesicht"))}</span>'
+                    f'<span class="num">{gesicht_txt}</span></div>'
                     '</div></aside>')
                 _dl = ('<datalist id="personen-liste">'
                        + "".join(f'<option value="{html.escape(p)}">'
@@ -31316,7 +31895,7 @@ def make_handler(svc):
                              f'{html.escape(_sprache.t_n("heute.unbek.cnt", len(ukarten)))}</span></div>'
                              f'<div class="pband">{"".join(ukarten)}</div>'
                              if ukarten else '')
-                          + f'<div class="listhead" id="passes"><h3>Passes</h3>'
+                          + f'<div class="listhead" id="passes"><h3>{html.escape(_sprache.t("heute.rand.passes"))}</h3>'
                           f'<span class="cnt">{cnt}</span></div>'
                           f'{liste}{motiv}</div>{neben}</div>')
                 # Auto-Aktualisierung NUR am heutigen Tag: ein vergangener Tag aendert sich nicht
@@ -32161,30 +32740,16 @@ def make_handler(svc):
                 return self._send(200, webui.layout(_sprache.t("nav.lernen"), "/lernen", inhalt, warnung or self._banner()))
             if path == "/anlernen":     # Cluster (alter Ephemeral-Clustering-Weg) von Unknown abgeloest (22.07.)
                 return self._send(302, "", "text/plain", location="/unbekannte")
-            if path == "/unbekannte":                    # persistente Unbekannt-Identitaeten (User 20.07.)
-                import webui, anlernen
-                # ME1: Seite byte-treu in routes/unbekannte.py (Schnappschuss-
-                # Beweis scratchpad/me1_schnappschuss.py); Pool-Staende + Personen
-                # als Parameter — kein Pool-/Store-Zugriff im Renderer.
-                # .380: Sortierung/Filter kommen als Query und werden GEGEN DIE
-                # LISTEN DES RENDERERS geprueft (SORT/FILTER dort sind die eine
-                # Quelle) — der Handler kennt keine eigenen Werte.
+            if path == "/unbekannte":                    # Seite „Unbekannte“ zum Benennen
+                import webui
+                # Bauplan analysen/bauplan_benennen.md Stufe BN3 Punkt 2: zwei Reiter, Karten im Design von Heute und
+                # Auftritte, Daten aus dem Leser von Stufe BN2 (core.unbekanntpool), nicht aus der Akte; Query reiter,
+                # seite und uk (Sprung auf eine Karte). Teilmenge: Hinweis auf der Seite und ERROR im Log (ED008).
+                # Nachzug BN3 Punkt 1: die Namensliste liest die Seite selbst im selben abgesicherten Lesen wie die
+                # Vergleichsbilder (core.refquelle.persons_view), nicht über master_persons: ein Lesefehler brach hier
+                # sonst die Seite ohne Antwort ab.
                 from routes import unbekannte as _r_unbek
-                _qu = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-                _so = (_qu.get("sort") or [_r_unbek.SORT[0]])[0]
-                _fi = (_qu.get("f") or [_r_unbek.FILTER[0]])[0]
-                from core import unbekanntpool as _ubp_s     # Stufe V1c: Saetze ueber das Modul
-                # Bauplan analysen/bauplan_aehnlich.md Entscheid 19 (Fassung 6): die Gruppe „Vermutlich P“ ueber der Liste
-                # liest Merkmal und Urteil (routes/unbekannte.py); der rote Hinweis kommt aus dem Zustand des letzten
-                # Aufraeum-Schritts (ED008).
-                from core import aehnlich as _aeh_s
-                inhalt = _r_unbek.render(anlernen.lade_unbekannte(),
-                                         anlernen.lade_gesichter(),
-                                         anlernen.lade_unbekannt_vorschlaege(),
-                                         master_persons(cfg),
-                                         sortierung=_so, filter_=_fi,
-                                         mitglieder=_ubp_s.mitglieder(cfg["data_dir"], log=svc.log),
-                                         aeh_fehler=_aeh_s.SPEICHER.rot())
+                inhalt = _r_unbek.seite(cfg, qs)
                 return self._send(200, webui.layout(_sprache.t("nav.unbekannte"), "/unbekannte", inhalt, self._banner()))
             if path == "/anwesenheit":                   # Anwesenheitsseite (Z4, .409; User 02.09.)
                 _t0_seite = time.monotonic()      # Bauplan Seiten-Tempo ST1 Punkt 4: Dauer fuer die DEBUG-Zeile
@@ -33167,6 +33732,7 @@ def make_handler(svc):
                      # Bauplan K3, Stufe KP3: wie oft ein Ereignis seit dem Start ohne fruehes Ende
                      # lief (Personenzahl unbrauchbar oder Fehler der eigenen Logik), je Grund.
                      "personenzahl": _personenzahl.stand(),
+                     "namenszuordnung": __import__("core.namenszuordnung", fromlist=["stand"]).stand(),  # NZ3 Punkt 4
                      # Stufe V1b (Bauplan analysen/bauplan_verbraucher_unbekannt.md, W24): der
                      # Verbraucher der Unbekannt-Stapel — Faden, Lesestand, offene Zeilen der
                      # Schlange, letzte Runde, letzter Fehler. Das Feld `sammeln` ist mit dem
@@ -33585,12 +34151,12 @@ def make_handler(svc):
                 # Seiten entstehen dort also nie. Die Links dorthin sind am 25.07. aus Fusszeile und
                 # System-Seite entfernt; die Routen bleiben nur fuer alte Lesezeichen und liefern die
                 # vorhandene Datei aus, wenn es sie gibt. Statt der frueheren nackten 404-Textzeile
-                # jetzt eine Weiterleitung auf die Seite, die dieselbe Frage heute beantwortet.
+                # jetzt eine Weiterleitung auf die Seite, die dieselbe Frage heute beantwortet; seit
+                # Bauplan analysen/bauplan_benennen.md BN3 fuer beide /unbekannte (/offen ist entfallen).
                 p = os.path.join(cfg["data_dir"], path.strip("/") + ".html")
                 if os.path.isfile(p):
                     return self._send(200, open(p, "rb").read())
-                return self._send(302, "", "text/plain",
-                                  location="/offen" if path == "/review" else "/unbekannte")
+                return self._send(302, "", "text/plain", location="/unbekannte")
             if path == "/doc" or path.startswith("/doc/"):  # Projekt-Doku -> GitHub. Frueher lieferte /doc/*
                 # lokale Arbeitsnotizen mit internen IPs + Zugaengen aus; der
                 # Redirect schliesst den Leak auch fuer alte /doc/-Bookmarks.
@@ -33759,14 +34325,10 @@ def make_handler(svc):
                     return self._send(404, "not found", "text/plain")
                 _sup.abweisung_zaehlen(svc.log)
                 # KEIN return: durchfallen zum generischen 404.
-            if path == "/offen":                           # Abend-Arbeitsliste: unbestaetigt + Gesicht + ungelabelt
-                import webui
-                # Modulumbau R1: Rendern byte-treu in routes/ereignisliste.py
-                # (gt_schnellpersonen/master_persons injiziert — eine Quelle im Kern).
-                from routes import ereignisliste as _r_el
-                inhalt = _r_el.render_offen(cfg, svc.log_path, qs,
-                                            gt_schnellpersonen, master_persons)
-                return self._send(200, webui.layout(_sprache.t("nav.offen"), "/offen", inhalt, self._banner()))
+            if path == "/offen":
+                # Bauplan analysen/bauplan_benennen.md Stufe BN3 Punkt 3: die Abend-Arbeitsliste ist entfallen (sie
+                # rechnete beim Feldtester je Aufruf rund 18 Minuten); alte Lesezeichen landen auf der Seite „Unbekannte“.
+                return self._send(302, "", "text/plain", location="/unbekannte")
             if path != "/ereignisse":
                 return self._send(404, "not found", "text/plain")
             import webui

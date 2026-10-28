@@ -146,7 +146,8 @@ def _unbek_zeile(s, eid2uid, vermutlich=None):
         else:
             ohne += 1
     vermutlich = vermutlich or {}
-    teile = [f'<a href="/unbekannte#uk-{urllib.parse.quote(str(u))}">'
+    # Bauplan analysen/bauplan_benennen.md BN3 Punkt 4: uk waehlt Reiter und Seite der Karte auf /unbekannte.
+    teile = [f'<a href="/unbekannte?uk={urllib.parse.quote(str(u))}#uk-{urllib.parse.quote(str(u))}">'
              + (html.escape(t("heute.aehnlich.zu", person=vermutlich[u])) if u in vermutlich
                 else t("auftritte.unbek.name", nummer=html.escape(str(u).lstrip("U"))))
              + '</a>' for u in uids]
@@ -154,6 +155,69 @@ def _unbek_zeile(s, eid2uid, vermutlich=None):
         n = ohne if teile else s["unbek"]
         teile.append(t_n("auftritte.unbek.ohne_treffer", n))
     return " · ".join(teile)
+
+
+# ---------------------------------------------------------------- Bausteine der Karte
+# Bauplan analysen/bauplan_benennen.md, Stufe BN3 Punkt 1 (Entscheid 7 im Konzept: das Design von Heute und Auftritte,
+# kein neuer Baustein): was die Durchgangs-Karte (render), die Unbekannt-Lauf-Seite (render_unbekannt) und die Seite
+# „Unbekannte“ (routes/unbekannte.py) gemeinsam zeichnen, steht hier genau einmal. Die Ausgabe fuer render und
+# render_unbekannt ist byte-gleich zum Stand davor (tools/harnisch_sprache.py); die neuen Parameter haben Vorgaben,
+# die nichts hinzufuegen.
+
+def karte_html(kopf, bild, info, unten, attrs=""):
+    """Der Rahmen einer Karte (card pass-card): Kopfzeile, links das Bild, rechts die Datenzeilen, darunter die Reihen.
+    -> HTML"""
+    return (f'<div class="card pass-card"{attrs}><div class="pass-kopf">{kopf}</div>'
+            f'<div class="pass-body">{bild}<div class="pass-info">{info}</div></div>{unten}</div>')
+
+
+def reihe_html(kopf, kacheln, attrs=""):
+    """Eine Bildreihe einer Karte (pass-reihe) mit Kopf und Kacheln.
+    -> HTML"""
+    return (f'<div class="pass-reihe"{attrs}><div class="pass-reihe-kopf">{kopf}</div>'
+            f'<div class="pass-thumbs">{kacheln}</div></div>')
+
+
+def thumb_html(href, src, unter, kl="pass-thumb", titel=None):
+    """Ein Vorschaubild der Reihe (pass-thumb) als Link, darunter die Zeile unter (meist die Uhrzeit).
+    -> HTML"""
+    tt = f' title="{titel}"' if titel is not None else ""
+    return (f'<a class="{kl}"{tt} href="{href}">'
+            f'<img src="{src}" loading="lazy" alt="">'
+            f'<small>{unter}</small></a>')
+
+
+def held_html(eid, src):
+    """Das grosse Bild links in der Karte (pass-bild), verlinkt auf das Ereignis.
+    -> HTML"""
+    return (f'<a class="pass-bild" href="/event/'
+            f'{urllib.parse.quote(str(eid))}">'
+            f'<img src="{src}" loading="lazy" alt=""></a>')
+
+
+def wahl_html(wert, src, an=False, aus=False, kl="ubw", titel=None):
+    """Ein Bild mit Haken zum Auswaehlen (ubw); an = vorausgewaehlt, aus = laesst sich nicht anhaken.
+    -> HTML"""
+    tt = f' title="{html.escape(titel, quote=True)}"' if titel else ""
+    return (f'<label class="{kl}"{tt}><input type="checkbox" name="ub-sel" '
+            f'value="{html.escape(wert)}"{" checked" if an else ""}{" disabled" if aus else ""}>'
+            f'<img src="{src}" loading="lazy" alt=""></label>')
+
+
+def kachel_html(bild, person, eid):
+    """Eine Kachel der Bildreihe (pass-kachel): das Bild, darunter die Lupe „passende Gesichter in diesem Bild suchen“
+    (lernBruecke, Weg /auftritt_lernen mit Person und Ereignis) und ihr Statusfeld; ohne Person ist die Lupe versteckt.
+    -> HTML"""
+    lbl = html.escape(t("auftritte.knopf.ereignis"), quote=True)
+    return (f'<div class="pass-kachel">{bild}'
+            f'<button class="gtb pass-knopf pass-knopf-klein"{"" if person else " hidden"} '
+            f'title="{lbl}" '
+            f'aria-label="{lbl}" '
+            f'data-person="{html.escape(person or "", quote=True)}" '
+            f'data-eid="{html.escape(str(eid or ""), quote=True)}" '
+            f'onclick="lernBruecke(this)">'
+            f'<span class="pk-icon">&#128269;</span></button>'
+            f'<span class="dim lb-status"></span></div>')
 
 
 def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
@@ -234,37 +298,27 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
     if any(not m["satz"] for m in member.values()):
         import anlernen as _al_ub                     # Altbestand: ref_id der Pool-Zeile
         _rids.update({k: r for k, r in _al_ub.pool_ref_ids().items() if k in member})
-    held = (f'<a class="pass-bild" href="/event/'
-            f'{urllib.parse.quote(str(member[_best]["eid"]))}">'
-            f'<img src="{_ub_bild(_rids.get(_best), _best)}" '
-            f'loading="lazy" alt=""></a>')
+    held = held_html(member[_best]["eid"], _ub_bild(_rids.get(_best), _best))
     video = (f' <a class="gtb pass-knopf" href="/video/'
              f'{urllib.parse.quote(str(evs[0].get("eid")))}">'
              f'<span class="pk-icon">&#9654;</span>{t("auftritte.knopf.video")}</a>'
              if evs and evs[0].get("eid") else "")
     thumbs = "".join(
-        f'<a class="pass-thumb" href="/event/'
-        f'{urllib.parse.quote(str(member[m]["eid"]))}">'
-        f'<img src="{_ub_bild(_rids.get(m), m)}" loading="lazy" alt="">'
-        f'<small>{_hhmm(member[m]["ts"]) if isinstance(member[m]["ts"], (int, float)) else ""}</small></a>'
+        thumb_html(f'/event/{urllib.parse.quote(str(member[m]["eid"]))}', _ub_bild(_rids.get(m), m),
+                   _hhmm(member[m]["ts"]) if isinstance(member[m]["ts"], (int, float)) else "")
         for m in sorted(member))
-    lauf_karte = (
-        f'<div class="card pass-card"><div class="pass-kopf">'
+    lauf_karte = karte_html(
         # Stufe-2-Grenze (B19): Datumsformat je Sprache = eigener Zug.
         f'<b>{tag_dt.strftime("%A, %d %B %Y")}</b>'
         f' · {_hhmm(s["start"])} &ndash; {_hhmm(s["ende"])}'
         f' · {t_n("auftritte.karte.faces", len(member))}'
-        f' · {t_n("auftritte.karte.kameras", len(s["kams"]))}</div>'
-        f'<div class="pass-body">{held}<div class="pass-info">'
+        f' · {t_n("auftritte.karte.kameras", len(s["kams"]))}',
+        held,
         f'<div class="pass-folge">{" &rarr; ".join(folge)}</div>'
-        f'<div class="pass-links">{video}</div></div></div>'
-        f'<div class="pass-thumbs">{thumbs}</div></div>')
+        f'<div class="pass-links">{video}</div>',
+        f'<div class="pass-thumbs">{thumbs}</div>')
     opts = "".join(f'<option value="{html.escape(p)}">' for p in personen_bekannt)
-    wahl = "".join(
-        f'<label class="ubw"><input type="checkbox" name="ub-sel" '
-        f'value="{html.escape(m)}">'
-        f'<img src="{_ub_bild(_rids.get(m), m)}" loading="lazy" alt=""></label>'
-        for m in sorted(member))
+    wahl = "".join(wahl_html(m, _ub_bild(_rids.get(m), m)) for m in sorted(member))
     kopf = (
         zurueck
         + f'<h2>{name}'
@@ -276,7 +330,7 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
         f'<div class="dim" style="margin:0 0 10px">'
         f'{t("auftritte.unbek.ein_lauf")} · '
         f'{tag_dt.strftime("%d.%m.")} {_hhmm(s["start"])} · full profile on '
-        f'<a href="/unbekannte#uk-{urllib.parse.quote(uid)}">Unknown</a></div>'
+        f'<a href="/unbekannte?uk={urllib.parse.quote(uid)}#uk-{urllib.parse.quote(uid)}">Unknown</a></div>'
         f'<div class="card"><b>{t("auftritte.zuweisen.titel")}</b>'
         f'<div class="dim" style="margin:4px 0 8px">'
         f'{t("auftritte.zuweisen.satz")}</div>'
@@ -555,20 +609,8 @@ def render(cfg, log_pfad, personen_bekannt, params):
                 # Knopf UND Status-Feld je Kachel: lernBruecke greift das
                 # Status-Feld ueber b.parentNode — mit einem gemeinsamen Feld
                 # schrieben zwoelf Poll-Schleifen in dieselbe Zeile.
-                q_thumbs.append(
-                    f'<div class="pass-kachel">'
-                    f'<a class="{kl}" title="{tt}" '
-                    f'href="/event/{urllib.parse.quote(_eid)}">'
-                    f'<img src="{tu}" loading="lazy" alt="">'
-                    f'<small>{_hhmm(e["t"])}</small></a>'
-                    f'<button class="gtb pass-knopf pass-knopf-klein" '
-                    f'title="{html.escape(_lbl_ereignis, quote=True)}" '
-                    f'aria-label="{html.escape(_lbl_ereignis, quote=True)}" '
-                    f'data-person="{html.escape(q, quote=True)}" '
-                    f'data-eid="{html.escape(_eid, quote=True)}" '
-                    f'onclick="lernBruecke(this)">'
-                    f'<span class="pk-icon">&#128269;</span></button>'
-                    f'<span class="dim lb-status"></span></div>')
+                q_thumbs.append(kachel_html(
+                    thumb_html(f'/event/{urllib.parse.quote(_eid)}', tu, _hhmm(e["t"]), kl, tt), q, _eid))
             if not q_thumbs:
                 continue
             if ueber:
@@ -586,10 +628,7 @@ def render(cfg, log_pfad, personen_bekannt, params):
             if q_ref:
                 q_thumbs.append(f'<span class="pass-thumbs-rest">'
                                 f'{t("auftritte.thumb.hinweis_referenz")}</span>')
-            reihen.append(
-                f'<div class="pass-reihe"><div class="pass-reihe-kopf">'
-                f'<b>{html.escape(q)}</b></div>'
-                f'<div class="pass-thumbs">{"".join(q_thumbs)}</div></div>')
+            reihen.append(reihe_html(f'<b>{html.escape(q)}</b>', "".join(q_thumbs)))
         thumbs_html = "".join(reihen)
         # best match: Kamera/Zeit des BEST-Events (d["eid"]), nicht der letzten
         # Bestaetigung (Review .50 — das waren zwei verschiedene Events).
@@ -648,12 +687,12 @@ def render(cfg, log_pfad, personen_bekannt, params):
                     f'<span class="pk-icon">&#128269;</span>'
                     f'{html.escape(_lbl)}</button>'
                     '<span class="dim lb-status" style="margin-left:8px"></span>')
-        bloecke.append(
-            f'<div class="card pass-card"><div class="pass-kopf"><b>{t("auftritte.karte.pass_nr", n=i)}</b>'
+        bloecke.append(karte_html(
+            f'<b>{t("auftritte.karte.pass_nr", n=i)}</b>'
             f' · {_hhmm(s["start"])} &ndash; {_hhmm(s["ende"])}'
             f' · {t_n("auftritte.karte.events", s["n"])}'
-            f' · {t_n("auftritte.karte.kameras", len(s["kams"]))}{live}</div>'
-            f'<div class="pass-body">{bild}<div class="pass-info">'
+            f' · {t_n("auftritte.karte.kameras", len(s["kams"]))}{live}',
+            bild,
             f'<div class="pass-folge">{_folge_html(folge, folge_klar)}</div>'
             f'<div class="dim">{bestz} · {t("auftritte.karte.best_match", wert=bm)}{best_ort}</div>'
             + (f'<div class="dim">{t("auftritte.karte.auch_dabei", namen=dabei)}</div>' if dabei else '')
@@ -664,308 +703,320 @@ def render(cfg, log_pfad, personen_bekannt, params):
                if auch_da else '')
             + (f'<div class="dim">{_unbek_zeile(s, e2u, aeh)}</div>'
                if s.get("unbek") else '')
-            + f'<div class="pass-links">{video}{lern}</div></div></div>'
-            + thumbs_html + '</div>')
+            + f'<div class="pass-links">{video}{lern}</div>',
+            thumbs_html))
 
-    # .226 (User-Feedback am .225-Knopf, dritte Fassung): Pruefen oeffnet ein
-    # In-Page-OVERLAY mit genau den Bildern, die uebernommen wuerden — jedes
-    # abwaehlbar, dann OK oder Cancel (KEIN window.open: Browser-Popup-Blocker
-    # koennen eigenes Seiten-HTML nicht blocken, User-Fallen-Sorge). Nach
-    # der Uebernahme bleibt Undo.
-    # Stufe-2-Grenze (§8.4): Inline-Script mit \u-Escapes (Surrogate-Emoji,
-    # \\"-Escapes, Laufzeit-Konkatenation) — JS-Texte bleiben literal, bis
-    # window.T diese Seite versorgt (beide Toggle-Fassungen, §8.17).
-    js = ('<script>'
-          # .507 B3: es gibt zwei Beschriftungen (Kachel = dieses eine
-          # Ereignis, Karte = der ganze Durchgang mit seiner Ereigniszahl),
-          # und beide kommen aus der Sprachtabelle. lbStart baut deshalb aus
-          # data-lbl zurueck statt aus einem zweiten literalen Text — sonst
-          # truege ein Kachel-Knopf nach dem Abbruch die Karten-Beschriftung.
-          # Kachel-Knoepfe haben kein data-lbl: sie bleiben die Lupe.
-          'function lbStart(b){b.disabled=false;'
-          'b.innerHTML="<span class=\\"pk-icon\\">\\uD83D\\uDD0D</span>";'
-          'if(b.dataset.lbl)b.appendChild(document.createTextNode(b.dataset.lbl));}'
-          # .507 B3: Riegel je Karte und Person. Ein zweiter Klick auf eine
-          # andere Kachel DERSELBEN Person waehrend eines Laufs traefe im
-          # Dienst denselben Ordner und bekaeme "laeuft" fuer einen fremden
-          # Lauf gemeldet — hier bleibt es bei einem Hinweis, ohne zweite
-          # Poll-Schleife. lbFrei gibt die Karte an jedem Ausstieg frei.
-          'function lbFrei(b){var k=b.closest(".pass-card");'
-          'if(k&&k._lbLauf&&k._lbLauf[b.dataset.person]===b)'
-          'delete k._lbLauf[b.dataset.person];}'
-          'function lbUebernehmen(b,st,items){'
-          'st.textContent="adopting\\u2026";b.disabled=true;'
-          'fetch("/auftritt_lernen",{method:"POST",'
-          'headers:{"Content-Type":"application/json"},'
-          'body:JSON.stringify({person:b.dataset.person,uebernehmen:items})})'
-          '.then(function(r){return r.json()}).then(function(d2){'
-          'if(!d2.ok){st.textContent="error: "+d2.msg;lbStart(b);return;}'
-          'st.textContent=d2.msg;'
-          'b.innerHTML="<span class=\\"pk-icon\\">\\u2713</span>"+d2.n+" added";'
-          # .227: die uebernommenen Bilder SOFORT gruen markieren (ohne Reload)
-          'var kk=b.closest(".pass-card");'
-          'if(kk)items.forEach(function(it){'
-          'var t=kk.querySelector(".pass-thumb[href*=\\""+it.eid+"\\"]");'
-          'if(t)t.classList.add("pass-thumb-ref");});'
-          'var u=document.createElement("a");u.textContent="Undo";u.href="#";'
-          'u.style.marginLeft="8px";'
-          'u.onclick=function(ev){ev.preventDefault();st.textContent="removing\\u2026";'
-          'fetch("/auftritt_lernen_undo",{method:"POST",'
-          'headers:{"Content-Type":"application/json"},'
-          'body:JSON.stringify({person:b.dataset.person,ref_ids:d2.dateien})})'
-          '.then(function(r){return r.json()}).then(function(d3){'
-          'st.textContent=d3.msg;u.remove();'
-          # Nur die EBEN uebernommenen Marker zuruecknehmen — aeltere
-          # Referenzen desselben Passes behalten ihre Umrandung.
-          'var ku=b.closest(".pass-card");'
-          'if(ku)items.forEach(function(it){'
-          'var t=ku.querySelector(".pass-thumb[href*=\\""+it.eid+"\\"]");'
-          'if(t)t.classList.remove("pass-thumb-ref");});'
-          'lbStart(b);});};'
-          'b.parentNode.insertBefore(u,st);})'
-          '.catch(function(e){st.textContent="error: "+e;lbStart(b);});}'
-          'function lbOverlay(b,st,d){'
-          'var ov=document.createElement("div");ov.className="lb-overlay";'
-          'var dg=document.createElement("div");dg.className="lb-dialog";'
-          'var np=d.nehmen.length,ng=(d.grenz||[]).length;'
-          'dg.innerHTML="<h3 style=\\"margin:0 0 4px\\">Take these pictures for "'
-          '+b.dataset.person+"?</h3><div class=\\"dim\\">"+'
-          '(np?"The check picked "+np+" picture(s) \\u2014 untick any you do '
-          'not trust.":"The check found no clearly helpful picture.")+"</div>";'
-          'function reihe(items,checked){var w=document.createElement("div");'
-          'w.className="lb-wahl";items.forEach(function(it){'
-          'var l=document.createElement("label"),c=document.createElement("input");'
-          'c.type="checkbox";c.checked=checked;c._it=it;'
-          'var im=document.createElement("img");im.src=it.url;im.loading="lazy";'
-          'l.appendChild(c);l.appendChild(im);w.appendChild(l);});return w;}'
-          'var wahl=reihe(d.nehmen,true);dg.appendChild(wahl);'
-          # .231: Grenzfaelle sichtbar, aber OHNE Haken — bewusste Zuwahl.
-          'var wahl2=null;'
-          'if(ng){var gh=document.createElement("div");gh.className="dim";'
-          'gh.style.marginTop="6px";'
-          # .521: der Satz sagt jetzt, was ein Grenzfall WIRKLICH ist. Bis .520
-          # hiess er „identity sure, picture quality only fair" — auf dem
-          # Mini-Ernte-Weg ist genau das Gegenteil der Fall: die Bildqualitaet
-          # hat das Register schon bestaetigt, unsicher ist die IDENTITAET
-          # (oder es ist das dritte, vierte … Bild desselben Ereignisses, das
-          # der Deckel vom Haken genommen hat).
-          'gh.textContent=ng+" borderline picture(s) \\u2014 quality is fine, '
-          'but the identity is only probable, or the picture is an extra one '
-          'from the same event; tick to take anyway:";'
-          'dg.appendChild(gh);wahl2=reihe(d.grenz,false);dg.appendChild(wahl2);}'
-          'var ok=document.createElement("button");ok.className="gtb on";'
-          'var ab=document.createElement("button");ab.className="gtb";'
-          'ab.textContent="Cancel";ab.style.marginLeft="8px";'
-          'function boxenAlle(){var a=Array.from(wahl.querySelectorAll("input"));'
-          'if(wahl2)a=a.concat(Array.from(wahl2.querySelectorAll("input")));return a;}'
-          'function zaehl(){var n=boxenAlle().filter(function(c){return c.checked}).length;'
-          'ok.textContent="Take "+n+" picture(s)";ok.disabled=!n;return n;}'
-          'wahl.addEventListener("change",zaehl);'
-          'if(wahl2)wahl2.addEventListener("change",zaehl);zaehl();'
-          'ok.onclick=function(){var items=[];'
-          'boxenAlle().forEach(function(c){if(c.checked)'
-          'items.push({eid:c._it.eid,datei:c._it.datei,'
-          'lauf_id:c._it.lauf_id,herkunft:c._it.herkunft});});'
-          'ov.remove();lbUebernehmen(b,st,items);};'
-          # .521 FLUECHTIG: Abbrechen raeumt den Mini-Ernte-Lauf sofort weg
-          # (Bilder, Kandidaten, Auswahl). Der naechste Klick erntet neu — das
-          # ist der bewusste Preis dafuer, dass eine angesehene und verworfene
-          # Pruefung nichts liegen laesst. `lauf_id` kommt aus der Antwort;
-          # fehlt sie (Alt-Antwort), bleibt es beim blossen Schliessen.
-          'ab.onclick=function(){ov.remove();st.textContent="nothing taken";'
-          'lbStart(b);var lid=(d&&d.lauf_id)||null;if(lid)'
-          'fetch("/auftritt_lernen",{method:"POST",'
-          'headers:{"Content-Type":"application/json"},'
-          'body:JSON.stringify({person:b.dataset.person,verwerfen:lid})})'
-          '.then(function(r){return r.json()}).then(function(dv){'
-          'if(dv&&dv.msg)st.textContent=dv.msg;}).catch(function(){});};'
-          'dg.appendChild(ok);dg.appendChild(ab);ov.appendChild(dg);'
-          'ov.onclick=function(ev){if(ev.target===ov)ab.onclick(ev);};'
-          'document.body.appendChild(ov);}'
-          # .345 (User-Konsens 25.08., ersetzt die .343-Textzeile): der Block =
-          # EIN Gesamtbalken (Events + Frame-Anteil, fortschritt.gesamt) und DREI
-          # Unterbalken (suchen/Pose/erkennen), die je Event mit dem Frame-
-          # Fortschritt durchlaufen; Zaehler sind echte Werte. Prozente rechnet
-          # allein der Server (ernte.fortschritt_rechnen — kein Zweit-Rechner im
-          # Blatt), hier wird nur angewendet. Kein Puls = Clip-Beschaffung
-          # (puls_da False), 'bewertet' = alle drei fertig. Optik: .fs-*
-          # (style.css). Texte englisch-literal wie das ganze Blatt
-          # (Stufe-2-Grenze oben).
-          # .346b (User: "AJAX wie beim Lernen"): der Block wird EINMAL gebaut
-          # und danach nur noch in place nachgefuehrt (st._fsb haelt die
-          # Referenzen) — kein Abriss je Poll, die Breiten animieren weich wie
-          # in der Wizard-Karte. Die msg-Zeile wohnt mit IM Block (fs-msg).
-          # Gestapelte Zeilen: Kopf (Beschriftung+Zaehler), Balken voll breit.
-          'function lbBlock(st,msg,z,f){'
-          'if(!f){st._fsb=null;st.style.display="";st.textContent=msg;return;}'
-          'var c=st._fsb;'
-          'if(!c){'
-          # .346: der Block braucht die volle Zeilenbreite — der Status-Span
-          # bricht dafuer unter den Knopf (und zurueck, wenn der Lauf endet).
-          'st.textContent="";st.style.display="block";'
-          'var w=document.createElement("div");w.className="fs-block";'
-          'var m=document.createElement("div");m.className="dim fs-msg";'
-          'w.appendChild(m);'
-          # .507 B3: eigene Zeile fuer Startzeit + Dauer (unten gefuellt).
-          'var mt=document.createElement("div");mt.className="dim fs-meta";'
-          'w.appendChild(mt);'
-          'var tb=document.createElement("div");tb.className="fs-total";'
-          'var tf=document.createElement("span");tf.className="fs-fill";'
-          'tb.appendChild(tf);w.appendChild(tb);'
-          'var L={suchen:"searching faces",pose:"head pose",erkennen:"recognizing"};'
-          'c={m:m,mt:mt,tf:tf,rows:[]};'
-          'f.gruppen.forEach(function(g){'
-          'var r=document.createElement("div");r.className="fs-row";'
-          'var kf=document.createElement("div");kf.className="fs-kopf";'
-          'var lb=document.createElement("span");lb.className="fs-lbl";'
-          'lb.textContent=L[g.k]||g.k;'
-          'var zt=document.createElement("span");zt.className="fs-z";'
-          'kf.appendChild(lb);kf.appendChild(zt);'
-          'var b2=document.createElement("span");b2.className="fs-bar";'
-          'var bf=document.createElement("span");bf.className="fs-fill";'
-          'b2.appendChild(bf);'
-          'r.appendChild(kf);r.appendChild(b2);w.appendChild(r);'
-          'c.rows.push({bf:bf,zt:zt});});'
-          # .524 Fix 11 (Betreiber-Auflage 10.09.): ABBRECHEN gehoert an den
-          # LAUFENDEN Balken. Bis .523 gab es Abbrechen nur im Overlay des
-          # FERTIGEN Ergebnisses — wer einen zu lang laufenden Check loswerden
-          # wollte, konnte ihn nur aussitzen. Der Knopf steht im Block selbst
-          # (nicht neben dem Lupen-Knopf), weil der Block die volle Zeilen-
-          # breite hat und der Balken sonst zwischen zwei Knoepfen klemmt.
-          'var ab=document.createElement("button");ab.className="gtb fs-ab";'
-          'ab.textContent="Cancel this check";ab.style.marginTop="6px";'
-          'ab.onclick=function(){lbAbbrechen(st,ab);};'
-          'w.appendChild(ab);'
-          'st.appendChild(w);st._fsb=c;}'
-          'c.m.textContent=msg;'
-          # .507 B3 (E-B2/E-P3/E-P5): Startzeit und — NUR wenn der Dienst eine
-          # eigene Messung hat — die geschaetzte Dauer. Ohne Messung steht dort
-          # ehrlich "duration not measured yet"; eine Rueckfallzahl gaebe es
-          # hier nie (die Rate haengt an Maschine UND Version, nach jedem
-          # Update ist sie einmal leer). Der Grund steuert den Warte-Ton des
-          # Gesamtbalkens; ohne Grund (Alt-Antwort) bleibt es beim Zustand.
-          'var db=st._lbd||{},mt2="";'
-          'if(db.start_ts)mt2="started "'
-          '+new Date(db.start_ts*1000).toLocaleTimeString();'
-          'if(db.dauer_s)mt2+=(mt2?" \\u00b7 ":"")+"about "'
-          '+Math.round(db.dauer_s)+" s in total";'
-          'else if(db.dauer_unbekannt)mt2+=(mt2?" \\u00b7 ":"")'
-          '+"duration not measured yet";'
-          # .508 J1: der Lauf hat ohne warmen Worker angefangen (Dienst frisch
-          # gestartet), und der Kaltaufschlag ist auf dieser Maschine+Version nie
-          # gemessen worden — dann steckt das Modell-Laden in KEINER Zahl. Steckt
-          # es in dauer_s, schickt der Dienst das Feld gar nicht erst mit.
-          'if(db.warm_up)mt2+=(mt2?" ":"")+"+ warm-up";'
-          'c.mt.textContent=mt2;'
-          'var gr=db.grund||"";'
-          'var wa=gr?(gr==="startet"||gr==="bg_lock"||gr==="kein_platz")'
-          ':(z==="wartet");'
-          'c.tf.className="fs-fill"+(wa?" warte":"");'
-          'c.tf.style.width=Math.round(100*f.gesamt)+"%";'
-          'var fertig=(z==="bewertet");'
-          'f.gruppen.forEach(function(g,i){'
-          'var row=c.rows[i];if(!row)return;'
-          'row.bf.style.width=(fertig?100:Math.round(100*g.anteil))+"%";'
-          'var zt=row.zt;zt.className="fs-z"+(fertig?" ok":"");'
-          'if(fertig)zt.textContent="\\u2713 done";'
-          'else if(z==="wartet")zt.textContent="waiting";'
-          'else if(!f.puls_da)zt.textContent='
-          '(g.k==="suchen"?"fetching the clip \\u2026":"waiting");'
-          'else if(g.k==="suchen")zt.textContent="frame "+g.wert+" of "+(g.von||"?");'
-          'else if(!g.wert)zt.textContent="waiting";'
-          'else if(g.k==="pose")zt.textContent=g.wert+" found";'
-          'else zt.textContent=g.wert+" recognized";});}'
-          # .524 Fix 11: der Abbruch selbst. Er schickt den Ordner-Namen, den
-          # der Dienst seit .524 SCHON WAEHREND des Laufs mitliefert
-          # (`lauf_id` in der laden-Antwort) — bis .523 kannte das Blatt ihn
-          # erst mit dem fertigen Ergebnis, und genau deshalb konnte der Knopf
-          # nur im Overlay stehen. Die Poll-Schleife wird hier angehalten:
-          # sonst fragte sie 2,5 s spaeter nach und startete den eben
-          # abgebrochenen Lauf neu (sein Ordner ist dann weg).
-          'function lbAbbrechen(st,ab){'
-          'var d=st._lbd||{},b=st._lbB,lid=d.lauf_id||null;'
-          'ab.disabled=true;if(b)b._lbStop=true;'
-          'function fertig(txt){st._fsb=null;st.style.display="";'
-          'st.textContent=txt;if(b){lbStart(b);lbFrei(b);}}'
-          'if(!lid){fertig("nothing to cancel \\u2014 reload the page");return;}'
-          'ab.textContent="cancelling\\u2026";'
-          'fetch("/auftritt_lernen",{method:"POST",'
-          'headers:{"Content-Type":"application/json"},'
-          'body:JSON.stringify({person:st._lbP,abbrechen:lid})})'
-          '.then(function(r){return r.json()}).then(function(dv){'
-          'fertig((dv&&dv.msg)||"cancelled");})'
-          '.catch(function(e){fertig("error: "+e);});}'
-          'function lernBruecke(b){'
-          'var st=b.parentNode.querySelector(".lb-status");'
-          # .524: ein frischer KLICK hebt eine vorherige Abbruch-Sperre auf,
-          # ein POLL nicht — sonst liefe die Schleife nach dem Abbrechen
-          # weiter und stiesse einen neuen Lauf an.
-          'if(b._lbPoll){b._lbPoll=0;if(b._lbStop)return;}else{b._lbStop=false;}'
-          'var kk0=b.closest(".pass-card"),pn=b.dataset.person;'
-          'if(kk0){kk0._lbLauf=kk0._lbLauf||{};'
-          'if(kk0._lbLauf[pn]&&kk0._lbLauf[pn]!==b){'
-          'st.style.display="";'
-          'st.textContent="a check for "+pn+" is already running on this pass";'
-          'return;}'
-          'kk0._lbLauf[pn]=b;}'
-          # .347 (User: "flackert bei der Aktualisierung"): lernBruecke ist
-          # Klick-Handler UND Poll-Schleife — der Kopf darf den Block nicht je
-          # Tick abraeumen (der Cache-Reset an dieser Stelle machte das
-          # In-Place-Update wirkungslos: je Poll Wartetext + Neubau = das
-          # Flackern; Gate-Anker verbietet ihn hier). Wartetext nur beim
-          # ERSTEN Aufruf, solange noch kein Block steht; geleert wird der
-          # Cache ausschliesslich an den Ausstiegen.
-          'b.disabled=true;'
-          'if(!st._fsb)st.textContent="checking the pictures\\u2026";'
-          # .507 B3 (E-B3/E-P2): der Klick sendet GENAU das Ereignis der Kachel;
-          # `ganzer_pass` ist der zweite Knopf an der Karte. Die eid-Liste des
-          # Durchgangs im HTML gibt es nicht mehr — der Dienst kettet selbst.
-          'fetch("/auftritt_lernen",{method:"POST",headers:{"Content-Type":"application/json"},'
-          'body:JSON.stringify({person:pn,eid:b.dataset.eid,'
-          'ganzer_pass:!!b.dataset.ganzerPass})})'
-          '.then(function(r){return r.json()}).then(function(d){'
-          # Die Antwort selbst haengt am Status-Feld: lbBlock liest daraus
-          # Grund, Startzeit und Dauer. Der Aufruf von lbBlock bleibt dabei
-          # woertlich wie im .345-Vertrag (qs.sh) — kein fuenftes Argument.
-          # .524: der Abbrechen-Knopf im Block braucht Knopf und Person —
-          # `lbBlock` bekommt bewusst kein fuenftes Argument (der .345-Vertrag
-          # in qs.sh prueft den Aufruf wortgleich), also reisen sie wie die
-          # Antwort selbst am Status-Feld mit.
-          'st._lbd=d;st._lbB=b;st._lbP=pn;'
-          'if(!d.ok){st._fsb=null;st.style.display="";'
-          'st.textContent="error: "+d.msg;b.disabled=false;lbFrei(b);return;}'
-          # .232 (User-Idee): kaltes Modell -> ehrliche Lade-Anzeige und
-          # automatisch nachfragen, sobald es steht (max ~1 min).
-          'if(d.laden){'
-          # .310 (User: 'kleiner Balken neben dem Text, der hochlaeuft'): die
-          # Pass-Ernte meldet i/n/zustand — Fortschritts-Block im Status-Span,
-          # kein Aufgeben per Zaehler, solange der Dienst Fortschritt meldet
-          # (der Alt-Text 'model did not load' kam nach 60 s Warten hinter
-          # einem anderen Hintergrund-Job). Reines Modell-Laden (ohne n)
-          # behaelt den 60-s-Deckel und bleibt schlichte Textzeile.
-          'if(d.zustand){lbBlock(st,d.msg,d.zustand,d.fortschritt);'
-          'b._ladeversuche=0;'
-          'setTimeout(function(){b._lbPoll=1;lernBruecke(b)},2500);return;}'
-          'st._fsb=null;st.textContent=d.msg;'
-          'b._ladeversuche=(b._ladeversuche||0)+1;'
-          'if(b._ladeversuche>24){st._fsb=null;st.style.display="";'
-          'st.textContent="model did not load — try again";'
-          'b.disabled=false;b._ladeversuche=0;lbFrei(b);return;}'
-          'setTimeout(function(){b._lbPoll=1;lernBruecke(b)},2500);return;}'
-          'b._ladeversuche=0;'
-          'st._fsb=null;st.style.display="";st.textContent=d.msg;b.disabled=false;'
-          'lbFrei(b);'
-          # .231: Overlay auch, wenn NUR Grenzfaelle da sind.
-          'if((d.nehmen&&d.nehmen.length)||(d.grenz&&d.grenz.length))'
-          'lbOverlay(b,st,d);})'
-          '.catch(function(e){st._fsb=null;st.style.display="";'
-          'st.textContent="error: "+e;b.disabled=false;lbFrei(b);});}'
-          '</script>')
     # .32x: in der Gruppen-Sicht traegt der Titel die GRUPPE, nicht die eine
     # Person, an der Referenz-Marker und Sortierung technisch haengen.
     return (t("auftritte.titel_person",
               person=(" & ".join(gruppe) if gruppe else person)),
-            kopf + "".join(bloecke) + js)
+            kopf + "".join(bloecke) + BRUECKE_JS)
+
+
+# Das Skript der Lupenknoepfe (lernBruecke mit Fortschritt, Overlay, Uebernahme, Undo, Abbrechen) fuer jede Seite mit
+# Kacheln aus kachel_html: die Durchgangs-Karte (render) und die Seite „Unbekannte“ (routes/unbekannte.py) binden
+# dasselbe ein (Bauplan analysen/bauplan_benennen.md, Stufe BN3 Punkt 1). Nur Literale, kein t() auf Modulebene.
+# .226 (User-Feedback am .225-Knopf, dritte Fassung): Pruefen oeffnet ein
+# In-Page-OVERLAY mit genau den Bildern, die uebernommen wuerden — jedes
+# abwaehlbar, dann OK oder Cancel (KEIN window.open: Browser-Popup-Blocker
+# koennen eigenes Seiten-HTML nicht blocken, User-Fallen-Sorge). Nach
+# der Uebernahme bleibt Undo.
+# Stufe-2-Grenze (§8.4): Inline-Script mit \u-Escapes (Surrogate-Emoji,
+# \\"-Escapes, Laufzeit-Konkatenation) — JS-Texte bleiben literal, bis
+# window.T diese Seite versorgt (beide Toggle-Fassungen, §8.17).
+BRUECKE_JS = ('<script>'
+      # .507 B3: es gibt zwei Beschriftungen (Kachel = dieses eine
+      # Ereignis, Karte = der ganze Durchgang mit seiner Ereigniszahl),
+      # und beide kommen aus der Sprachtabelle. lbStart baut deshalb aus
+      # data-lbl zurueck statt aus einem zweiten literalen Text — sonst
+      # truege ein Kachel-Knopf nach dem Abbruch die Karten-Beschriftung.
+      # Kachel-Knoepfe haben kein data-lbl: sie bleiben die Lupe.
+      'function lbStart(b){b.disabled=false;'
+      'b.innerHTML="<span class=\\"pk-icon\\">\\uD83D\\uDD0D</span>";'
+      'if(b.dataset.lbl)b.appendChild(document.createTextNode(b.dataset.lbl));}'
+      # .507 B3: Riegel je Karte und Person. Ein zweiter Klick auf eine
+      # andere Kachel DERSELBEN Person waehrend eines Laufs traefe im
+      # Dienst denselben Ordner und bekaeme "laeuft" fuer einen fremden
+      # Lauf gemeldet — hier bleibt es bei einem Hinweis, ohne zweite
+      # Poll-Schleife. lbFrei gibt die Karte an jedem Ausstieg frei.
+      'function lbFrei(b){var k=b.closest(".pass-card");'
+      'if(k&&k._lbLauf&&k._lbLauf[b.dataset.person]===b)'
+      'delete k._lbLauf[b.dataset.person];}'
+      'function lbUebernehmen(b,st,items){'
+      'st.textContent="adopting\\u2026";b.disabled=true;'
+      'fetch("/auftritt_lernen",{method:"POST",'
+      'headers:{"Content-Type":"application/json"},'
+      'body:JSON.stringify({person:b.dataset.person,uebernehmen:items})})'
+      '.then(function(r){return r.json()}).then(function(d2){'
+      'if(!d2.ok){st.textContent="error: "+d2.msg;lbStart(b);return;}'
+      'st.textContent=d2.msg;'
+      'b.innerHTML="<span class=\\"pk-icon\\">\\u2713</span>"+d2.n+" added";'
+      # .227: die uebernommenen Bilder SOFORT gruen markieren (ohne Reload)
+      'var kk=b.closest(".pass-card");'
+      'if(kk)items.forEach(function(it){'
+      'var t=kk.querySelector(".pass-thumb[href*=\\""+it.eid+"\\"]");'
+      'if(t)t.classList.add("pass-thumb-ref");});'
+      'var u=document.createElement("a");u.textContent="Undo";u.href="#";'
+      'u.style.marginLeft="8px";'
+      'u.onclick=function(ev){ev.preventDefault();st.textContent="removing\\u2026";'
+      'fetch("/auftritt_lernen_undo",{method:"POST",'
+      'headers:{"Content-Type":"application/json"},'
+      'body:JSON.stringify({person:b.dataset.person,ref_ids:d2.dateien})})'
+      '.then(function(r){return r.json()}).then(function(d3){'
+      'st.textContent=d3.msg;u.remove();'
+      # Nur die EBEN uebernommenen Marker zuruecknehmen — aeltere
+      # Referenzen desselben Passes behalten ihre Umrandung.
+      'var ku=b.closest(".pass-card");'
+      'if(ku)items.forEach(function(it){'
+      'var t=ku.querySelector(".pass-thumb[href*=\\""+it.eid+"\\"]");'
+      'if(t)t.classList.remove("pass-thumb-ref");});'
+      'lbStart(b);});};'
+      'b.parentNode.insertBefore(u,st);})'
+      '.catch(function(e){st.textContent="error: "+e;lbStart(b);});}'
+      'function lbOverlay(b,st,d){'
+      'var ov=document.createElement("div");ov.className="lb-overlay";'
+      'var dg=document.createElement("div");dg.className="lb-dialog";'
+      'var np=d.nehmen.length,ng=(d.grenz||[]).length;'
+      'dg.innerHTML="<h3 style=\\"margin:0 0 4px\\">Take these pictures for "'
+      '+b.dataset.person+"?</h3><div class=\\"dim\\">"+'
+      '(np?"The check picked "+np+" picture(s) \\u2014 untick any you do '
+      'not trust.":"The check found no clearly helpful picture.")+"</div>";'
+      'function reihe(items,checked){var w=document.createElement("div");'
+      'w.className="lb-wahl";items.forEach(function(it){'
+      'var l=document.createElement("label"),c=document.createElement("input");'
+      'c.type="checkbox";c.checked=checked;c._it=it;'
+      'var im=document.createElement("img");im.src=it.url;im.loading="lazy";'
+      'l.appendChild(c);l.appendChild(im);w.appendChild(l);});return w;}'
+      'var wahl=reihe(d.nehmen,true);dg.appendChild(wahl);'
+      # .231: Grenzfaelle sichtbar, aber OHNE Haken — bewusste Zuwahl.
+      'var wahl2=null;'
+      'if(ng){var gh=document.createElement("div");gh.className="dim";'
+      'gh.style.marginTop="6px";'
+      # .521: der Satz sagt jetzt, was ein Grenzfall WIRKLICH ist. Bis .520
+      # hiess er „identity sure, picture quality only fair" — auf dem
+      # Mini-Ernte-Weg ist genau das Gegenteil der Fall: die Bildqualitaet
+      # hat das Register schon bestaetigt, unsicher ist die IDENTITAET
+      # (oder es ist das dritte, vierte … Bild desselben Ereignisses, das
+      # der Deckel vom Haken genommen hat).
+      'gh.textContent=ng+" borderline picture(s) \\u2014 quality is fine, '
+      'but the identity is only probable, or the picture is an extra one '
+      'from the same event; tick to take anyway:";'
+      'dg.appendChild(gh);wahl2=reihe(d.grenz,false);dg.appendChild(wahl2);}'
+      'var ok=document.createElement("button");ok.className="gtb on";'
+      'var ab=document.createElement("button");ab.className="gtb";'
+      'ab.textContent="Cancel";ab.style.marginLeft="8px";'
+      'function boxenAlle(){var a=Array.from(wahl.querySelectorAll("input"));'
+      'if(wahl2)a=a.concat(Array.from(wahl2.querySelectorAll("input")));return a;}'
+      'function zaehl(){var n=boxenAlle().filter(function(c){return c.checked}).length;'
+      'ok.textContent="Take "+n+" picture(s)";ok.disabled=!n;return n;}'
+      'wahl.addEventListener("change",zaehl);'
+      'if(wahl2)wahl2.addEventListener("change",zaehl);zaehl();'
+      'ok.onclick=function(){var items=[];'
+      'boxenAlle().forEach(function(c){if(c.checked)'
+      'items.push({eid:c._it.eid,datei:c._it.datei,'
+      'lauf_id:c._it.lauf_id,herkunft:c._it.herkunft});});'
+      'ov.remove();lbUebernehmen(b,st,items);};'
+      # .521 FLUECHTIG: Abbrechen raeumt den Mini-Ernte-Lauf sofort weg
+      # (Bilder, Kandidaten, Auswahl). Der naechste Klick erntet neu — das
+      # ist der bewusste Preis dafuer, dass eine angesehene und verworfene
+      # Pruefung nichts liegen laesst. `lauf_id` kommt aus der Antwort;
+      # fehlt sie (Alt-Antwort), bleibt es beim blossen Schliessen.
+      'ab.onclick=function(){ov.remove();st.textContent="nothing taken";'
+      'lbStart(b);var lid=(d&&d.lauf_id)||null;if(lid)'
+      'fetch("/auftritt_lernen",{method:"POST",'
+      'headers:{"Content-Type":"application/json"},'
+      'body:JSON.stringify({person:b.dataset.person,verwerfen:lid})})'
+      '.then(function(r){return r.json()}).then(function(dv){'
+      'if(dv&&dv.msg)st.textContent=dv.msg;}).catch(function(){});};'
+      'dg.appendChild(ok);dg.appendChild(ab);ov.appendChild(dg);'
+      'ov.onclick=function(ev){if(ev.target===ov)ab.onclick(ev);};'
+      'document.body.appendChild(ov);}'
+      # .345 (User-Konsens 25.08., ersetzt die .343-Textzeile): der Block =
+      # EIN Gesamtbalken (Events + Frame-Anteil, fortschritt.gesamt) und DREI
+      # Unterbalken (suchen/Pose/erkennen), die je Event mit dem Frame-
+      # Fortschritt durchlaufen; Zaehler sind echte Werte. Prozente rechnet
+      # allein der Server (ernte.fortschritt_rechnen — kein Zweit-Rechner im
+      # Blatt), hier wird nur angewendet. Kein Puls = Clip-Beschaffung
+      # (puls_da False), 'bewertet' = alle drei fertig. Optik: .fs-*
+      # (style.css). Texte englisch-literal wie das ganze Blatt
+      # (Stufe-2-Grenze oben).
+      # .346b (User: "AJAX wie beim Lernen"): der Block wird EINMAL gebaut
+      # und danach nur noch in place nachgefuehrt (st._fsb haelt die
+      # Referenzen) — kein Abriss je Poll, die Breiten animieren weich wie
+      # in der Wizard-Karte. Die msg-Zeile wohnt mit IM Block (fs-msg).
+      # Gestapelte Zeilen: Kopf (Beschriftung+Zaehler), Balken voll breit.
+      'function lbBlock(st,msg,z,f){'
+      'if(!f){st._fsb=null;st.style.display="";st.textContent=msg;return;}'
+      'var c=st._fsb;'
+      'if(!c){'
+      # .346: der Block braucht die volle Zeilenbreite — der Status-Span
+      # bricht dafuer unter den Knopf (und zurueck, wenn der Lauf endet).
+      'st.textContent="";st.style.display="block";'
+      'var w=document.createElement("div");w.className="fs-block";'
+      'var m=document.createElement("div");m.className="dim fs-msg";'
+      'w.appendChild(m);'
+      # .507 B3: eigene Zeile fuer Startzeit + Dauer (unten gefuellt).
+      'var mt=document.createElement("div");mt.className="dim fs-meta";'
+      'w.appendChild(mt);'
+      'var tb=document.createElement("div");tb.className="fs-total";'
+      'var tf=document.createElement("span");tf.className="fs-fill";'
+      'tb.appendChild(tf);w.appendChild(tb);'
+      'var L={suchen:"searching faces",pose:"head pose",erkennen:"recognizing"};'
+      'c={m:m,mt:mt,tf:tf,rows:[]};'
+      'f.gruppen.forEach(function(g){'
+      'var r=document.createElement("div");r.className="fs-row";'
+      'var kf=document.createElement("div");kf.className="fs-kopf";'
+      'var lb=document.createElement("span");lb.className="fs-lbl";'
+      'lb.textContent=L[g.k]||g.k;'
+      'var zt=document.createElement("span");zt.className="fs-z";'
+      'kf.appendChild(lb);kf.appendChild(zt);'
+      'var b2=document.createElement("span");b2.className="fs-bar";'
+      'var bf=document.createElement("span");bf.className="fs-fill";'
+      'b2.appendChild(bf);'
+      'r.appendChild(kf);r.appendChild(b2);w.appendChild(r);'
+      'c.rows.push({bf:bf,zt:zt});});'
+      # .524 Fix 11 (Betreiber-Auflage 10.09.): ABBRECHEN gehoert an den
+      # LAUFENDEN Balken. Bis .523 gab es Abbrechen nur im Overlay des
+      # FERTIGEN Ergebnisses — wer einen zu lang laufenden Check loswerden
+      # wollte, konnte ihn nur aussitzen. Der Knopf steht im Block selbst
+      # (nicht neben dem Lupen-Knopf), weil der Block die volle Zeilen-
+      # breite hat und der Balken sonst zwischen zwei Knoepfen klemmt.
+      'var ab=document.createElement("button");ab.className="gtb fs-ab";'
+      'ab.textContent="Cancel this check";ab.style.marginTop="6px";'
+      'ab.onclick=function(){lbAbbrechen(st,ab);};'
+      'w.appendChild(ab);'
+      'st.appendChild(w);st._fsb=c;}'
+      'c.m.textContent=msg;'
+      # .507 B3 (E-B2/E-P3/E-P5): Startzeit und — NUR wenn der Dienst eine
+      # eigene Messung hat — die geschaetzte Dauer. Ohne Messung steht dort
+      # ehrlich "duration not measured yet"; eine Rueckfallzahl gaebe es
+      # hier nie (die Rate haengt an Maschine UND Version, nach jedem
+      # Update ist sie einmal leer). Der Grund steuert den Warte-Ton des
+      # Gesamtbalkens; ohne Grund (Alt-Antwort) bleibt es beim Zustand.
+      'var db=st._lbd||{},mt2="";'
+      'if(db.start_ts)mt2="started "'
+      '+new Date(db.start_ts*1000).toLocaleTimeString();'
+      'if(db.dauer_s)mt2+=(mt2?" \\u00b7 ":"")+"about "'
+      '+Math.round(db.dauer_s)+" s in total";'
+      'else if(db.dauer_unbekannt)mt2+=(mt2?" \\u00b7 ":"")'
+      '+"duration not measured yet";'
+      # .508 J1: der Lauf hat ohne warmen Worker angefangen (Dienst frisch
+      # gestartet), und der Kaltaufschlag ist auf dieser Maschine+Version nie
+      # gemessen worden — dann steckt das Modell-Laden in KEINER Zahl. Steckt
+      # es in dauer_s, schickt der Dienst das Feld gar nicht erst mit.
+      'if(db.warm_up)mt2+=(mt2?" ":"")+"+ warm-up";'
+      'c.mt.textContent=mt2;'
+      'var gr=db.grund||"";'
+      'var wa=gr?(gr==="startet"||gr==="bg_lock"||gr==="kein_platz")'
+      ':(z==="wartet");'
+      'c.tf.className="fs-fill"+(wa?" warte":"");'
+      'c.tf.style.width=Math.round(100*f.gesamt)+"%";'
+      'var fertig=(z==="bewertet");'
+      'f.gruppen.forEach(function(g,i){'
+      'var row=c.rows[i];if(!row)return;'
+      'row.bf.style.width=(fertig?100:Math.round(100*g.anteil))+"%";'
+      'var zt=row.zt;zt.className="fs-z"+(fertig?" ok":"");'
+      'if(fertig)zt.textContent="\\u2713 done";'
+      'else if(z==="wartet")zt.textContent="waiting";'
+      'else if(!f.puls_da)zt.textContent='
+      '(g.k==="suchen"?"fetching the clip \\u2026":"waiting");'
+      'else if(g.k==="suchen")zt.textContent="frame "+g.wert+" of "+(g.von||"?");'
+      'else if(!g.wert)zt.textContent="waiting";'
+      'else if(g.k==="pose")zt.textContent=g.wert+" found";'
+      'else zt.textContent=g.wert+" recognized";});}'
+      # .524 Fix 11: der Abbruch selbst. Er schickt den Ordner-Namen, den
+      # der Dienst seit .524 SCHON WAEHREND des Laufs mitliefert
+      # (`lauf_id` in der laden-Antwort) — bis .523 kannte das Blatt ihn
+      # erst mit dem fertigen Ergebnis, und genau deshalb konnte der Knopf
+      # nur im Overlay stehen. Die Poll-Schleife wird hier angehalten:
+      # sonst fragte sie 2,5 s spaeter nach und startete den eben
+      # abgebrochenen Lauf neu (sein Ordner ist dann weg).
+      'function lbAbbrechen(st,ab){'
+      'var d=st._lbd||{},b=st._lbB,lid=d.lauf_id||null;'
+      'ab.disabled=true;if(b)b._lbStop=true;'
+      'function fertig(txt){st._fsb=null;st.style.display="";'
+      'st.textContent=txt;if(b){lbStart(b);lbFrei(b);}}'
+      'if(!lid){fertig("nothing to cancel \\u2014 reload the page");return;}'
+      'ab.textContent="cancelling\\u2026";'
+      'fetch("/auftritt_lernen",{method:"POST",'
+      'headers:{"Content-Type":"application/json"},'
+      'body:JSON.stringify({person:st._lbP,abbrechen:lid})})'
+      '.then(function(r){return r.json()}).then(function(dv){'
+      'fertig((dv&&dv.msg)||"cancelled");})'
+      '.catch(function(e){fertig("error: "+e);});}'
+      'function lernBruecke(b){'
+      'var st=b.parentNode.querySelector(".lb-status");'
+      # .524: ein frischer KLICK hebt eine vorherige Abbruch-Sperre auf,
+      # ein POLL nicht — sonst liefe die Schleife nach dem Abbrechen
+      # weiter und stiesse einen neuen Lauf an.
+      # BN1 (bauplan_benennen.md): die ABFRAGE im Takt schickt den Ordner
+      # des Laufs mit, den die vorige Antwort trug (`lauf_id`, seit .524
+      # in jeder laufenden Antwort) — dann liest der Dienst nur den
+      # Lauf-Ordner statt der ganzen Akte. Ein frischer Klick schickt
+      # keinen und startet wie bisher.
+      'var lid=null;'
+      'if(b._lbPoll){b._lbPoll=0;if(b._lbStop)return;'
+      'lid=(st._lbd&&st._lbd.lauf_id)||null;}else{b._lbStop=false;}'
+      'var kk0=b.closest(".pass-card"),pn=b.dataset.person;'
+      'if(kk0){kk0._lbLauf=kk0._lbLauf||{};'
+      'if(kk0._lbLauf[pn]&&kk0._lbLauf[pn]!==b){'
+      'st.style.display="";'
+      'st.textContent="a check for "+pn+" is already running on this pass";'
+      'return;}'
+      'kk0._lbLauf[pn]=b;}'
+      # .347 (User: "flackert bei der Aktualisierung"): lernBruecke ist
+      # Klick-Handler UND Poll-Schleife — der Kopf darf den Block nicht je
+      # Tick abraeumen (der Cache-Reset an dieser Stelle machte das
+      # In-Place-Update wirkungslos: je Poll Wartetext + Neubau = das
+      # Flackern; Gate-Anker verbietet ihn hier). Wartetext nur beim
+      # ERSTEN Aufruf, solange noch kein Block steht; geleert wird der
+      # Cache ausschliesslich an den Ausstiegen.
+      'b.disabled=true;'
+      'if(!st._fsb)st.textContent="checking the pictures\\u2026";'
+      # .507 B3 (E-B3/E-P2): der Klick sendet GENAU das Ereignis der Kachel;
+      # `ganzer_pass` ist der zweite Knopf an der Karte. Die eid-Liste des
+      # Durchgangs im HTML gibt es nicht mehr — der Dienst kettet selbst.
+      'fetch("/auftritt_lernen",{method:"POST",headers:{"Content-Type":"application/json"},'
+      'body:JSON.stringify({person:pn,eid:b.dataset.eid,'
+      'ganzer_pass:!!b.dataset.ganzerPass,lauf_id:lid})})'
+      '.then(function(r){return r.json()}).then(function(d){'
+      # Die Antwort selbst haengt am Status-Feld: lbBlock liest daraus
+      # Grund, Startzeit und Dauer. Der Aufruf von lbBlock bleibt dabei
+      # woertlich wie im .345-Vertrag (qs.sh) — kein fuenftes Argument.
+      # .524: der Abbrechen-Knopf im Block braucht Knopf und Person —
+      # `lbBlock` bekommt bewusst kein fuenftes Argument (der .345-Vertrag
+      # in qs.sh prueft den Aufruf wortgleich), also reisen sie wie die
+      # Antwort selbst am Status-Feld mit.
+      'st._lbd=d;st._lbB=b;st._lbP=pn;'
+      'if(!d.ok){st._fsb=null;st.style.display="";'
+      'st.textContent="error: "+d.msg;b.disabled=false;lbFrei(b);return;}'
+      # .232 (User-Idee): kaltes Modell -> ehrliche Lade-Anzeige und
+      # automatisch nachfragen, sobald es steht (max ~1 min).
+      'if(d.laden){'
+      # .310 (User: 'kleiner Balken neben dem Text, der hochlaeuft'): die
+      # Pass-Ernte meldet i/n/zustand — Fortschritts-Block im Status-Span,
+      # kein Aufgeben per Zaehler, solange der Dienst Fortschritt meldet
+      # (der Alt-Text 'model did not load' kam nach 60 s Warten hinter
+      # einem anderen Hintergrund-Job). Reines Modell-Laden (ohne n)
+      # behaelt den 60-s-Deckel und bleibt schlichte Textzeile.
+      'if(d.zustand){lbBlock(st,d.msg,d.zustand,d.fortschritt);'
+      'b._ladeversuche=0;'
+      'setTimeout(function(){b._lbPoll=1;lernBruecke(b)},2500);return;}'
+      'st._fsb=null;st.textContent=d.msg;'
+      'b._ladeversuche=(b._ladeversuche||0)+1;'
+      'if(b._ladeversuche>24){st._fsb=null;st.style.display="";'
+      'st.textContent="model did not load — try again";'
+      'b.disabled=false;b._ladeversuche=0;lbFrei(b);return;}'
+      'setTimeout(function(){b._lbPoll=1;lernBruecke(b)},2500);return;}'
+      'b._ladeversuche=0;'
+      'st._fsb=null;st.style.display="";st.textContent=d.msg;b.disabled=false;'
+      'lbFrei(b);'
+      # .231: Overlay auch, wenn NUR Grenzfaelle da sind.
+      'if((d.nehmen&&d.nehmen.length)||(d.grenz&&d.grenz.length))'
+      'lbOverlay(b,st,d);})'
+      '.catch(function(e){st._fsb=null;st.style.display="";'
+      'st.textContent="error: "+e;b.disabled=false;lbFrei(b);});}'
+      '</script>')
 
 
 def render_pass(cfg, log_pfad, personen_bekannt, eid):
