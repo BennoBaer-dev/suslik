@@ -4981,6 +4981,60 @@ class Dienst:
 
 
 # ----------------------------------------------------------------- Aufruf
+def engine_waehlen(engine=None):
+    """Waehlt die Worker-Engine aus der ausdruecklichen Wahl oder dem Backend.
+    -> Engine-Name; unbekanntes Backend beendet den Start mit Grund.
+    """
+    if engine is None:
+        kind, _dev = face_audit.resolve_backend()
+        # E4 (17.09.2026): `cpu` hat jetzt eine eigene Engine (engine_cpu), die
+        # Abbildung ist damit VOLLSTAENDIG — jedes kind der Registry hat einen
+        # Rechenweg. Der Zweig darunter bleibt trotzdem: er faengt den Fall
+        # „unbekanntes/neues kind" und vor allem den Fall, den das gpu-legacy-Image
+        # am 17.09. gezeigt hat (Treiber bindet nicht, resolve_backend faellt
+        # zurueck). Nur ist der Text jetzt ein anderer: es fehlt keine Engine mehr,
+        # sondern ein GERAET.
+        engine = {"openvino": "ov", "cuda": "cuda",
+                    "migraphx": "migraphx", "cpu": "cpu"}.get(kind)
+        if kind == "openvino" and str(_dev or "").upper() == "CPU":
+            # Feldbefunde Punkt 16 (Discussion #30 Nr 4): `openvino:CPU` ist laut
+            # Registry ein zweiter Name fuer `cpu` (core/registry.py, DEVICES), und
+            # engine_ov bindet nur die GPU. Der OpenVINO-CPU-Weg ist engine_cpu (sein
+            # Geraet heisst dort engine_cpu.OV_GERAET, derselbe Name).
+            engine = "cpu"
+        if engine is None:
+            # .540: DIESE ZEILE LIEST EIN NUTZER. Bis .539 stand hier ein deutscher
+            # Halbsatz mit einer internen Etappen-Nummer — und zwar an der Stelle,
+            # an der die Anlage aufhoert zu rechnen.
+            #
+            # .541 (E4) HAT IHREN ANWENDUNGSFALL VERSCHOBEN, und das ist wichtig
+            # genug fuer einen eigenen Absatz: der Fall, der sie geboren hat (das
+            # gpu-legacy-Image, dessen Legacy-Treiber auf einer Gen12+-iGPU nicht
+            # bindet, `resolve_backend` faellt auf `cpu`), kommt hier NICHT MEHR AN —
+            # `cpu` hat jetzt eine Engine und rechnet. Damit der Befund trotzdem
+            # nicht still wird, meldet ihn `engine_cpu` selbst: dort weiss man, dass
+            # `SUSLIK_VARIANT` eine GPU-Variante nennt, waehrend die CPU rechnet, und
+            # die Warnung geht ueber `bindung` in jede Job-Antwort und nach /health.
+            # Der Unterschied ist bewusst: eine Anlage, die langsam analysiert, ist
+            # besser als eine, die gar nicht analysiert — aber sie muss es SAGEN.
+            #
+            # Was hier ankommt, ist jetzt allein ein kind der Registry OHNE Eintrag
+            # in der Abbildung oben (ein neues Backend, ein Tippfehler im Config-Wert,
+            # den `resolve_backend` als unbekannt zurueckgibt). Das ist ein echter
+            # Abbruchgrund: wir wissen nicht, womit wir rechnen sollen.
+            # Die Liste der gueltigen Werte kommt aus der EINEN Quelle (Registry),
+            # nicht als Literal in einem Fehlertext — sonst nennt sie nach dem
+            # naechsten Backend etwas Falsches (qs_ebenen K3).
+            from core.registry import alle_wizard_werte    # noqa: PLC0415
+            raise SystemExit(
+                f"no analysis engine for backend {kind!r}: suslik does not know this "
+                f"backend. Check the 'backend' value in your configuration — the "
+                f"values this build knows are "
+                f"{', '.join(alle_wizard_werte())}. "
+                f"'suslik --benchmark' inside the container shows what it sees.")
+    return engine
+
+
 def argumente():
     ap = argparse.ArgumentParser(
         description="worker_dienst — Dienst-Anschluss des neuen Kerns (E2)")
@@ -5061,53 +5115,7 @@ def argumente():
         a.scratch = os.environ.get("SCRATCH_DIR") or os.path.join(
             tempfile.gettempdir(), "suslik-scratch")        # wie analyze.py:30
     os.makedirs(a.scratch, exist_ok=True)
-    if a.engine is None:
-        kind, _dev = face_audit.resolve_backend()
-        # E4 (17.09.2026): `cpu` hat jetzt eine eigene Engine (engine_cpu), die
-        # Abbildung ist damit VOLLSTAENDIG — jedes kind der Registry hat einen
-        # Rechenweg. Der Zweig darunter bleibt trotzdem: er faengt den Fall
-        # „unbekanntes/neues kind" und vor allem den Fall, den das gpu-legacy-Image
-        # am 17.09. gezeigt hat (Treiber bindet nicht, resolve_backend faellt
-        # zurueck). Nur ist der Text jetzt ein anderer: es fehlt keine Engine mehr,
-        # sondern ein GERAET.
-        a.engine = {"openvino": "ov", "cuda": "cuda",
-                    "migraphx": "migraphx", "cpu": "cpu"}.get(kind)
-        if kind == "openvino" and str(_dev or "").upper() == "CPU":
-            # Feldbefunde Punkt 16 (Discussion #30 Nr 4): `openvino:CPU` ist laut
-            # Registry ein zweiter Name fuer `cpu` (core/registry.py, DEVICES), und
-            # engine_ov bindet nur die GPU. Der OpenVINO-CPU-Weg ist engine_cpu (sein
-            # Geraet heisst dort engine_cpu.OV_GERAET, derselbe Name).
-            a.engine = "cpu"
-        if a.engine is None:
-            # .540: DIESE ZEILE LIEST EIN NUTZER. Bis .539 stand hier ein deutscher
-            # Halbsatz mit einer internen Etappen-Nummer — und zwar an der Stelle,
-            # an der die Anlage aufhoert zu rechnen.
-            #
-            # .541 (E4) HAT IHREN ANWENDUNGSFALL VERSCHOBEN, und das ist wichtig
-            # genug fuer einen eigenen Absatz: der Fall, der sie geboren hat (das
-            # gpu-legacy-Image, dessen Legacy-Treiber auf einer Gen12+-iGPU nicht
-            # bindet, `resolve_backend` faellt auf `cpu`), kommt hier NICHT MEHR AN —
-            # `cpu` hat jetzt eine Engine und rechnet. Damit der Befund trotzdem
-            # nicht still wird, meldet ihn `engine_cpu` selbst: dort weiss man, dass
-            # `SUSLIK_VARIANT` eine GPU-Variante nennt, waehrend die CPU rechnet, und
-            # die Warnung geht ueber `bindung` in jede Job-Antwort und nach /health.
-            # Der Unterschied ist bewusst: eine Anlage, die langsam analysiert, ist
-            # besser als eine, die gar nicht analysiert — aber sie muss es SAGEN.
-            #
-            # Was hier ankommt, ist jetzt allein ein kind der Registry OHNE Eintrag
-            # in der Abbildung oben (ein neues Backend, ein Tippfehler im Config-Wert,
-            # den `resolve_backend` als unbekannt zurueckgibt). Das ist ein echter
-            # Abbruchgrund: wir wissen nicht, womit wir rechnen sollen.
-            # Die Liste der gueltigen Werte kommt aus der EINEN Quelle (Registry),
-            # nicht als Literal in einem Fehlertext — sonst nennt sie nach dem
-            # naechsten Backend etwas Falsches (qs_ebenen K3).
-            from core.registry import alle_wizard_werte    # noqa: PLC0415
-            raise SystemExit(
-                f"no analysis engine for backend {kind!r}: suslik does not know this "
-                f"backend. Check the 'backend' value in your configuration — the "
-                f"values this build knows are "
-                f"{', '.join(alle_wizard_werte())}. "
-                f"'suslik --benchmark' inside the container shows what it sees.")
+    a.engine = engine_waehlen(a.engine)
     return a
 
 

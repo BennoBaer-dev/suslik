@@ -52,6 +52,7 @@ if WURZEL not in sys.path:
     sys.path.insert(0, WURZEL)
 
 from core import livewache as lw                          # noqa: E402
+from core.wache_rechnung import EngineContext             # noqa: E402
 from core.liveaufsicht import RC_NICHTS_ZU_TUN            # noqa: E402
 from core import logbuch as _logbuch
 _log = _logbuch.logger(__name__)
@@ -76,73 +77,6 @@ def _cfg_laden():
     return verifyd.load_config(CONFIG_PFAD), verifyd
 
 
-class Detektor:
-    """Der EINE geteilte Detektor-Kontext der Engine (Architektur B).
-
-    Baut face_audit.Embedder MIT lauter Backend-Kontrolle (K1-Lehre 09.08.:
-    ohne Kontrolle faellt onnxruntime still auf CPU, Faktor ~150) und stellt
-    das Detektor-Netz je Kachel-Geometrie um: set_det_size() setzt nur
-    Attribute (P1-Beweis in face_audit) — bei gemischten Seitenverhaeltnissen
-    wechselt das Netz je Frame; OpenVINO kompiliert je Shape genau EINMAL
-    (P4/W0-Cache). Die realen Wechselkosten misst der Ein-Waechter-Realtest
-    bzw. der 2-Kamera-Schritt (Phase 3) — offener Messpunkt, dokumentiert."""
-
-    def __init__(self, log=_log):
-        from face_audit import Embedder
-        self.log = log
-        self.app = Embedder()
-        self._netz = None
-        prov = self.provider()
-        if prov.startswith("CPU"):
-            # Log-Systematik E16: auf der cpu-Variante ist die CPU das Soll (Frage 1,
-            # INFO), auf jeder anderen der stille Rueckfall (Frage 3, ERROR). Die
-            # Variante kommt wie in engine_cpu aus SUSLIK_VARIANT. Feldbefunde Punkt 18:
-            # ein ANGEFORDERTER CPU-Weg (eingestelltes Backend) ist ebenso das Soll.
-            cpu_soll = ((os.environ.get("SUSLIK_VARIANT") or "").strip().lower() == "cpu"
-                        or lw.cpu_angefordert())
-            log.log(_logbuch.INFO if cpu_soll else _logbuch.ERROR,
-                "!! detection runs on CPU — on a GPU variant this is "
-                "the silent fallback (K1); live expects a GPU provider")
-        else:
-            log.info(f"detection: {prov}")
-
-    def provider(self):
-        try:
-            return self.app.app.models["detection"].session.get_providers()[0] \
-                .replace("ExecutionProvider", "")
-        except Exception:
-            _logbuch.swallowed(_log, _logbuch.ERROR, "returning 'unbekannt'", throttle=False)
-            return "unbekannt"
-
-    def _netz_stellen(self, netz):
-        if netz and netz != self._netz:
-            self.app.set_det_size(tuple(netz))
-            self._netz = tuple(netz)
-
-    def erkennen(self, frame_bgr, netz):
-        self._netz_stellen(netz)
-        return self.app.app.get(frame_bgr) or []
-
-    # --- Sammelbatch (Live-Performance Welle 1, Etappe B, 31.08.) -----------
-    # Der Inferenz-Kern (core/livewache.Inferenzkern) FRAGT diese drei
-    # Faehigkeiten ab, statt sie anzunehmen — ein Detektor ohne sie (Stub im
-    # Harnisch, insightface-eigener Recognition-Kopf) laeuft unveraendert auf
-    # dem Einzelweg weiter. Die Trennung selbst liegt in face_audit.Embedder
-    # (dort steht auch, warum sie zeilengleich zum Einzelweg ist).
-    def sammelbatch_moeglich(self):
-        return self.app.sammelbatch_moeglich()
-
-    def rec_geraet(self):
-        return self.app.rec_geraet()
-
-    def detektieren(self, frame_bgr, netz):
-        """-> (faces OHNE Embedding, crops112) — der erste Halbschritt."""
-        self._netz_stellen(netz)
-        return self.app.detektieren(frame_bgr)
-
-    def embeddings(self, crops):
-        """Crops MEHRERER Waechter in EINEM Lauf -> Nx512."""
-        return self.app.embeddings_batch(crops)
 
 
 CPU_EMPFOHLEN = 1     # CPU-Runde 17.08., .252 (User-Entscheid nachmittags):
@@ -230,15 +164,6 @@ def _mqtt_client(cfg, log=_log):
         return None
 
 
-def referenzen_noetig(guards):
-    """Sollen die Referenzen fuers Namens-Voting geladen werden? Seit .197
-    JA, sobald irgendein Waechter enabled ist (der Quick-verdict-Haken ist
-    abgeschafft). ALS FUNKTION herausgeloest (.198): der .197-Start-Absturz
-    (KeyError schnell_urteil, Engine 3x tot, 15-min-Pause) sass in genau
-    diesem Praedikat als Inline-Genexpr — die QS-Stufe S10 ruft die Funktion
-    jetzt mit guards_lesen-normalisierten Guards durch, Feld-Drift zwischen
-    guards_lesen und diesem Modul crasht damit im GATE, nicht auf Prod."""
-    return any(g["enabled"] for g in guards.values())
 
 
 def cmd_run():
@@ -248,7 +173,7 @@ def cmd_run():
     _logbuch.watch_flags(cfg.get("data_dir") or os.path.join(lw.WURZEL, "verify_data"))
     if _cpu_sperre():
         return 2
-    defaults, guards = lw.guards_lesen(cfg, _log)
+    _defaults, guards = lw.guards_lesen(cfg, _log)
     if not any(g["enabled"] for g in guards.values()):
         _log.info("live: no enabled guard in config store (live.guards.<camera>."
              "enabled) — nothing to do. Run 'test <camera>' first, then enable.")
@@ -265,21 +190,7 @@ def cmd_run():
                  f"{CPU_EMPFOHLEN}. They share the same cores: every "
                  "additional watcher slows ALL of them and heats the "
                  "machine. Watch Measure load and your temperatures.")
-    # Detektor + Referenzen: die det-320-FALLE gilt (referenzen_laden-Docstring)
-    # — Referenzen ZUERST, solange der Embedder auf 320 steht; das grosse Netz
-    # stellt erst der Betrieb je Kachel.
-    det = Detektor(_log)
-    refs, ref_quelle, schwelle = {}, "aus", None
-    if referenzen_noetig(guards):
-        try:
-            refs, ref_quelle = lw.referenzen_laden(det.app)
-            schwelle = float(cfg["win_thresh"])
-            _log.info(f"live: quick verdict {sum(len(M) for M in refs.values())} "
-                 f"references / {len(refs)} persons from {ref_quelle}, threshold "
-                 f"{schwelle:.2f} (win_thresh) — PRELIMINARY, for the notification only")
-        except Exception as e:
-            refs, schwelle = {}, None
-            _log.info(f"live: quick verdict off ({type(e).__name__}: {e})")
+    det = EngineContext(cfg, _log)
     kameras, kam_fehler = verifyd.frigate_cameras(cfg)
     if kam_fehler:
         _log.error(f"live: Frigate camera list unavailable ({kam_fehler}) — "
@@ -287,9 +198,9 @@ def cmd_run():
     pub = _mqtt_client(cfg, _log)
     melder = lw.Melder(cfg, _log, pub=pub)
     engine = lw.Engine(cfg, _log, detektor=det,
-                       detektor_fabrik=lambda: Detektor(_log),
+                       detektor_fabrik=lambda: EngineContext(cfg, _log),
                        melder=melder, kameras=kameras or None,
-                       refs=refs, win_thresh=schwelle,
+                       win_thresh=float(cfg["win_thresh"]),
                        # Phase 2: Store-Reload je Waechter (Mtime-Wache) und
                        # Auftrags-Strecke (Quelltest/Last-Messung per
                        # Kommando-Datei des Dienstes) — Config-Quelle bleibt
@@ -347,15 +258,8 @@ def cmd_test(kamera, als_json=False):
                  f"store — add one first (Bauplan §3 schema)")
             return 1
         guard = {"quelle": "proxy", "url": ""}
-    det = Detektor(konsole)
-    # .248 (Fund beim CPU-Setup 17.08.): der Test lief IMMER mit der
-    # globalen Default-Hoehe und ignorierte guard['hoehe'] — der gruene
-    # Test mass damit eine ANDERE Skala als der Betrieb (der nutzt
-    # guard.hoehe, livewache:3534). Jetzt dieselbe Vorrangregel.
-    ok, text, block = lw.quelle_testen(cfg, kamera, guard, det, log=konsole,
-                                       det_basis=_defaults["det_basis"],
-                                       hoehe=(guard.get("hoehe")
-                                              or _defaults["hoehe"]))
+    context = EngineContext(cfg, konsole)
+    ok, text, block = lw.quelle_testen(cfg, kamera, guard, context, log=konsole)
     _konsole(f"live test {kamera}: {'GRUEN' if ok else 'ROT'} — {text}")
     if als_json:
         print(json.dumps({"ok": ok, "text": text, "block": block},

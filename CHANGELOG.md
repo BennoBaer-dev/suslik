@@ -5,6 +5,10 @@ never pushed to GHCR; they ship bundled with the next release (each release entr
 says which steps it bundles). This file keeps the last five releases; the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git history.
 
+## 0.1.1.045 (2026-10-30)
+
+Live watcher: the watcher now recognises faces with the same computation as the event analysis (the same models, quality, head-pose and feature-norm checks and the same vote stack) at full camera resolution, on every hardware variant.
+
 ## 0.1.1.043 (2026-10-28)
 
 Today page: the side column now shows how many of the day's events had at least one face, instead of the 'not matched inside passes' count.
@@ -65,10 +69,3 @@ background read fails, the start counts as failed and the status stays red until
 
 suslik now keeps a local record of how face candidates become references (offered, selected, taken over, used). It stays on your
 machine, holds no names, and prepares better storage rules in a coming version.
-
-## 0.1.1.035 (2026-10-23)
-
-Poll interval and clip delay can now be changed on the Advanced page and take effect without a restart. New defaults: Frigate
-is polled every 10 seconds instead of 20 (poll mode only), and the clip is fetched 5 seconds after an event ends instead of 15.
-On the first start of this version, an installation that still uses the old defaults is switched once; values you set yourself
-stay as they are.

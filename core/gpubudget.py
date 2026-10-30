@@ -233,6 +233,13 @@ GEOMETRIE_CUDA_MB = 700          # je ZUSAETZLICHER Aufloesung (v5-Messung 12.09
 WAECHTER_ENGINE_CUDA_MB = 1434   # die Engine, einmal
 WAECHTER_DECODER_CUDA_MB = 330   # je Waechter ein NVDEC-ffmpeg
 
+# W1b, Eigentuemer 30.10.2026 18:06:16 (1600 MiB fuer den ersten Waechter,
+# 300 je weiteren) und 18:10:43: Engine-Anteil 1600 - 300.
+# Prototyp: Engine 1262 MiB, Decoder 246 MiB, ohne Gesichter
+# (analysen/waechter_prototyp/WP6/lauf2_und_dauerlauf.md).
+# Planung des Dienstes unveraendert; Startregel mit Messung: Auftrag 2.
+WATCHER_CUDA_ARENA_MB = 1300
+
 # --- Intel (openvino): der Fussabdruck ist SYSTEMSPEICHER, nicht VRAM -------
 # Gemessen wird deshalb anon + cgroup-shmem (worker_dienst.fussabdruck_mb) und
 # NIE VmRSS: die i915-Objekte der iGPU haengen an shmem und fehlen im RSS

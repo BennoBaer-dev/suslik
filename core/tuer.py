@@ -133,6 +133,21 @@ def bilanz(quelle=None):
             "logik_fehler": bool(q and q.logik_fehler)}
 
 
+def ausloeser(faces, erkannt):
+    """Findet die besten Namen ab der Tuer-Schwelle, die noch nicht erkannt sind.
+    -> Liste der ausloesenden Namen dieses Bildes.
+    """
+    ausl = []
+    for f in faces:
+        d = f["sc"]
+        if not d:
+            continue
+        p, w = max(d.items(), key=lambda x: x[1])
+        if w >= TUER_SCHWELLE and p not in erkannt:
+            ausl.append(p)
+    return ausl
+
+
 class TuerQuelle:
     """Die Bild-Quelle eines Ereignisses mit Tuer (l5_regel.TuerQuelle ohne Zeitnahme).
 
@@ -168,15 +183,7 @@ class TuerQuelle:
             # (Tuer-Konzept Abschnitt 5).
             self._logik_aus(f"door logic: verdict failed ({type(e).__name__}: {e}) — "
                             f"keeping the names recognised so far")
-        ausl = []
-        for f in faces:
-            d = f["sc"]
-            if not d:
-                continue
-            p, w = max(d.items(), key=lambda x: x[1])
-            if w >= TUER_SCHWELLE and p not in self.erkannt:
-                ausl.append(p)
-        self.meldung = (int(i), ausl)
+        self.meldung = (int(i), ausloeser(faces, self.erkannt))
 
     def _fehler(self, text):
         if not self._fehler_gemeldet:

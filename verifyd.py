@@ -3100,6 +3100,113 @@ def _verwurf_melden(info, code):
         info["verwurf_grund"] = code
 
 
+# ------------------------------------------------------------------
+# DIE URTEILS-LATTEN DIESES JOBS — EINE Quelle (E3.1, 14.09.2026).
+# Bis .526 wurde hier eine analyze-KOMMANDOZEILE gebaut und drueben wieder
+# zerlegt. Der Worker-Dienst bekommt sie seitdem als JOB-FELDER; die Namen sind
+# die von `worker_kern.urteils_latten`, nicht mehr die der alten Schalter.
+# Die HERLEITUNG jedes Wertes (welcher Regler, welche Kamera, welcher Rueckfall)
+# steht unveraendert hier — sie ist der Teil, der nie zweimal dastehen darf.
+# Der Legacy-Subprozess-Weg (worker=aus) leitet seine Kommandozeile weiter unten
+# MECHANISCH aus genau diesem dict ab; er stirbt im Aufraeumzug.
+# POSE-SIEB Stufe 2 (User 03.09.): der Kalibrier-Regler der Kamera wirkt
+# im Worker als viertes Stimm-Sieb + Ring-Einlass. Unkalibriert gilt der
+# gemessene Werks-Boden (core.guete.POSE_BODEN) — dieselbe Politik wie bei
+# den zwei Guete-Boeden ("Werkswert = Boden", User-Entscheid).
+# sample_deckel:
+#   .540 K-DECKEL: hoechstens so viele Sample-Frames je Ereignis,
+#   gleichmaessig ueber die Cliplaenge. Die Formel und ihre Messbasis
+#   stehen EINMAL in decode.sample_schritt; hier steht nur, WOHER der
+#   Wert kommt — aus dem Config-Store, wie fps_sample direkt darueber.
+#   `or 0` traegt die Haus-Konvention: fehlender/leerer Wert = aus.
+# det_thresh:
+#   .402 (User-Linie 01.09.: EIN Kernmodell, EINE Erkennen-
+#   Kalibrierung fuer Szenario+Worker+Live): die det-Schwelle der
+#   Event-Analyse kommt aus dem Erkennen-Register der KAMERA
+#   (guard.det_min wie im Live-Watcher, "ab wann zaehlt etwas als
+#   Gesicht"), Rueckfall global det_thresh. Vorher galt hier NUR
+#   der globale Wert — die Kamera-Kalibrierung erreichte die
+#   Szenario-Analyse nie (Asymmetrie-Befund 01.09.).
+#   LOOKUP-FIX (User 03.09., Klon-Testbett): die Kamera-Regler leben
+#   unter live.guards.<kamera> — der alte Griff cfg["live"][camera]
+#   fand NIE etwas, det_min und die Guete-Latten der Kamera
+#   erreichten den Worker seit .402/.404 nicht (stille Werkswerte).
+# urteil_kante:
+#   .400 Urteils-Kante: EIGENER Wert — GEMESSEN
+#   (Trennschaerfe-Test 01.09., 14 falsche/7 korrekte Feld-Faelle:
+#   70 px kippte ALLE korrekten mit [Tester-Kameras liefern auch
+#   richtig erkannte Stimmen nur mit 36-58 px]). BEWUSST nicht an
+#   min_kante(70) gebunden: Anlern-Qualitaet und Urteils-Minimum
+#   sind verschiedene Groessen.
+#   .515 (Sensor 6): DIESELBE Zahl, andere QUELLE. Sie kommt jetzt
+#   aus dem Erkennen-Register DIESER Kamera (kamerakalib.erk_latten:
+#   Kamera -> global `urteil_kante` -> Werks-Wert
+#   core.guete.KANTE_WERK = 25) statt aus dem globalen Config-Wert
+#   allein. Eine unkalibrierte Kamera bekommt damit genau den Wert,
+#   der hier bis .514 stand — WERTGLEICH, nachgewiesen im Harnisch
+#   tools/harnisch_kante515.py. Neu ist nur, dass eine Kamera ihre
+#   eigene Kante setzen kann; dasselbe Muster wie bei det_min
+#   darueber (Asymmetrie-Befund 01.09.).
+# blick_fenster_s:
+#   BLICKFENSTER (User 03.09. abends): analyze misst je Person das
+#   beste Anker-Fenster (blick_n/blick_max), verdict prueft win_min.
+# urteil_anker:
+#   Rueckfall-Literal: dieselbe 0,45 wie im Default-Block oben
+#   (.510). Es greift nur, wenn cfg den Schluessel gar nicht kennt.
+# urteil_guete_e:
+#   .404 KALIBRIER-VORFILTER (User-Entscheid 01.09., fest in Watcher UND
+#   Worker: "es sollte doch immer durch die Kalibrierung vorgefiltert
+#   werden"): die Erkennen-Guete-Latten der KAMERA gehen als Stimm-Sieb
+#   mit; ohne Kalibrierung laesst der Worker seinen Werks-Boden
+#   (guete.KELLER_BODEN) greifen — deshalb geht hier NUR mit, was der
+#   Nutzer wirklich kalibriert hat (None = nicht gesetzt; der Worker
+#   klemmt dann auf den Boden). Der fruehere "Guete-Latten bleiben
+#   draussen"-Satz galt der GLOBALEN Latte (Kamera-Bias Faktor 5); die
+#   Kamera-Latte ist genau die Antwort darauf.
+# urteil_norm_min:
+#   Bauplan K3 (analysen/bauplan_k3_produkt.md), Stufe KP1 Punkt 4: das Norm-Sieb
+#   des Workers. DIESELBE Aufloesung wie die Kante darueber (Kamera -> global
+#   `urteil_norm_min` -> Werks-Boden), aus dem Erkennen-Register DIESER Kamera.
+# stapel_stimmen:
+#   Punkt 5: Stimmen bis erkannt des Stapels (core.stapel). `or 0` traegt die
+#   Haus-Konvention wie beim sample_deckel: fehlender Wert = kein Stapel.
+# tuer_fenster:
+#   Stufe KP2 Punkt 7 und 3: die Tuer. Das Fenster aus der Config (`or 0` = keine Tuer, Haus-
+#   Konvention), der Deckel der Tuer-Bilder als Werkswert der Image-Variante aus der Registry
+#   (dieselbe Tabelle wie der Bild-Deckel, core.registry.tuer_deckel_werk).
+# unbekannt_latte:
+#   Bauplan analysen/bauplan_fix_0113.md Stufe F4: der Unbekannt-Stapel des Bildvorrats (worker_kern), aus der
+#   Config wie die Tuer; `or 0` traegt die Haus-Konvention (fehlender Wert = Stapel aus).
+def job_latten(cfg, camera):
+    """Loest die Urteils-Latten einer Kamera fuer den Worker und die Live-Wache auf.
+    -> dict der unveraenderten Job-Felder aus run_analyze.
+    """
+    _reg = ((cfg.get("live") or {}).get("guards") or {}).get(camera) or {}   # LOOKUP-FIX 03.09.
+    from core.guete import POSE_BODEN as _pb
+    return {
+        "fps_sample": cfg["fps_sample"],
+        "sample_deckel": int(cfg.get("sample_deckel") or 0),
+        "win_thresh": cfg["win_thresh"],
+        "fd_front_min": cfg["fd_front_min"],
+        "fd_sharp_min": cfg["fd_sharp_min"],
+        "fd_det_max": cfg["fd_det_max"],
+        "det_thresh": _reg.get("det_min") or cfg["det_thresh"],
+        "urteil_kante": _kk_ernte.erk_latten(cfg, _reg or None)["k"],
+        "blick_fenster_s": cfg.get("blick_fenster_s", 45.0),
+        "urteil_anker": cfg.get("urteil_anker", 0.45),
+        "urteil_guete_e": _reg.get("guete_e_min"),
+        "urteil_guete_t": _reg.get("guete_t_min"),
+        "urteil_pose": _reg["pose_min"] if _reg.get("pose_min") is not None else _pb,
+        "urteil_norm_min": _kk_ernte.erk_latten(cfg, _reg or None)["n"],
+        "stapel_stimmen": int(cfg.get("stapel_stimmen") or 0),
+        "tuer_fenster": int(cfg.get("tuer_fenster") or 0),
+        "tuer_deckel": _registry.tuer_deckel_werk(os.environ.get("SUSLIK_VARIANT"))[0],
+        "unbekannt_latte": float(cfg.get("unbekannt_latte") or 0),
+        "unbekannt_bilder_je_gruppe": int(cfg.get("unbekannt_bilder_je_gruppe") or 0),
+        "unbekannt_rahmen_max": int(cfg.get("unbekannt_rahmen_max") or 0),
+    }
+
+
 def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=None,
                 koerper=False, info=None, clip_quelle="live", clip_alter_min=None,
                 puls=None, personenzahl=None, ereignis_start=None, cache_only=False):
@@ -3133,97 +3240,7 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
     # Der Zuschlag des Warte-Deckels auf die Job-Frist steht in `job_deadline`.
     tor_n = clip_tor_aus_cfg(cfg)
     tor_deckel_s = clip_tor_deckel_s_aus_cfg(cfg)
-    # ------------------------------------------------------------------
-    # DIE URTEILS-LATTEN DIESES JOBS — EINE Quelle (E3.1, 14.09.2026).
-    # Bis .526 wurde hier eine analyze-KOMMANDOZEILE gebaut und drueben wieder
-    # zerlegt. Der Worker-Dienst bekommt sie seitdem als JOB-FELDER; die Namen sind
-    # die von `worker_kern.urteils_latten`, nicht mehr die der alten Schalter.
-    # Die HERLEITUNG jedes Wertes (welcher Regler, welche Kamera, welcher Rueckfall)
-    # steht unveraendert hier — sie ist der Teil, der nie zweimal dastehen darf.
-    # Der Legacy-Subprozess-Weg (worker=aus) leitet seine Kommandozeile weiter unten
-    # MECHANISCH aus genau diesem dict ab; er stirbt im Aufraeumzug.
-    _reg = ((cfg.get("live") or {}).get("guards") or {}).get(camera) or {}   # LOOKUP-FIX 03.09.
-    # POSE-SIEB Stufe 2 (User 03.09.): der Kalibrier-Regler der Kamera wirkt
-    # im Worker als viertes Stimm-Sieb + Ring-Einlass. Unkalibriert gilt der
-    # gemessene Werks-Boden (core.guete.POSE_BODEN) — dieselbe Politik wie bei
-    # den zwei Guete-Boeden ("Werkswert = Boden", User-Entscheid).
-    from core.guete import POSE_BODEN as _pb
-    latten = {
-        "fps_sample": cfg["fps_sample"],
-        # .540 K-DECKEL: hoechstens so viele Sample-Frames je Ereignis,
-        # gleichmaessig ueber die Cliplaenge. Die Formel und ihre Messbasis
-        # stehen EINMAL in decode.sample_schritt; hier steht nur, WOHER der
-        # Wert kommt — aus dem Config-Store, wie fps_sample direkt darueber.
-        # `or 0` traegt die Haus-Konvention: fehlender/leerer Wert = aus.
-        "sample_deckel": int(cfg.get("sample_deckel") or 0),
-        "win_thresh": cfg["win_thresh"],
-        "fd_front_min": cfg["fd_front_min"],
-        "fd_sharp_min": cfg["fd_sharp_min"],
-        "fd_det_max": cfg["fd_det_max"],
-            # .402 (User-Linie 01.09.: EIN Kernmodell, EINE Erkennen-
-            # Kalibrierung fuer Szenario+Worker+Live): die det-Schwelle der
-            # Event-Analyse kommt aus dem Erkennen-Register der KAMERA
-            # (guard.det_min wie im Live-Watcher, "ab wann zaehlt etwas als
-            # Gesicht"), Rueckfall global det_thresh. Vorher galt hier NUR
-            # der globale Wert — die Kamera-Kalibrierung erreichte die
-            # Szenario-Analyse nie (Asymmetrie-Befund 01.09.).
-            # LOOKUP-FIX (User 03.09., Klon-Testbett): die Kamera-Regler leben
-            # unter live.guards.<kamera> — der alte Griff cfg["live"][camera]
-            # fand NIE etwas, det_min und die Guete-Latten der Kamera
-            # erreichten den Worker seit .402/.404 nicht (stille Werkswerte).
-        "det_thresh": _reg.get("det_min") or cfg["det_thresh"],
-            # .400 Urteils-Kante: EIGENER Wert — GEMESSEN
-            # (Trennschaerfe-Test 01.09., 14 falsche/7 korrekte Feld-Faelle:
-            # 70 px kippte ALLE korrekten mit [Tester-Kameras liefern auch
-            # richtig erkannte Stimmen nur mit 36-58 px]). BEWUSST nicht an
-            # min_kante(70) gebunden: Anlern-Qualitaet und Urteils-Minimum
-            # sind verschiedene Groessen.
-            # .515 (Sensor 6): DIESELBE Zahl, andere QUELLE. Sie kommt jetzt
-            # aus dem Erkennen-Register DIESER Kamera (kamerakalib.erk_latten:
-            # Kamera -> global `urteil_kante` -> Werks-Wert
-            # core.guete.KANTE_WERK = 25) statt aus dem globalen Config-Wert
-            # allein. Eine unkalibrierte Kamera bekommt damit genau den Wert,
-            # der hier bis .514 stand — WERTGLEICH, nachgewiesen im Harnisch
-            # tools/harnisch_kante515.py. Neu ist nur, dass eine Kamera ihre
-            # eigene Kante setzen kann; dasselbe Muster wie bei det_min
-            # darueber (Asymmetrie-Befund 01.09.).
-        "urteil_kante": _kk_ernte.erk_latten(cfg, _reg or None)["k"],
-        # BLICKFENSTER (User 03.09. abends): analyze misst je Person das
-        # beste Anker-Fenster (blick_n/blick_max), verdict prueft win_min.
-        "blick_fenster_s": cfg.get("blick_fenster_s", 45.0),
-        # Rueckfall-Literal: dieselbe 0,45 wie im Default-Block oben
-        # (.510). Es greift nur, wenn cfg den Schluessel gar nicht kennt.
-        "urteil_anker": cfg.get("urteil_anker", 0.45),
-        # .404 KALIBRIER-VORFILTER (User-Entscheid 01.09., fest in Watcher UND
-        # Worker: "es sollte doch immer durch die Kalibrierung vorgefiltert
-        # werden"): die Erkennen-Guete-Latten der KAMERA gehen als Stimm-Sieb
-        # mit; ohne Kalibrierung laesst der Worker seinen Werks-Boden
-        # (guete.KELLER_BODEN) greifen — deshalb geht hier NUR mit, was der
-        # Nutzer wirklich kalibriert hat (None = nicht gesetzt; der Worker
-        # klemmt dann auf den Boden). Der fruehere "Guete-Latten bleiben
-        # draussen"-Satz galt der GLOBALEN Latte (Kamera-Bias Faktor 5); die
-        # Kamera-Latte ist genau die Antwort darauf.
-        "urteil_guete_e": _reg.get("guete_e_min"),
-        "urteil_guete_t": _reg.get("guete_t_min"),
-        "urteil_pose": _reg["pose_min"] if _reg.get("pose_min") is not None else _pb,
-        # Bauplan K3 (analysen/bauplan_k3_produkt.md), Stufe KP1 Punkt 4: das Norm-Sieb
-        # des Workers. DIESELBE Aufloesung wie die Kante darueber (Kamera -> global
-        # `urteil_norm_min` -> Werks-Boden), aus dem Erkennen-Register DIESER Kamera.
-        "urteil_norm_min": _kk_ernte.erk_latten(cfg, _reg or None)["n"],
-        # Punkt 5: Stimmen bis erkannt des Stapels (core.stapel). `or 0` traegt die
-        # Haus-Konvention wie beim sample_deckel: fehlender Wert = kein Stapel.
-        "stapel_stimmen": int(cfg.get("stapel_stimmen") or 0),
-        # Stufe KP2 Punkt 7 und 3: die Tuer. Das Fenster aus der Config (`or 0` = keine Tuer, Haus-
-        # Konvention), der Deckel der Tuer-Bilder als Werkswert der Image-Variante aus der Registry
-        # (dieselbe Tabelle wie der Bild-Deckel, core.registry.tuer_deckel_werk).
-        "tuer_fenster": int(cfg.get("tuer_fenster") or 0),
-        "tuer_deckel": _registry.tuer_deckel_werk(os.environ.get("SUSLIK_VARIANT"))[0],
-        # Bauplan analysen/bauplan_fix_0113.md Stufe F4: der Unbekannt-Stapel des Bildvorrats (worker_kern), aus der
-        # Config wie die Tuer; `or 0` traegt die Haus-Konvention (fehlender Wert = Stapel aus).
-        "unbekannt_latte": float(cfg.get("unbekannt_latte") or 0),
-        "unbekannt_bilder_je_gruppe": int(cfg.get("unbekannt_bilder_je_gruppe") or 0),
-        "unbekannt_rahmen_max": int(cfg.get("unbekannt_rahmen_max") or 0),
-    }
+    latten = job_latten(cfg, camera)
     # KALIBRIER-VORRAT AUS DER ANALYSE (User 03.09., beauftragt seit 31.08.):
     # jede Event-Analyse darf den Ring ihrer Kamera speisen — Deckel ist
     # derselbe wie beim Live-Vorrat (live_kalib_max, 0 = aus), der Schreibweg
@@ -33281,9 +33298,7 @@ def make_handler(svc):
                 inhalt = _r_live.detail(
                     kamera, _g, kd, gesperrt, vorrat=len(_vor),
                     deckel=int(cfg.get("live_kalib_max") or 0),
-                    regel=_lwk.Engine.erkannt_regel(_g),
-                    det_default=_lwk.guards_lesen(
-                        cfg, _logbuch.NULL)[0]["min_score"],
+                    det_default=cfg["det_thresh"],
                     # Welle 1, Etappe A: die Bewegungs-Vorgaben aus der EINEN
                     # Quelle (Frigates Auslieferungswerte im Engine-Modul) —
                     # die Seite zeigt sie als Platzhalter, traegt sie aber nie

@@ -1770,16 +1770,12 @@ function _liveFelder() {
           ende_ohne_gesicht_s: (document.getElementById('lv-ende') || {}).value,
           wieder_scharf_s: (document.getElementById('lv-scharf') || {}).value,
           kanaele: kan,
-          hoehe: (document.querySelector('input[name="lv-hoehe"]:checked') || {}).value || null,
           /* Live-Umbau 31.08. — die je-Kamera-Werte der neuen Kacheln. Fehlt
              ein Feld im DOM (gesperrter Build), bleibt der Wert `undefined`,
              JSON.stringify laesst ihn weg und der Server BEHAELT den
              gespeicherten Wert (live_speichern._wert). Genau deshalb stehen
              hier keine Ersatz-Defaults: ein `|| 2` wuerde eine 3 des Nutzers
              still auf 2 zuruecksetzen, sobald das Feld einmal fehlt. */
-          erkannt_n: (document.getElementById('lv-erkannt-n') || {}).value,
-          erkannt_t_s: (document.getElementById('lv-erkannt-t') || {}).value,
-          erkannt_fenster_s: (document.getElementById('lv-erkannt-fenster') || {}).value,
           frigate_events: (document.getElementById('lv-frigate') || {}).checked,
           frigate_abstand_s: (document.getElementById('lv-frigate-abstand') || {}).value,
           /* Live-Performance Welle 1, Etappe A: bewegungsgesteuertes Abtasten.

@@ -24,8 +24,7 @@ import html
 import time
 import urllib.parse
 
-from core.livewache import (URTEIL_T_S, HOEHEN_ALT, HOEHEN_ERLAUBT, quelle_fp,
-                            quelle_maskiert)
+from core.livewache import quelle_fp, quelle_maskiert
 from core.registry import LIVE_ZUSTAENDE
 from core.sprache import t, t_n
 
@@ -50,12 +49,6 @@ _ALT_AB_TAGE = 1.0
 _TEST_ALT_TAGE = 7.0
 
 
-
-def _fmt_fenster(wert):
-    """Anzeige des W0-Urteils-Fensters: gespeicherter Wert oder der Default
-    aus der EINEN Quelle (core.livewache.URTEIL_T_S) — ganzzahlig, wenn glatt."""
-    z = float(URTEIL_T_S if wert is None else wert)
-    return str(int(z)) if z == int(z) else str(z)
 
 def _wann(ts):
     if not ts:
@@ -492,8 +485,8 @@ def _save_knopf(gesperrt):
             + t("live.knopf_speichern") + '</button> ')
 
 
-def detail(name, guard, kd, gesperrt, vorrat=0, deckel=0, regel=(2, 0),
-           det_default=0.4, beweg_vorgabe=(30, 10)):
+def detail(name, guard, kd, gesperrt, vorrat=0, deckel=0, *,
+           det_default, beweg_vorgabe=(30, 10)):
     """-> Seiten-INHALT der Konfigurationsansicht /live/<kamera>.
 
     UMGEBAUT am 31.08. (User-Befund: "Bandwurmseite"). Die Seite trug sechs
@@ -514,9 +507,6 @@ def detail(name, guard, kd, gesperrt, vorrat=0, deckel=0, regel=(2, 0),
       Rest         alles Selten-Gebrauchte unter EINEM Aufklapper "Advanced".
 
     vorrat/deckel = Stand des Kalibrier-Vorrats dieser Kamera (Bilder / Deckel),
-    regel = (n, t_s) der Erkannt-Regel — beide reicht der Handler herein
-    (Daten als Parameter, Muster dieses Moduls; die Auslegung der Regel selbst
-    kommt aus livewache.Engine.erkannt_regel, nie aus einer zweiten Rechnung).
     beweg_vorgabe = (schwelle, flaeche) der Bewegungs-Abtastung als
     Platzhalter-Text — ebenfalls vom Handler aus der EINEN Quelle
     (livewache.BEWEG_SCHWELLE/BEWEG_FLAECHE), damit die Seite keine zweite
@@ -535,27 +525,6 @@ def detail(name, guard, kd, gesperrt, vorrat=0, deckel=0, regel=(2, 0),
             ("proxy", t("live.quelle.proxy")),
             ("direct", t("live.quelle.direct")),
             ("url", t("live.quelle.url"))))
-    # .194 (User: 360-2160, "default immer auf 1080p"): Verarbeitungshoehe je
-    # Kachel. "default" = KEIN Guard-Feld -> der Fingerprint des laufenden
-    # Tests bleibt beim blossen Speichern stabil (ein expliziter Wert zaehlt
-    # als Quell-Aenderung und entwertet den Test ehrlich).
-    hoehe_wert = g.get("hoehe")
-    # Welle 1, Etappe C: 1440/2160 sind gestrichen (gemessen ohne Gewinn) und
-    # stehen deshalb nicht mehr zur Wahl. Eine Kamera, die einen dieser Werte
-    # GESPEICHERT hat, behaelt ihn im Store (sonst verfiele ihr Quelltest) —
-    # die Seite sagt dann ehrlich, mit welcher Hoehe sie wirklich laeuft.
-    hoehen = "".join(
-        f'<label class="lv-radio"><input type="radio" name="lv-hoehe" '
-        f'value="{w}"{" checked" if hoehe_wert == (int(w) if w else None) else ""}>'
-        f' {beschr}</label>'
-        for w, beschr in (("", t("live.hoehe.default")),
-                          ("360", t("live.hoehe.h360")),
-                          ("720", t("live.hoehe.h720")),
-                          ("1080", t("live.hoehe.h1080"))))
-    if hoehe_wert in HOEHEN_ALT:
-        hoehen += (f'<div class="lv-zeile lv-hinweis">'
-                   f'{html.escape(t("live.hoehe.alt_hinweis", alt=hoehe_wert, jetzt=max(HOEHEN_ERLAUBT)))}'
-                   f'</div>')
     # .200 (Fix 3): kein eigenes Kanal-Literal mehr — gespeicherte Waechter kommen
     # normalisiert aus guards_lesen, NEUE bekommen die Vorbelegung im /live/-Handler
     # aus melden.konfigurierte_kanaele (die eine Quelle). Fehlt beides: nichts vorwaehlen.
@@ -619,19 +588,6 @@ def detail(name, guard, kd, gesperrt, vorrat=0, deckel=0, regel=(2, 0),
     k_erkennung = (
         f'<div class="dim lv-zeile">'
         f'{t("live.erkennung.det_zeile", wert=det_txt, marke=det_marke)}</div>'
-        f'<div class="lv-zeile">{t("live.erkennung.regel_vor")} '
-        f'<input id="lv-erkannt-n" size="3" '
-        f'value="{html.escape(str(g.get("erkannt_n") or regel[0]))}"> '
-        f'{t("live.erkennung.regel_mitte")} '
-        f'<input id="lv-erkannt-t" size="4" '
-        f'value="{html.escape(str(int(g.get("erkannt_t_s") or 0)))}"> '
-        f'{t("live.erkennung.regel_nach")}</div>'
-        f'<div class="dim lv-zeile">{t("live.erkennung.regel_hinweis")}</div>'
-        f'<div class="lv-zeile">{t("live.erkennung.fenster_vor")} '
-        f'<input id="lv-erkannt-fenster" size="4" '
-        f'value="{html.escape(_fmt_fenster(g.get("erkannt_fenster_s")))}"> '
-        f'{t("live.erkennung.fenster_nach")}</div>'
-        f'<div class="dim lv-zeile">{t("live.erkennung.fenster_hinweis")}</div>'
         + (f'<div class="dim lv-zeile">'
            f'{t("live.erkennung.vorrat_zeile", n=vorrat, deckel=deckel)}</div>'
            if deckel else
@@ -728,14 +684,6 @@ def detail(name, guard, kd, gesperrt, vorrat=0, deckel=0, regel=(2, 0),
           f'size="40" placeholder="rtsp://..." autocomplete="off"> '
           f'<span class="dim">{t("live.detail.url_hinweis")}</span></div>'
         + f'<div class="dim lv-zeile">{t("live.detail.quelle_hinweis")}</div></div>'
-        + f'<div class="card"><b>{t("live.abschnitt.aufloesung")}</b>'
-        + '<div class="dim lv-zeile">The watcher analyzes the stream at this '
-          'height (aspect-ratio kept). Higher = sharper face crops for the '
-          'name check; the detection net stays the same size, extra cost is '
-          'decode/scaling — use <b>Measure load</b> to see the real numbers '
-          'on your hardware. Changing this invalidates the source test.</div>'
-        + hoehen
-        + '</div>'
         # --- Abtastung (Live-Performance Welle 1, Etappe A) ---------------
         # Selten gebraucht, deshalb unter "Advanced" — aber ein echter
         # Verhaltens-Schalter, deshalb sichtbar und nicht nur im Store.

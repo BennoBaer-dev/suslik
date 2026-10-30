@@ -12,7 +12,10 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.043"   # 0.1.1.043: Box-Eintrag und CHANGELOG-Texte wie 0.1.1.042, die nie veroeffentlicht wurde und hier aufgeht;
+STAND = "0.1.1.045"   # 0.1.1.045: KEIN Box-Eintrag wie bei 0.1.1.044 (Eigentuemer 30.10.2026 17:18:13 "Ohne Box-Eintrag");
+                      # die Nummer traegt Stufe W1 und den Fix W1b, 0.1.1.044 blieb unveroeffentlicht (Release-Lauf rot).
+                      # Der Text steht nur im CHANGELOG.
+                      # Davor 0.1.1.043: Box-Eintrag und CHANGELOG-Texte wie 0.1.1.042, die nie veroeffentlicht wurde und hier aufgeht;
                       # Eigentuemer 28.10.2026 15:35:04 ("What's new und changelog lassen wir so. Das sind irrelevante
                       # Aenderungen."), im CHANGELOG nur die Klammer "(seen in a Proxmox VM)" gestrichen (15:35:40 "ja"; der
                       # Feldtester betreibt einen LXC-Container, keine VM). Neu in dieser Nummer: TS3 und TS4 (Randspalte).
