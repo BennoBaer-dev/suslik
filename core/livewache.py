@@ -3521,10 +3521,18 @@ class Melder:
     (`_sprache.aktivieren()` ist dieselbe Funktion wie
     `melden.sprache_aktivieren()`, dort steht ihre Begruendung)."""
 
-    def __init__(self, cfg, log=_log, pub=None):
+    def __init__(self, cfg, log=_log, pub=None, pub_fabrik=None):
         self.cfg = cfg
         self.log = log
         self.pub = pub                            # paho-Client des Startwegs (oder None)
+        self.pub_fabrik = pub_fabrik
+
+    def ensure_publisher(self):
+        """Legt den MQTT-Sender bei Bedarf ueber die Fabrik an.
+        -> None; ohne Fabrik bleibt der Sender unveraendert.
+        """
+        if self.pub is None and self.pub_fabrik is not None:
+            self.pub = self.pub_fabrik()
 
     def push(self, kamera, text, bild=None, titel_schluessel=None):
         from core import melden
@@ -3670,9 +3678,8 @@ class Engine:
         self._melde_lock = threading.Lock()
         self._melde_threads = []      # Melde-/Stoerungs-Threads (M5: stop() joint sie)
         self._mess_start_mono = None  # offenes Ein-Stream-RSS-Messfenster
-        self.fr_queue = None          # Frigate-Manual-Events (31.08.), erst in
-        #                               start() gebaut und nur, wenn ein Waechter
-        #                               den Schalter traegt
+        self.fr_queue = None          # Frigate-Manual-Events, bei Bedarf beim
+        #                               Start oder Nachladen gebaut
         # --- Phase 2: Store-Reload + Auftrags-Strecke (Quelltest/Last-Messung)
         self.config_quelle = config_quelle    # callable -> frische cfg (livewached)
         self.store_pfad = store_pfad          # Config-Store-Datei (Mtime-Wache)
@@ -3695,6 +3702,27 @@ class Engine:
         # Thread, Mess-Thread, Quelltest) laeuft unter diesem Lock; das ist
         # auch die einzige Absicherung, die einen Not-Aus ueberlebt.
         self._det_lock = threading.Lock()
+
+    def _ensure_notification_paths(self):
+        """Sichert beide Meldewege fuer die wirksamen eingeschalteten Waechter.
+        -> None; einmal angelegte Wege bleiben bis zum Stoppen bestehen.
+        """
+        # Frigate-Manual-Events (31.08.): der Hintergrund-Schreiber laeuft NUR,
+        # wenn ihn wenigstens ein Waechter braucht — Schalter-Prinzip
+        # (Registrieren nach Schaltern: kein Apparat fuer einen ausgeschalteten
+        # Weg). Er startet auch dann, wenn read-only gerade an ist: der Nutzer
+        # kann den Riegel im Betrieb umlegen, und der Schreiber prueft ihn je
+        # Auftrag.
+        if self.fr_queue is None and any(g.get("frigate_events") for g in self.guards.values()
+                                         if g.get("enabled")):
+            from core import frigateevents as _fev
+            self.fr_queue = _fev.Warteschlange(self.cfg, self.log).start()
+            self.log.info("live: manual Frigate events enabled for at least one "
+                     "watcher — writes go through a background queue (the "
+                     "watchers never wait for Frigate)")
+        if any("mqtt" in g["kanaele"] for g in self.guards.values() if g["enabled"]):
+            if hasattr(self.melder, "ensure_publisher"):
+                self.melder.ensure_publisher()
 
     def start(self):
         """Kacheln nach Riegel + Slot-Pruefung starten; Threads hochziehen.
@@ -3720,6 +3748,7 @@ class Engine:
                 self._store_mtime = os.path.getmtime(self.store_pfad)
             except OSError:
                 _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
+        self._ensure_notification_paths()
         for name, guard in self.guards.items():
             if not guard["enabled"]:
                 continue
@@ -3729,19 +3758,6 @@ class Engine:
         if len(self.kacheln) == 1:
             self.vermessung.stream_messung_start(0)
             self._mess_start_mono = self.jetzt()
-        # Frigate-Manual-Events (31.08.): der Hintergrund-Schreiber laeuft NUR,
-        # wenn ihn wenigstens ein Waechter braucht — Schalter-Prinzip
-        # (Registrieren nach Schaltern: kein Apparat fuer einen ausgeschalteten
-        # Weg). Er startet auch dann, wenn read-only gerade an ist: der Nutzer
-        # kann den Riegel im Betrieb umlegen, und der Schreiber prueft ihn je
-        # Auftrag.
-        if any(g.get("frigate_events") for g in self.guards.values()
-               if g.get("enabled")):
-            from core import frigateevents as _fev
-            self.fr_queue = _fev.Warteschlange(self.cfg, self.log).start()
-            self.log.info("live: manual Frigate events enabled for at least one "
-                     "watcher — writes go through a background queue (the "
-                     "watchers never wait for Frigate)")
         for ziel, nm in ((self._detektor_lauf, "live-detektor"),
                          (self._status_lauf, "live-status")):
             t = threading.Thread(target=ziel, name=nm, daemon=True)
@@ -4049,6 +4065,7 @@ class Engine:
             self.cfg.clear()
             self.cfg.update(cfg_neu)
         self.guards = guards_neu
+        self._ensure_notification_paths()
         for name in [n for n in self.kacheln if n not in guards_neu]:
             self._kachel_stoppen(name, "guard removed from store")
             self.verweigert.pop(name, None)

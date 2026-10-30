@@ -12,7 +12,14 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.045"   # 0.1.1.045: KEIN Box-Eintrag wie bei 0.1.1.044 (Eigentuemer 30.10.2026 17:18:13 "Ohne Box-Eintrag");
+STAND = "0.1.1.047"   # 0.1.1.047: Box-Eintrag von 0.1.1.046 unveraendert; 0.1.1.046 blieb unveroeffentlicht (Lauf gestoppt,
+                      # Eigentuemer 30.10.2026 "Ja, stoppen und fixen" wegen O953); dazu Stufe W1c (Meldewege beim
+                      # Nachladen der Waechter), der CHANGELOG-Abschnitt nennt sie.
+                      # Davor 0.1.1.046: Box-Eintrag zum Live-Waechter aus 0.1.1.045 (Eigentuemer 30.10.2026 21:03:14 "Ja, Box mit
+                      # 0.1.1.046"; Anlass 21:00:49 "wir haben in 45 nicht den whatsnew test  vergessen anzupassen"), sonst
+                      # keine Aenderung; Lauf auf das Wort 21:05:55 "wir machen einen neuen lauf damit wir den aktuellen text
+                      # raus bekommen".
+                      # Davor 0.1.1.045: KEIN Box-Eintrag wie bei 0.1.1.044 (Eigentuemer 30.10.2026 17:18:13 "Ohne Box-Eintrag");
                       # die Nummer traegt Stufe W1 und den Fix W1b, 0.1.1.044 blieb unveroeffentlicht (Release-Lauf rot).
                       # Der Text steht nur im CHANGELOG.
                       # Davor 0.1.1.043: Box-Eintrag und CHANGELOG-Texte wie 0.1.1.042, die nie veroeffentlicht wurde und hier aufgeht;
@@ -857,6 +864,32 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.1.047 — Eintrag unveraendert aus dem nie veroeffentlichten 0.1.1.046 (Lauf gestoppt wegen O953). Herkunft: EIN Punkt,
+    # INHALT VOM INHABER: Eigentuemer 30.10.2026 21:03:14 („Ja, Box mit 0.1.1.046“) auf den Vorschlag der Hauptsession: DE
+    # woertlich sein Satz vom 30.10.2026 18:34:12 (CHANGELOG-Wortlaut von 0.1.1.045), EN der CHANGELOG-Satz von 0.1.1.045.
+    # ES, IT, FR und FI von der Hauptsession (Opus) nach EN uebersetzt, das Wort fuer den Waechter je Sprache wie nav.live
+    # in core/texte/<sprache>.py, die Merkmalsnorm wie im Eintrag 0.1.1.041.
+    ("0.1.1.047", (
+        {"de": "Der Wächter erkennt Gesichter jetzt mit derselben Rechnung wie die Ereignis-Analyse: dieselben Modelle, "
+               "Güte-, Kopfhaltungs- und Merkmalsnorm-Prüfungen und derselbe Stimmen-Stapel, in voller Auflösung, auf allen "
+               "Hardware-Varianten.",
+         "en": "Live watcher: the watcher now recognises faces with the same computation as the event analysis (the same "
+               "models, quality, head-pose and feature-norm checks and the same vote stack) at full camera resolution, on "
+               "every hardware variant.",
+         "es": "Vigilancia en directo: la vigilancia reconoce ahora los rostros con el mismo cálculo que el análisis de "
+               "eventos (los mismos modelos, las mismas comprobaciones de calidad, pose de la cabeza y norma de rasgos y la "
+               "misma pila de votos), a la resolución completa de la cámara, en todas las variantes de hardware.",
+         "it": "Sentinelle live: la sentinella riconosce ora i volti con lo stesso calcolo dell'analisi degli eventi (gli "
+               "stessi modelli, gli stessi controlli di qualità, posa della testa e norma delle caratteristiche e la stessa "
+               "pila di voti), alla piena risoluzione della telecamera, su ogni variante hardware.",
+         "fr": "Surveillance en direct : la surveillance reconnaît désormais les visages avec le même calcul que l'analyse "
+               "des événements (les mêmes modèles, les mêmes contrôles de qualité, de pose de la tête et de norme des "
+               "caractéristiques et la même pile de votes), à la pleine résolution de la caméra, sur toutes les variantes "
+               "matérielles.",
+         "fi": "Live-vahdit: vahti tunnistaa nyt kasvot samalla laskennalla kuin tapahtumien analyysi (samat mallit, samat "
+               "laadun, pään asennon ja piirrenormin tarkistukset sekä sama äänipino) kameran täydellä resoluutiolla "
+               "kaikissa laitteistovarianteissa."},
+    )),
     # 0.1.1.043 — Texte unveraendert aus dem nie veroeffentlichten Eintrag 0.1.1.042 (Eigentuemer 28.10.2026 15:35:04 „What's
     # new und changelog lassen wir so“). Herkunft der Texte von 0.1.1.042: ZWEI Punkte, INHALT VOM INHABER: Wunsch 28.10.2026 13:06:44 („korrigierte Statistik oder Fehlerfixes in der
     # Statistik und automatisches Aufräumen von alten Daten älter als 7 Tage“), Wortlaut DE und EN abgenommen 13:09:58; der

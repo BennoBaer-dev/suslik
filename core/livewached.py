@@ -139,11 +139,6 @@ def _mqtt_client(cfg, log=_log):
     """Eigener paho-Client der Engine (Bauplan §6/melden.mqtt_pub-Vertrag:
     `pub` kommt vom Aufrufer). BEWUSST OHNE Heartbeat — verifyd/heartbeat
     gehoert dem Dienst, eine zweite Quelle waere eine Luege im Topic."""
-    braucht = any("mqtt" in (g.get("kanaele") or [])
-                  for g in (cfg.get("live", {}).get("guards") or {}).values()
-                  if g.get("enabled"))
-    if not braucht:
-        return None
     m = cfg.get("mqtt") or {}
     if not m.get("host"):
         log.error("live: mqtt channel configured but no broker in config — "
@@ -195,8 +190,7 @@ def cmd_run():
     if kam_fehler:
         _log.error(f"live: Frigate camera list unavailable ({kam_fehler}) — "
              f"feed inventory limited to configured guards")
-    pub = _mqtt_client(cfg, _log)
-    melder = lw.Melder(cfg, _log, pub=pub)
+    melder = lw.Melder(cfg, _log, pub_fabrik=lambda: _mqtt_client(cfg, _log))
     engine = lw.Engine(cfg, _log, detektor=det,
                        detektor_fabrik=lambda: EngineContext(cfg, _log),
                        melder=melder, kameras=kameras or None,
@@ -219,10 +213,10 @@ def cmd_run():
     # (Lens-A B3/M11: sonst blieben Threads ungejoint, angestossene Meldungen
     # gingen verloren und die Statusdatei behielt engine:'ok').
     engine.stop("ende")
-    if pub is not None:
+    if melder.pub is not None:
         try:
-            pub.loop_stop()
-            pub.disconnect()
+            melder.pub.loop_stop()
+            melder.pub.disconnect()
         except Exception:
             _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     if engine.engine_fehler:

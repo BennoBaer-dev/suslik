@@ -5,6 +5,12 @@ never pushed to GHCR; they ship bundled with the next release (each release entr
 says which steps it bundles). This file keeps the last five releases; the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git history.
 
+## 0.1.1.047 (2026-10-30)
+
+What's new box: an entry for the live watcher change from 0.1.1.045.
+
+Live watcher: MQTT messages and Frigate events now also go out for a watcher that is switched on, or gets one of these channels, while the live engine is already running; before, they only went out if such a watcher was already on when the engine started.
+
 ## 0.1.1.045 (2026-10-30)
 
 Live watcher: the watcher now recognises faces with the same computation as the event analysis (the same models, quality, head-pose and feature-norm checks and the same vote stack) at full camera resolution, on every hardware variant.
@@ -52,20 +58,3 @@ older pictures from earlier versions are no longer offered for naming. Pictures 
 no group can be named, the page says so instead of "Everything named". If the page can read only part of its data, the red
 note shows one translated sentence, and the log gets one error line per reason instead of one per visit. The name field
 shows its whole placeholder.
-
-## 0.1.1.037 (2026-10-24)
-
-This release bundles 0.1.1.036, which was built but never pushed.
-
-Faster with a large face catalog. When references are added, suslik now updates its catalog in place instead of reading and
-checking all of it again. Pages that list people only check what changed since their last look.
-
-The System page no longer compares the face library with Frigate on every visit. It shows a link to Frigate sync instead, where
-the comparison still runs.
-
-After a restart, suslik reads the detection record and the list of people in the background right after the start check. The
-first visit to Presence, Today or System then no longer waits for this, as long as the background read has finished. If the
-background read fails, the start counts as failed and the status stays red until the next start.
-
-suslik now keeps a local record of how face candidates become references (offered, selected, taken over, used). It stays on your
-machine, holds no names, and prepares better storage rules in a coming version.
