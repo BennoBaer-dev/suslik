@@ -175,6 +175,13 @@ def ist_reanalyse(marke):
     return bool(isinstance(marke, dict) and marke.get(MARKE_REANALYSE))
 
 
+def name_requires_check(label, own_event, recheck_own=False):
+    """Entscheidet die Namens-Ausnahme fuer fremde und eigene Ereignisse.
+    -> bool; True verlangt die Namenspruefung durch den Worker.
+    """
+    return bool(label) and (not own_event or bool(recheck_own))
+
+
 def live_only_ueberspringen(waechter_aktiv, marke=None):
     """DIE Entscheidung des Live-only-Uebersprungs -> True = ueberspringen.
 

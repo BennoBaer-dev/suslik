@@ -948,6 +948,13 @@ T = {
     "live.knopf_vorrat_leeren": "Borrar muestras",
     "live.workeraus.schalter":
         "Que este vigilante sustituya el análisis de eventos de esta cámara",
+    "live.eigenepruefen.schalter":
+        "Volver a comprobar también los eventos propios de Frigate de este vigilante en el análisis de eventos",
+    "live.eigenepruefen.erklaerung":
+        "Desactivado por defecto. Los eventos que este vigilante crea en Frigate (opción 'Crear un evento "
+        "de Frigate cuando se reconozca a alguien') no se analizan una segunda vez. Actívalo si el análisis "
+        "de eventos debe comprobar los nombres del vigilante. Solo surte efecto mientras el vigilante "
+        "sustituye el análisis de eventos.",
     "live.workeraus.erklaerung":
         "Desactivado por defecto. Activado, los eventos de Frigate de esta "
         "cámara ya no se analizan una segunda vez: el vigilante mira de todos "

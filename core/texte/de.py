@@ -957,6 +957,13 @@ T = {
     "live.knopf_vorrat_leeren": "Bilder verwerfen",
     "live.workeraus.schalter":
         "Dieser Wächter ersetzt die Ereignis-Analyse dieser Kamera",
+    "live.eigenepruefen.schalter":
+        "Auch die eigenen Frigate-Ereignisse dieses Wächters in der Ereignis-Analyse nachprüfen",
+    "live.eigenepruefen.erklaerung":
+        "Vorgabe: aus. Ereignisse, die dieser Wächter in Frigate anlegt (Option ‚Frigate-Ereignis anlegen, "
+        "wenn jemand erkannt wird‘), werden dann nicht ein zweites Mal analysiert. Einschalten, wenn "
+        "die Ereignis-Analyse die Namen des Wächters gegenprüfen soll. Wirkt nur, solange der Wächter "
+        "die Ereignis-Analyse ersetzt.",
     "live.workeraus.erklaerung":
         "Vorgabe: aus. Eingeschaltet werden Frigate-Ereignisse dieser Kamera "
         "nicht noch einmal analysiert — der Wächter schaut ohnehin auf "

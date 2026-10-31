@@ -601,6 +601,10 @@ def detail(name, guard, kd, gesperrt, vorrat=0, deckel=0, *,
         + f'{" checked" if bool(g.get("worker_aus")) else ""}> '
         + f'{t("live.workeraus.schalter")}</label>'
         + f'<div class="dim lv-zeile">{t("live.workeraus.erklaerung")}</div>'
+        + '<label class="lv-radio"><input type="checkbox" id="lv-eigene-pruefen"'
+        + f'{" checked" if bool(g.get("eigene_pruefen")) else ""}> '
+        + f'{t("live.eigenepruefen.schalter")}</label>'
+        + f'<div class="dim lv-zeile">{t("live.eigenepruefen.erklaerung")}</div>'
         + f'<div class="lv-knoepfe">'
           # Zentral-Umbau 31.08.: die Kalibrierseite liegt unter /kalibrierung/
           # (eigener Menuepunkt). Der Knopf hier bleibt — er ist der kurze Weg

@@ -64,6 +64,7 @@ import urllib.request
 
 from core import frigate_auth as _fauth     # 5e: DER eine Frigate-HTTP-Griff
 from core import logbuch as _logbuch
+from core import registry as _reg
 _log = _logbuch.logger(__name__)
 
 # Warteschlangen-Tiefe: grosszuegig genug fuer eine Frigate-Pause von einigen
@@ -92,6 +93,7 @@ END_BACKOFF_S = (5.0, 15.0, 60.0, 300.0)
 NACHSCHLUSS_TAKT_S = 300.0
 API_EVENT_MAX_MIN = 30
 MERKDATEI = "frigate_events_offen.json"
+EIGENE_DATEI = "frigate_events_eigene.json"
 # Der Nachschluss laeuft im SELBEN Thread wie die Live-Auftraege der Waechter.
 # Deshalb ist er in Zahl UND Zeit gedeckelt: Aufraeum-Arbeit darf die laufende
 # Arbeit nie verdraengen, und der Rest kommt im naechsten Takt dran.
@@ -111,6 +113,28 @@ def read_only(cfg):
     (dieses Modul laeuft im Engine-Prozess, der injektionsrein bleibt).
     Fehlt der Wert, gilt TRUE — nicht schreiben ist der sichere Ausgang."""
     return bool(cfg.get("frigate_read_only", True))
+
+
+def is_own_event(cfg, event_id):
+    """Liest, ob die Kennung als eigenes Ereignis innerhalb der Aufbewahrung steht.
+    -> bool; fehlende oder unlesbare Datei bedeutet False.
+    """
+    if not cfg.get("data_dir"):
+        return False
+    try:
+        with open(os.path.join(cfg["data_dir"], "state", EIGENE_DATEI)) as source:
+            entries = json.load(source)
+        entry = entries.get(str(event_id))
+        if entry is None:
+            return False
+        days = float(cfg.get("eigene_ereignisse_tage", _reg.EIGENE_EREIGNISSE_TAGE))
+        return float(entry["erstellt_ts"]) >= time.time() - days * 86400
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        _logbuch.swallowed(_log, _logbuch.WARNING,
+                          "own watcher event list unreadable — treating event as not own")
+        return False
 
 
 class Warteschlange:
@@ -269,6 +293,7 @@ class Warteschlange:
             # Merkliste, bis sein Ende BESTAETIGT ist — nicht, bis wir ein Ende
             # geschickt haben.
             self._offen_setzen(str(eid), a["kamera"])
+            self._remember_own_event(str(eid), a["kamera"])
         if eid and a.get("quittung"):
             try:
                 a["quittung"](str(eid))
@@ -280,6 +305,36 @@ class Warteschlange:
             self._laut("keine_id", "frigate events: create answered without an "
                                    "event id — the event stays open until "
                                    "Frigate closes it", stufe=_logbuch.WARNING)
+
+    def _remember_own_event(self, event_id, camera):
+        """Merkt eine eigene Kennung atomar und duennt alte Eintraege aus.
+        -> None; Dateifehler werden gedrosselt gemeldet.
+        """
+        marker = self._merkdatei()
+        if not marker:
+            return
+        path = os.path.join(os.path.dirname(marker), EIGENE_DATEI)
+        now = time.time()
+        days = float(self.cfg.get("eigene_ereignisse_tage", _reg.EIGENE_EREIGNISSE_TAGE))
+        try:
+            with open(path) as source:
+                entries = json.load(source)
+            entries = {key: value for key, value in entries.items()
+                       if float(value["erstellt_ts"]) >= now - days * 86400}
+        except FileNotFoundError:
+            entries = {}
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            self._laut("own_read", "frigate events: own watcher event list unreadable "
+                       "— starting with an empty one", stufe=_logbuch.WARNING)
+            entries = {}
+        entries[event_id] = {"kamera": str(camera), "erstellt_ts": now}
+        try:
+            with open(path + ".neu", "w") as target:
+                json.dump(entries, target, ensure_ascii=False, indent=1)
+            os.replace(path + ".neu", path)
+        except OSError:
+            self._laut("own_write", "frigate events: own watcher event list could not "
+                       "be written — event analysis may re-check own events", stufe=_logbuch.ERROR)
 
     def _end(self, a):
         """Ein eigenes Ereignis beenden — mit Wiederholung und Bestaetigung.

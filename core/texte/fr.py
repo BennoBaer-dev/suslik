@@ -971,6 +971,13 @@ T = {
     "live.knopf_vorrat_leeren": "Effacer les échantillons",
     "live.workeraus.schalter":
         "Ce veilleur remplace l’analyse des événements de cette caméra",
+    "live.eigenepruefen.schalter":
+        "Revérifier aussi les événements Frigate créés par ce veilleur dans l’analyse des événements",
+    "live.eigenepruefen.erklaerung":
+        "Désactivé par défaut. Les événements que ce veilleur crée dans Frigate (option « Créer un événement "
+        "Frigate quand quelqu’un est reconnu ») ne sont alors pas analysés une deuxième fois. Activez "
+        "cette option pour que l’analyse des événements vérifie les noms du veilleur. N’agit que lorsque "
+        "le veilleur remplace l’analyse des événements.",
     "live.workeraus.erklaerung":
         "Désactivé par défaut. Activé, les événements Frigate de cette caméra "
         "ne sont plus analysés une deuxième fois : le veilleur regarde de "

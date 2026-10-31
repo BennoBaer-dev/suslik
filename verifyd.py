@@ -41,6 +41,7 @@ from core import sprache as _sprache                  # Sprach-Stufe 1: contextv
 from core import systemstat as _systemstat            # .341: Systemzahlen (Sammler, Ringpuffer, /health.system)
 from core import anwesenheit as _anw                  # .408: Anwesenheits-Marken (der eine Worker-Griff + Marge-Regel)
 from core import einspielen as _einspiel              # .416: Testbett-Einspielung (Praefix-Konvention + Injektor-Ablage)
+from core import frigateevents as _frigateevents
 from core import personenzahl as _personenzahl        # K3 KP3: Personenzahl aus Frigate, Zaehler ohne fruehes Ende
 from core import messkarte as _ern_mk                 # .513: Messkarte + Mess-Bilanz (Etappe 1)
 from core import kamerakalib as _kk_ernte             # .514: DAS Sieb (Etappe 3, ein System)
@@ -11335,6 +11336,28 @@ class Service:
             return "lebt"
         return "tot"
 
+    def _abgleich_ruhe_belegt(self, jetzt_ts):
+        """Prueft frische bestaetigte Abgleich-Ruhe und eine leere Live-Schlange ohne Arbeit (I1).
+        -> bool: wahr, wenn die letzte Runde ohne Fund hoechstens die Registry-Frist zurueckliegt."""
+        quiet_ts = getattr(self, "_abgleich_ruhe_ts", None)
+        limits = _reg.MQTT_STUMMWACHE
+        if quiet_ts is None or jetzt_ts - quiet_ts > limits["abgleich_frisch_takte"] * limits["abgleich_s"]:
+            return False
+        waiting, working = self.rueckstau_zahlen()
+        return not waiting and not working
+
+    def inaktiv_faellig(self, jetzt_dt, jetzt_ts):
+        """Prueft die Inaktiv-Meldung am Tag nach mehr als vier Stunden ohne Aktivitaet (I1).
+        -> bool: wahr nur ohne bestaetigte Abgleich-Ruhe; eine Unterdrueckung steht im Debug-Log."""
+        if not (7 <= jetzt_dt.hour <= 22 and jetzt_ts - self.letzte_aktivitaet > 4 * 3600):
+            return False
+        if self._abgleich_ruhe_belegt(jetzt_ts):
+            quiet_at = datetime.datetime.fromtimestamp(self._abgleich_ruhe_ts)
+            self.log.debug(f"inactivity alert suppressed: reconciliation found nothing missing at "
+                           f"{quiet_at:%Y-%m-%d %H:%M:%S}")
+            return False
+        return True
+
     def start_stoerungswaechter(self):
         """AP7: dienstinterner Watchdog — Pushover bei stillem Ausfall (Plan-Kriterien).
         Prueft alle 10 min; je Grund max. ein Push pro 6 h."""
@@ -11355,7 +11378,7 @@ class Service:
                 time.sleep(600)
                 try:
                     jetzt = datetime.datetime.now()
-                    if 7 <= jetzt.hour <= 22 and time.time() - self.letzte_aktivitaet > 4 * 3600:
+                    if self.inaktiv_faellig(jetzt, time.time()):
                         melde("inaktiv", "no event processed/skipped for >4 h in daytime — "
                                          "check MQTT/Frigate/analysis.")
                     ff = self.frigate_fehler
@@ -23641,19 +23664,23 @@ class Service:
             #      Waechter gestoert, wird sofort wieder normal analysiert.
             #      Genau das ist der Sinn — der Schalter darf nie zu einem
             #      stillen Loch werden, in dem gar nichts mehr schaut;
-            #   3. `not f_label` — Frigates EIGENE Behauptung ueber die Person
+            #   3. Frigates EIGENE Behauptung ueber die Person
             #      wird IMMER geprueft, dieselbe Sicherheitslogik wie beim
             #      Zonen-Filter und beim Kamera-Aus darueber (Review 21.07.:
             #      ohne dieses Netz wird ein Fremder->Bekannt-Fehlmatch nie
-            #      widerlegt).
+            #      widerlegt); eigene Waechter-Ereignisse nur mit eigene_pruefen.
             # Die Akte bekommt eine ehrliche Zeile (kategorie uebersprungen,
             # Grund live_only) statt eines stillen Verschwindens: der Event
             # taucht in der Ereignis-Liste auf und sagt, warum hier nichts
             # gerechnet wurde.
-            if not f_label:
+            from core import livewache as _lw_wa
+            _lg = ((cfg.get("live") or {}).get("guards") or {}).get(camera) or {}
+            _own_event = _frigateevents.is_own_event(cfg, eid)
+            _recheck_own = (_lw_wa._bool_lesen(_lg.get("eigene_pruefen"), False,
+                                            self.log, "eigene_pruefen")
+                            if isinstance(_lg, dict) else False)
+            if not _einspiel.name_requires_check(f_label, _own_event, _recheck_own):
                 try:
-                    from core import livewache as _lw_wa
-                    _lg = ((cfg.get("live") or {}).get("guards") or {}).get(camera) or {}
                     # _bool_lesen statt roher bool()-Wahrheit: ein
                     # hand-editiertes "worker_aus": "false" ist als String
                     # truthy und haette die Analyse dieser Kamera still
@@ -23727,7 +23754,8 @@ class Service:
                         # selbst steht als 'uebersprungen'-Zeile in der Akte,
                         # geht also nicht verloren, wenn debug aus ist.
                         self.log.debug(f"{eid} ({camera}): skipped (live watcher "
-                                   f"covers this camera)")
+                                   f"covers this camera)"
+                                   + (" — own watcher event" if _own_event else ""))
                         return None
             # Bauplan Disponent D2 Punkt 1: Frigate sagt ausdruecklich, die Aufnahme ist weg (`has_clip` genau False),
             # und hier liegt kein lokaler Clip mit Inhalt. Nach allen Filtern und vor dem Analyseauftrag endgueltig als
@@ -27245,6 +27273,7 @@ class Service:
         def _zeit(ts):
             return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
         if not eingereiht:
+            self._abgleich_ruhe_ts = time.time()
             self.log.debug(f"reconciliation: nothing missing since {_zeit(ab_ts)}")
             return
         self._abgleich_stand["nachgereicht_n"] = int(self._abgleich_stand.get("nachgereicht_n") or 0) + len(eingereiht)

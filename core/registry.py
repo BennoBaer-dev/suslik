@@ -474,7 +474,8 @@ BENENNEN_WERK = {
 #   stumm_faktor 3: stumm heisst, laenger als 3 x Intervall keine `frigate/stats`, obwohl die Broker-Verbindung steht
 #     (Vorschlag des Bauplans, nicht gemessen).
 #   abgleich_s 300: Takt des Abgleichs (`Service.sweep` im Modus abgleich) im MQTT-Betrieb (Vorschlag, nicht gemessen).
-MQTT_STUMMWACHE = {"stats_intervall_s": 60, "stumm_faktor": 3, "abgleich_s": 300}
+#   abgleich_frisch_takte 2: So viele Abgleich-Takte belegen Ruhe fuer die Inaktiv-Meldung (Bauplan Stoerung inaktiv, I1).
+MQTT_STUMMWACHE = {"stats_intervall_s": 60, "stumm_faktor": 3, "abgleich_s": 300, "abgleich_frisch_takte": 2}
 
 
 # ---------------------------------------------------------------- Namenszuordnung bei mehreren Personen
@@ -933,6 +934,9 @@ PRIO_WERK = "mid"
 ANGEBOT_TAGE_WERK = 7
 # Papierkorbfrist, Eigentuemer 27.10.2026 16:58:21: was entfernt wird, liegt eine Woche im Papierkorb, dann geleert.
 PAPIERKORB_TAGE_WERK = 7
+
+# EE1: eigene_ereignisse_tage haelt eigene Ereigniskennungen sieben Tage (Vorschlag, nicht gemessen).
+EIGENE_EREIGNISSE_TAGE = 7
 
 
 # --- Erste Abfrage der Kartengroesse beim Start (Bauplan analysen/bauplan_kartenabfrage_start.md, Stufe KS1) -----------

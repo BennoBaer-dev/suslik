@@ -973,6 +973,12 @@ T = {
     "live.knopf_vorrat_leeren": "Clear samples",
     "live.workeraus.schalter":
         "Let this watcher replace the event analysis for this camera",
+    "live.eigenepruefen.schalter":
+        "Also re-check this watcher's own Frigate events in the event analysis",
+    "live.eigenepruefen.erklaerung":
+        "Off by default. Events this watcher creates in Frigate (option 'Create a Frigate event when "
+        "someone is recognized') are then not analysed a second time. Turn it on if the event analysis "
+        "should double-check the watcher's names. Only matters while the watcher replaces the event analysis.",
     "live.workeraus.erklaerung":
         "Off by default. When on, Frigate events from this camera are no "
         "longer analysed a second time — the watcher is already "

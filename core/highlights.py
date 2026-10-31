@@ -12,7 +12,10 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.047"   # 0.1.1.047: Box-Eintrag von 0.1.1.046 unveraendert; 0.1.1.046 blieb unveroeffentlicht (Lauf gestoppt,
+STAND = "0.1.1.048"   # 0.1.1.048: neuer Box-Eintrag zum Schalter je Waechter aus Stufe EE1 (eigene_pruefen); Inhalt vom
+                      # Eigentuemer 31.10.2026 13:34:30/13:34:31, Wortlaut DE/EN abgenommen 13:35:18 ("Passt, Lauf starten");
+                      # dazu Stufe I1, der CHANGELOG-Abschnitt nennt beide.
+                      # Davor 0.1.1.047: Box-Eintrag von 0.1.1.046 unveraendert; 0.1.1.046 blieb unveroeffentlicht (Lauf gestoppt,
                       # Eigentuemer 30.10.2026 "Ja, stoppen und fixen" wegen O953); dazu Stufe W1c (Meldewege beim
                       # Nachladen der Waechter), der CHANGELOG-Abschnitt nennt sie.
                       # Davor 0.1.1.046: Box-Eintrag zum Live-Waechter aus 0.1.1.045 (Eigentuemer 30.10.2026 21:03:14 "Ja, Box mit
@@ -864,6 +867,24 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.1.048 — EIN Punkt, INHALT VOM INHABER: Eigentuemer 31.10.2026 13:34:30 („What's new? Nehmen wir kurz auf, dass wir
+    # einen Schalter haben …“) und 13:34:31 („Aber das gekürzt in einem kurzen Satz.“); Wortlaut DE und EN von der Hauptsession
+    # vorgeschlagen, abgenommen 13:35:18 („Passt, Lauf starten“). ES, IT, FR und FI von der Hauptsession (Opus) nach EN
+    # uebersetzt, das Wort fuer den Waechter je Sprache wie im Eintrag 0.1.1.047.
+    ("0.1.1.048", (
+        {"de": "Neuer Schalter je Wächter: Ereignisse, die der Live-Wächter erkannt hat, auf Wunsch zusätzlich von der "
+               "Ereignis-Analyse prüfen lassen.",
+         "en": "New per-watcher switch: optionally let the event analysis re-check events the live watcher has "
+               "recognised.",
+         "es": "Nuevo interruptor por vigilancia: si se desea, el análisis de eventos vuelve a comprobar los eventos que la "
+               "vigilancia en directo ha reconocido.",
+         "it": "Nuovo interruttore per sentinella: a scelta, l'analisi degli eventi ricontrolla gli eventi che la "
+               "sentinella live ha riconosciuto.",
+         "fr": "Nouvel interrupteur par surveillance : au choix, l'analyse des événements revérifie les événements que la "
+               "surveillance en direct a reconnus.",
+         "fi": "Uusi vahtikohtainen kytkin: halutessasi tapahtumien analyysi tarkistaa uudelleen tapahtumat, jotka "
+               "live-vahti on tunnistanut."},
+    )),
     # 0.1.1.047 — Eintrag unveraendert aus dem nie veroeffentlichten 0.1.1.046 (Lauf gestoppt wegen O953). Herkunft: EIN Punkt,
     # INHALT VOM INHABER: Eigentuemer 30.10.2026 21:03:14 („Ja, Box mit 0.1.1.046“) auf den Vorschlag der Hauptsession: DE
     # woertlich sein Satz vom 30.10.2026 18:34:12 (CHANGELOG-Wortlaut von 0.1.1.045), EN der CHANGELOG-Satz von 0.1.1.045.

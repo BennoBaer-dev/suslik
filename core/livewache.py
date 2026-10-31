@@ -2728,6 +2728,7 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
     # unveraendert) — ein Alt-UI oder API-Aufrufer ohne dieses Feld darf den
     # Wunsch des Nutzers nicht still zuruecksetzen.
     wk_aus = bool(_wert("worker_aus", False))
+    recheck_own = bool(_wert("eigene_pruefen", False))
     # Etappe A (Welle 1): bewegungsgesteuertes Abtasten je Kamera. Der Schalter
     # haelt wie alle anderen (fehlendes Feld = unveraendert, _wert), der
     # Ruhe-Takt ist optional (None = wie das Auftritts-Ende dieser Kamera).
@@ -2753,7 +2754,7 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
                frigate_events=fr_ev, frigate_abstand_s=fr_ab,
                bewegung_gate=bw_gate, ruhe_takt_s=ruhe_s,
                bewegung_schwelle=bw_schw, bewegung_flaeche=bw_fl,
-               worker_aus=wk_aus)
+               worker_aus=wk_aus, eigene_pruefen=recheck_own)
     neu.pop("schnell_urteil", None)   # .197: Haken abgeschafft (Voting immer)
     blk[kamera] = neu
     store_schreiben(store_pfad(cfg), store)
@@ -2772,7 +2773,8 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
         "frigate_events": fr_ev,
         "frigate_abstand_s": fr_ab, "bewegung_gate": bw_gate,
         "ruhe_takt_s": ruhe_s, "bewegung_schwelle": bw_schw,
-        "bewegung_flaeche": bw_fl, "worker_aus": wk_aus}}})
+        "bewegung_flaeche": bw_fl, "worker_aus": wk_aus,
+        "eigene_pruefen": recheck_own}}})
     log.info(f"LIVE guard {kamera} changed via UI (URL masked)")
     hinweis = ""
     alt_fp = (alt.get("test") or {}).get("quelle_fp")
@@ -3135,7 +3137,7 @@ GUARD_USER_FELDER = ("enabled", "quelle", "url", "ende_ohne_gesicht_s",
                      # daran, dass Live eingeschaltet ist UND der Watcher
                      # dieser Kamera laeuft (verifyd.process prueft beides).
                      # Faellt der Waechter aus, wird wieder normal analysiert.
-                     "worker_aus")
+                     "worker_aus", "eigene_pruefen")
 # .197: "schnell_urteil" ist KEIN Guard-Feld mehr — die Namens-Stufe laeuft
 # fuer jeden eingeschalteten Waechter (User: "Enable heisst alles laeuft";
 # der Haken stammte aus der Zeit, als das Urteil extra Rechenzeit kostete).
@@ -3391,6 +3393,8 @@ def guards_lesen(cfg, log=_log):
             # bewusst: fuer diese Kamera reicht mir der Live-Waechter.
             "worker_aus": _bool_lesen(g.get("worker_aus"), False, log,
                                       f"live.guards.{name}.worker_aus"),
+            "eigene_pruefen": _bool_lesen(g.get("eigene_pruefen"), False, log,
+                                          f"live.guards.{name}.eigene_pruefen"),
         }
         # Quittungs-Bloecke (GUARD_QUITTUNG_FELDER) unveraendert durchreichen —
         # UI-B1: `messung` fehlte hier und die Last-Messung war unsichtbar.

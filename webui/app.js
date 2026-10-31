@@ -1788,7 +1788,8 @@ function _liveFelder() {
           /* .407: "Live ersetzt die Ereignis-Analyse dieser Kamera".
              Dieselbe Halte-Regel — fehlt die Checkbox im DOM, geht das Feld
              nicht mit und der Server behaelt den gespeicherten Wunsch. */
-          worker_aus: (document.getElementById('lv-worker-aus') || {}).checked};
+          worker_aus: (document.getElementById('lv-worker-aus') || {}).checked,
+          eigene_pruefen: (document.getElementById('lv-eigene-pruefen') || {}).checked};
 }
 
 /* Kalibrier-Vorrat EINER Kamera wegwerfen (User-Auftrag 31.08.: nachkalibrieren

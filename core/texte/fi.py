@@ -965,6 +965,12 @@ T = {
     "live.knopf_vorrat_leeren": "Hylkää kuvat",
     "live.workeraus.schalter":
         "Tämä vahti korvaa tämän kameran tapahtuma-analyysin",
+    "live.eigenepruefen.schalter":
+        "Tarkista myös tämän vahdin omat Frigate-tapahtumat uudelleen tapahtuma-analyysissä",
+    "live.eigenepruefen.erklaerung":
+        "Oletuksena pois. Tämän vahdin Frigateen luomia tapahtumia (valinta 'Luo Frigate-tapahtuma, "
+        "kun joku tunnistetaan') ei tällöin analysoida toista kertaa. Ota käyttöön, jos tapahtuma-analyysin "
+        "pitää tarkistaa vahdin antamat nimet. Vaikuttaa vain, kun vahti korvaa tapahtuma-analyysin.",
     "live.workeraus.erklaerung":
         "Oletuksena pois. Päällä ollessaan tämän kameran "
         "Frigate-tapahtumia ei analysoida toista kertaa — vahti katsoo jo "

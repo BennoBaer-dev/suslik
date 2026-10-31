@@ -1022,6 +1022,13 @@ T = {
     "live.knopf_vorrat_leeren": "Cancella campioni",
     "live.workeraus.schalter":
         "Questo guardiano sostituisce l'analisi degli eventi di questa telecamera",
+    "live.eigenepruefen.schalter":
+        "Ricontrolla anche gli eventi Frigate creati da questo guardiano nell'analisi degli eventi",
+    "live.eigenepruefen.erklaerung":
+        "Spento per impostazione predefinita. Gli eventi creati da questo guardiano in Frigate (opzione "
+        "'Crea un evento Frigate quando qualcuno viene riconosciuto') non vengono quindi analizzati una "
+        "seconda volta. Attivalo se l'analisi degli eventi deve verificare i nomi del guardiano. Ha effetto "
+        "solo mentre il guardiano sostituisce l'analisi degli eventi.",
     "live.workeraus.erklaerung":
         "Spento per impostazione predefinita. Acceso, gli eventi Frigate di "
         "questa telecamera non vengono più analizzati una seconda volta: il "
