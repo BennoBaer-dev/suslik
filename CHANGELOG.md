@@ -5,6 +5,24 @@ never pushed to GHCR; they ship bundled with the next release (each release entr
 says which steps it bundles). This file keeps the last five releases; the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git history.
 
+## 0.1.1.050 (2026-11-03)
+
+Camera calibration: the calibration page of a camera opens again. Since 0.1.1.045 it failed with a connection error on every installation. A detection value outside the slider's usual range is now shown and saved as it is, instead of being clamped.
+
+Live watcher: for a camera whose watcher replaces the event analysis, the clip is no longer downloaded just to be skipped. The Events list and the event page now say 'Handled by live watcher' instead of 'Skipped at startup', and on the watcher's own events they also show the name it recognised.
+
+Frigate: if writing a name to a Frigate event fails with a temporary error (timeout, no connection, server error), it is now tried again instead of being lost.
+
+Faces: the Faces, Known and Suggestions pages no longer copy the whole reference catalog on every call, which took several seconds on large installations.
+
+CUDA: if the worker can't find its own process in the `nvidia-smi` list, as seen on some drivers without `pid: host`, it no longer stops after its first build and reports a full card. It keeps working and warns in the log, and the GPU page no longer says the worker isn't started. A refused build is no longer logged as a failed allocation.
+
+Log: the fallback of the name assignment is now logged as INFO instead of WARNING.
+
+## 0.1.1.049 (2026-11-02)
+
+Live watcher: saving new face candidates in the event analysis no longer stops the watcher. It re-reads its references only when a reference actually changes, and a catalog line arriving during a read is no longer treated as an error.
+
 ## 0.1.1.048 (2026-10-31)
 
 What's new box: an entry for the new per-watcher switch.
@@ -22,15 +40,3 @@ Live watcher: MQTT messages and Frigate events now also go out for a watcher tha
 ## 0.1.1.045 (2026-10-30)
 
 Live watcher: the watcher now recognises faces with the same computation as the event analysis (the same models, quality, head-pose and feature-norm checks and the same vote stack) at full camera resolution, on every hardware variant.
-
-## 0.1.1.043 (2026-10-28)
-
-Today page: the side column now shows how many of the day's events had at least one face, instead of the 'not matched inside passes' count.
-
-Housekeeping: face candidates nobody picked and unknown groups not seen for seven days are now cleared out automatically, together with old internal logs. Everything removed waits one week in a trash folder before it is deleted.
-
-CUDA: the first card size query at startup now waits up to 30 seconds instead of 2. On machines where the graphics card answers slowly right after startup, the start then no longer logs two misleading errors about the card.
-
-## 0.1.1.041 (2026-10-27)
-
-Learning run: the feature-norm step now always gets a full hour, so large runs no longer stop the worker halfway through. Its success messages are no longer logged as errors; real problems get their own warning.

@@ -2503,18 +2503,23 @@ def _qs_personen(qs):
     return personen
 
 
-def qs_lesen():
+def qs_lesen(urteile=True):
     """Die Bestands-QS fuer die Seiten (/qualitaet, die QS-Lesung in /gesichter, die QS-Karte auf /faces): das
     Laufprotokoll plus die Urteile der aktiven Saetze aus dem Katalog (Lese-Stufe b), gefiltert auf aktive Saetze,
     hier und nur hier (I1); die Zahlen je Person entstehen beim Lesen, nach einer Entfernung wird nichts
     nachgefuehrt (E3b-2b). Bild-Schluessel ist die ref_id.
+    urteile=False (Stufe FX6, QS-Karte auf /faces) liest die aktiven Saetze ohne Katalog-Kopie aus Lese-Stufe e und
+    laesst die Urteile aus: pruefung, stufen, normen, blick und personen bleiben leer, ref_count ist 0, saetze ist die
+    unveraenderliche Sicht {Person: Tupel der ref_ids}; ts und alle Listen des Laufprotokolls wie sonst gefiltert.
     -> dict wie der fruehere Bericht (ts, ref_count, Latten, personen, stufen, normen, blick, pruefung, paare, doppel,
        ungeeignet, dubletten, vorrat_refs, norm_traegt) plus saetze {Person: [ref_id, ...]} aller aktiven Saetze;
        ohne lesbares Laufprotokoll nur saetze"""
     from core import lernlauf as _ll
     from core import refquelle as _rq
-    kat = _rq.read_catalog(_ll.datenort_cfg(DATA))
-    wem = {rid: p for p, rids in kat["personen"].items() for rid in rids}
+    cfg = _ll.datenort_cfg(DATA)
+    kat = _rq.read_catalog(cfg) if urteile else None
+    saetze = kat["personen"] if urteile else _rq.persons_view(cfg)
+    wem = {rid: p for p, rids in saetze.items() for rid in rids}
     try:
         with open(QS_PROTOKOLL_PATH, encoding="utf-8") as f:
             prot = json.load(f)
@@ -2526,9 +2531,9 @@ def qs_lesen():
                                      f"start the check again")
         prot = None
     if not isinstance(prot, dict):
-        return {"saetze": kat["personen"]}
-    qs = {**prot, "saetze": kat["personen"], "pruefung": {}, "stufen": {}, "normen": {}, "blick": {}}
-    for rid, p in wem.items():
+        return {"saetze": saetze}
+    qs = {**prot, "saetze": saetze, "pruefung": {}, "stufen": {}, "normen": {}, "blick": {}}
+    for rid, p in wem.items() if urteile else ():
         w = (kat["eintraege"][rid]["urteil"].get(QS_THEMA) or {}).get("werte")
         if not isinstance(w, dict):
             continue                       # nach dem Lauf dazugekommen: noch ohne Urteil

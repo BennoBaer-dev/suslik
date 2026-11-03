@@ -3369,6 +3369,9 @@ T = {
     "baustein.kat.frigate_nur": "Solo Frigate",
     "baustein.kat.wir_nur": "Solo suslik",
     "baustein.kat.beide_unknown": "Ambos sin identificar",
+    # Bauplan Fixes FX5: Akte-Zeile des Live-Waechters (bausteine.akte_kat_wort, akte_live_name).
+    "baustein.akte.live_only": "Gestionado por la vigilancia en directo",
+    "baustein.akte.quelle_live": "Vigilancia en directo",
     # 3d: Wortstufen-ANZEIGE (bausteine.stufe_wort), klein im Satzfluss —
     # Rahmen event.ours_zeile: "{person} — {stufe} (aparece en {n} …)".
     "baustein.stufe.clear": "coincidencia clara",

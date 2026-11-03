@@ -72,8 +72,9 @@ def render(offen, personen, data_dir):
             f'{t("lernen.karte.knopf_ablehnen")}</button></div></div>')
     # E3b-2a (Bauplan analysen/bauplan_refquelle_einbau.md, Stufe E3 Punkt 2): die Galerie sind die
     # Referenz-Saetze je Person aus der Referenz-Quelle (Lese-Stufe b, juengste Bindung zuerst), das Bild
-    # ueber /lernlauf/satz/<ref_id> (Lese-Stufe d); kein Lesen von faces/.
-    saetze = refquelle.read_catalog({"data_dir": data_dir})["personen"]
+    # ueber /lernlauf/satz/<ref_id> (Lese-Stufe d); kein Lesen von faces/. Seit Stufe FX6 (Bauplan
+    # analysen/bauplan_fixes_0_1_1_050.md) dieselbe Auswahl aus Lese-Stufe e, ohne Katalog-Kopie.
+    saetze = refquelle.persons_view({"data_dir": data_dir})
     galerie = []
     for p in personen:
         bilder = saetze.get(p, [])

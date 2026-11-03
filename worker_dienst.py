@@ -2404,11 +2404,19 @@ class Dienst:
         with self._geo_schloss:
             forms = sorted((w,h,int(getattr(obj,"saetze",0) or 0))
                            for (w,h),obj in self.graphen.items())
-        bootstrap = (not forms and snap["own"] is None and not snap["native_reason"]
-                     and type(snap["total"]) is int and type(snap["free"]) is int
-                     and 0 <= snap["free"] <= snap["total"])
-        if snap["reason"] and not bootstrap:
+        # Bauplan Fixes 0.1.1.050, Stufe FX7 (Issue #36): nennt der Treiber die eigene PID nicht (warum, ist offen;
+        # beim Melder auch mit `--pid=host`) oder mit 0 MiB, die Karte ist aber gemessen, weist das nichts ab. Geprueft
+        # wird unten gegen das gemessene Frei mit eigenem Anteil 0, also so vorsichtig wie beim Erstbau; der Grund
+        # bleibt im Messstand.
+        own_unknown = (snap["own"] in (None, 0) and not snap["native_reason"]
+                       and type(snap["total"]) is int and type(snap["free"]) is int
+                       and 0 <= snap["free"] <= snap["total"])
+        if snap["reason"] and not own_unknown:
             raise _cuda_budget.MaterializationError(snap["reason"])
+        if own_unknown and forms and not getattr(self, "_cuda_pid_missing_warned", False):
+            self._cuda_pid_missing_warned = True
+            _log.warning("worker PID not in the nvidia-smi process list although the card is measured — own share "
+                         "unknown, checking against measured free memory only")
         reserve = _cuda_budget.reserve(snap["total"], getattr(self, "vram_reserve_mb", -1))
         pending = max(0, self.threads - snap["decoders"]) * _gpubudget.DECODER_CUDA_MB
         # Das Geometrieschloss ist vor dem Preis-/Eigenmessschloss wieder frei.
@@ -3044,7 +3052,7 @@ class Dienst:
                 return art
         return "karte_voll"
 
-    def druck_buchen(self, art, text, neustart=True):
+    def druck_buchen(self, art, text, neustart=True, refused=False):
         """EIN Kartendruck-Ereignis buchen und darauf antworten (.531).
 
         Vier Arten, drei Antworten:
@@ -3070,7 +3078,11 @@ class Dienst:
                   nur der Neustart wartet, bis auch der zweite Anlauf scheitert.
         `neustart` gilt NUR fuer `karte_voll`; die Zwei-Treffer-Entscheidung des
         eigenen Deckels bleibt unberuehrt (sie gehoert dem Prozess, nicht dem
-        Job, und ein uebersprungener Treffer verschoebe sie still)."""
+        Job, und ein uebersprungener Treffer verschoebe sie still).
+
+        `refused` (Stufe FX7) gilt ebenso nur fuer `karte_voll`: die Absage kam von
+        der Speicherpruefung (`MaterializationError`), es wurde nichts zugewiesen.
+        Anders ist allein der Text; Art, Zaehler und Antwort bleiben dieselben."""
         art = str(art or "")
         self.zaehler[f"vram_druck_{art}"] += 1
         self.zaehler["vram_druck"] += 1
@@ -3148,11 +3160,14 @@ class Dienst:
                 self.vram_neustart_bitten(art, text)
             return
         # Was hier ankommt, ist `karte_voll` — ein ECHTER Allokationsfehler bei
-        # voller Karte. Er hat den Retry aus M3a schon hinter sich (Verfall,
-        # warten, ein zweiter Anlauf); jetzt hilft nur ein frischer Prozess.
-        _log.error(f"vram pressure: ORT allocation failed with the card full "
-                    f"({_registry.VRAM_DRUCK_DATEI}, "
-                    f"\"{_registry.VRAM_DRUCK_TEXTE['karte_voll']}\") — {text}"
+        # voller Karte oder (`refused`) die Absage der Speicherpruefung davor. Er
+        # hat den Retry aus M3a schon hinter sich (Verfall, warten, ein zweiter
+        # Anlauf); jetzt hilft nur ein frischer Prozess.
+        lage = ("memory check refused the next build, no allocation was attempted" if refused
+                else f"ORT allocation failed with the card full "
+                     f"({_registry.VRAM_DRUCK_DATEI}, "
+                     f"\"{_registry.VRAM_DRUCK_TEXTE['karte_voll']}\")")
+        _log.error(f"vram pressure: {lage} — {text}"
                     + ("" if neustart else " — a second attempt follows after "
                                            "the geometry expiry, NOT restarting yet"))
         if not neustart:
@@ -3849,7 +3864,8 @@ class Dienst:
                     if nochmal and art == "karte_voll":
                         self.karte_luft_abwarten(lauf)
                     self.druck_buchen(art, f"job {lauf.id}: {fehler}",
-                                      neustart=not (nochmal and art == "karte_voll"))
+                                      neustart=not (nochmal and art == "karte_voll"),
+                                      refused=memory_denied is not None)
                     verwurf = verwurf or "speicher_knapp"
                     if nochmal:
                         self._vram_wiederholt.add(lauf.id)

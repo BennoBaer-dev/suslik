@@ -3371,6 +3371,9 @@ T = {
     "baustein.kat.frigate_nur": "Nur Frigate",
     "baustein.kat.wir_nur": "Nur suslik",
     "baustein.kat.beide_unknown": "Beide unbekannt",
+    # Bauplan Fixes FX5: Akte-Zeile des Live-Waechters (bausteine.akte_kat_wort, akte_live_name).
+    "baustein.akte.live_only": "Vom Wächter bearbeitet",
+    "baustein.akte.quelle_live": "Live-Wächter",
     # 3d: Wortstufen-ANZEIGE (bausteine.stufe_wort). ZWEI Verwendungen,
     # beide DE-QS-geprueft: im Satzfluss ("{person} — {stufe} (in {n}
     # Fenstern gesehen)", event.ours_zeile) und ALLEIN als title des

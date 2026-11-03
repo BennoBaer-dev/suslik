@@ -247,7 +247,8 @@ def render(kamera, vorrat, guard, standard, kat, pruef=None, erk=None,
 
     vorrat  = [{"d","ts","det","e","t"}, ...] aus livewache.kalib_lesen
     guard   = der normalisierte Waechter-Block (aktuelle Schwellen) oder {}
-    standard= {"det","e","t"} die Werks-Startwerte (aus dem Code, nie hier)
+    standard= {"det","e","t"}: `det` ist der Anlagenwert `det_thresh`, `e` und
+              `t` sind Werks-Startwerte (aus dem Code, nie hier)
     kat     = {"akt": {"e","t","quelle"}, "std": {"e","t"}} — geltende und
               Werks-Katalog-Latte (core.kamerakalib)
     pruef   = {"akt": {"t","quelle"}, "std": {"t"}} — geltende und Werks-Latte
@@ -303,6 +304,13 @@ def render(kamera, vorrat, guard, standard, kat, pruef=None, erk=None,
            # der geltende Wert kommt fast immer aus dem GLOBALEN `urteil_kante`
            # und nicht aus dem Guard-Block.
            "k": float((erk or {}).get("akt", {}).get("k") or 0)}
+    # Stufe FX8 (O989): die Spanne von lk-det schliesst den aktuellen Wert und
+    # den Anlagenwert ein. Sonst klemmte die Seite einen gueltigen Wert ausserhalb
+    # der festen Spanne, und Uebernehmen schrieb ihn auch ohne Reglerbewegung
+    # veraendert als det_min. Innerhalb der festen Spanne bleibt sie Zeichen fuer
+    # Zeichen dieselbe: bei Gleichstand gewinnt der erste Wert, der feste Text.
+    det_lo = min(_DET_LO, akt["det"], standard["det"], key=float)
+    det_hi = max(_DET_HI, akt["det"], standard["det"], key=float)
     kat_akt = kat.get("akt") or {}
     kat_std = kat.get("std") or {}
     pruef_akt = (pruef or {}).get("akt") or {}
@@ -422,8 +430,8 @@ def render(kamera, vorrat, guard, standard, kat, pruef=None, erk=None,
         f'<div class="kal-gruppe" id="lk-reg-e"><b>{t("livekalib.abschnitt.anzeige")}</b>'
         f'<div class="kal-prosa">{t("livekalib.abschnitt.anzeige_prosa")}</div>'
         + _regler("lk-det", t("livekalib.regler_det"),
-                  t("livekalib.regler_det_prosa"), _DET_LO, _DET_HI,
-                  _DET_SCHRITT, _DET_LO)
+                  t("livekalib.regler_det_prosa"), det_lo, det_hi,
+                  _DET_SCHRITT, det_lo)
         + _regler("lk-e", t("livekalib.regler_e"),
                   t("livekalib.regler_e_prosa"), _BODEN_E, "1", "0.001", _BODEN_E)
         + _regler("lk-t", t("livekalib.regler_t"),
@@ -672,7 +680,7 @@ document.getElementById("lk-tab-e").onclick = () => registerZeigen("e");
 document.getElementById("lk-tab-l").onclick = () => registerZeigen("l");
 document.getElementById("lk-tab-p").onclick = () => registerZeigen("p");
 document.getElementById("lk-std").onclick = () => {{
-  setz("lk-det", STD.det, 0.40, 0.60); setz("lk-e", STD.e, 0, 1);
+  setz("lk-det", STD.det, {det_lo}, {det_hi}); setz("lk-e", STD.e, 0, 1);
   setz("lk-t", STD.t, 0, 1);
   /* Pose-Vorgabe = AUS. Es gibt keinen Werks-Wert dafuer, solange die Latte
      nichts siebt — "Vorgaben" heisst hier also: der Regler stoert nicht. */
@@ -727,7 +735,7 @@ document.getElementById("lk-save").onclick = async () => {{
     m.textContent = T_TXT.fehler;   /* abgerissene Verbindung ist kein stiller Erfolg */
   }}
 }};
-setz("lk-det", AKT.det, 0.40, 0.60); setz("lk-e", AKT.e, 0, 1);
+setz("lk-det", AKT.det, {det_lo}, {det_hi}); setz("lk-e", AKT.e, 0, 1);
 setz("lk-t", AKT.t, 0, 1);
 setz("lk-p", AKT.p, {_POSE_LO}, {_POSE_HI});
 setz("lk-ke", KAKT.e === null ? {_KAT_LO_E} : KAKT.e, {_KAT_LO_E}, 1);

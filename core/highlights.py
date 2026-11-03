@@ -12,7 +12,11 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.048"   # 0.1.1.048: neuer Box-Eintrag zum Schalter je Waechter aus Stufe EE1 (eigene_pruefen); Inhalt vom
+STAND = "0.1.1.050"   # 0.1.1.050: neuer Box-Eintrag „Small fixes.“ (Eigentuemer 03.11.2026 15:36:15 "Sorry, what's new, meine ich. Nur small fixes.");
+                      # Stufen FX1 bis FX9, der CHANGELOG-Abschnitt nennt sie.
+                      # Davor 0.1.1.049: kein neuer Box-Eintrag (Eigentuemer 02.11.2026 10:18:18 "Ja, Nummer vorbereiten" auf den Vorschlag
+                      # ohne Eintrag); Stufe RS1, der CHANGELOG-Abschnitt nennt sie.
+                      # Davor 0.1.1.048: neuer Box-Eintrag zum Schalter je Waechter aus Stufe EE1 (eigene_pruefen); Inhalt vom
                       # Eigentuemer 31.10.2026 13:34:30/13:34:31, Wortlaut DE/EN abgenommen 13:35:18 ("Passt, Lauf starten");
                       # dazu Stufe I1, der CHANGELOG-Abschnitt nennt beide.
                       # Davor 0.1.1.047: Box-Eintrag von 0.1.1.046 unveraendert; 0.1.1.046 blieb unveroeffentlicht (Lauf gestoppt,
@@ -867,6 +871,16 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.1.050 — EIN Punkt, INHALT VOM INHABER: Eigentuemer 03.11.2026 15:36:15 („Sorry, what's new, meine ich. Nur small
+    # fixes.“). DE, ES, IT, FR und FI von der Hauptsession (Opus) nach EN uebersetzt.
+    ("0.1.1.050", (
+        {"de": "Kleine Korrekturen.",
+         "en": "Small fixes.",
+         "es": "Pequeñas correcciones.",
+         "it": "Piccole correzioni.",
+         "fr": "Petites corrections.",
+         "fi": "Pieniä korjauksia."},
+    )),
     # 0.1.1.048 — EIN Punkt, INHALT VOM INHABER: Eigentuemer 31.10.2026 13:34:30 („What's new? Nehmen wir kurz auf, dass wir
     # einen Schalter haben …“) und 13:34:31 („Aber das gekürzt in einem kurzen Satz.“); Wortlaut DE und EN von der Hauptsession
     # vorgeschlagen, abgenommen 13:35:18 („Passt, Lauf starten“). ES, IT, FR und FI von der Hauptsession (Opus) nach EN

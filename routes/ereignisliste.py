@@ -11,7 +11,7 @@ Sprach-Stufe 0 (konzept_sprache.md v2): sichtbare Texte aus core/sprache.t()
 — BYTE-TREU (Harnisch tools/harnisch_sprache.py). Grenzen dieser Stufe (siehe
 Abschnitts-Kommentar in core/texte/en.py): Produktnamen-Kopfzellen bleiben
 literal; die Kategorie-ANZEIGE laeuft seit Tranche D ueber
-bausteine.kat_map()/kat_wort() (Kennung/Anzeige-Trennung, EN wortgleich zu
+bausteine.kat_map()/akte_kat_wort() (Kennung/Anzeige-Trennung, EN wortgleich zu
 KAT_LABELS); die frueheren Zeitvariablen `t` sind umbenannt, damit sie t()
 nicht verschatten."""
 import datetime
@@ -25,7 +25,7 @@ from core import areas as _areas_mod
 from core import harvest_set as _hs
 from core.lernlauf import bild_url
 from core.sprache import t
-from webui.bausteine import KAT_FARBE, bild_nn, gt_leiste, kat_map, kat_wort
+from webui.bausteine import KAT_FARBE, akte_kat_wort, akte_live_name, bild_nn, gt_leiste, kat_map
 from core import logbuch as _logbuch
 _log = _logbuch.logger(__name__)
 
@@ -199,12 +199,13 @@ def render_ereignisse(cfg, log_path, qs, gt_schnellpersonen, master_persons):
         zeit = datetime.datetime.fromtimestamp(r.get("start") or r.get("ts", 0)).strftime("%d.%m %H:%M:%S")
         f = r.get("frigate") or {}
         fs = f"{f['score']:.2f}" if f.get("score") is not None else "?"
+        live_name = akte_live_name(r)         # Bauplan Fixes FX5: der Name des Waechters steht bei suslik, nicht bei Frigate
         ftxt = (t("ereignisliste.tabelle.frigate_zelle",
                   label=f.get("label"), score=fs, cos=f.get("cos"))
-                if f.get("label") else "—")
-        ours = ", ".join(f"{p} {(v.get('max') or 0):+.2f}/{v.get('win3s', 0)}×" for p, v in
-                         sorted((r.get("ours") or {}).items(),
-                                key=lambda x: -(x[1].get("max") or 0))[:3]) or "—"
+                if f.get("label") and not live_name else "—")
+        ours = live_name or ", ".join(f"{p} {(v.get('max') or 0):+.2f}/{v.get('win3s', 0)}×" for p, v in
+                                      sorted((r.get("ours") or {}).items(),
+                                             key=lambda x: -(x[1].get("max") or 0))[:3]) or "—"
         ed = str(r.get("eid", "")).replace("/", "_")
         edir = os.path.join(cfg["data_dir"], "events", ed)
         k = str(r.get("kategorie", "?"))
@@ -233,7 +234,7 @@ def render_ereignisse(cfg, log_path, qs, gt_schnellpersonen, master_persons):
                     f'<td data-label="{dl["ereignisliste.tabelle.kopf_kamera"]}">{html.escape(str(r.get("camera", "?")))}</td>'
                     f'<td data-label="Frigate">{html.escape(ftxt)}</td><td data-label="suslik">{html.escape(ours)}'
                     f"{' ✓' + html.escape(','.join(best)) if best else ''}</td>"
-                    f'<td data-label="{dl["ereignisliste.tabelle.kopf_kategorie"]}"><span class=k style=background:{KAT_FARBE.get(k, "#666")}>{html.escape(kat_wort(k))}</span>'
+                    f'<td data-label="{dl["ereignisliste.tabelle.kopf_kategorie"]}"><span class=k style=background:{KAT_FARBE.get(k, "#666")}>{html.escape(akte_kat_wort(r))}</span>'
                     f"{' 📣' if r.get('alerted') else ''}{unv}{lg}</td>"
                     f'<td data-label="{dl["ereignisliste.tabelle.kopf_crop"]}">{crop}</td>'
                     f'<td data-label="{dl["ereignisliste.tabelle.kopf_gt"]}">{gtb}</td></tr>')

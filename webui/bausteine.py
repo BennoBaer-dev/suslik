@@ -215,6 +215,24 @@ def kat_wort(kat):
     return kat_map().get(kat, KAT_LABELS.get(kat, kat))
 
 
+def akte_kat_wort(row):
+    """Anzeige-Wort der Kategorie einer Akte-Zeile (Bauplan Fixes FX5): bei Grund `live_only` der Text des Waechters.
+    -> uebersetzter Text, sonst das Wort aus `kat_wort`"""
+    skip = row.get("uebersprungen")
+    if isinstance(skip, dict) and skip.get("grund") == "live_only":
+        return t("baustein.akte.live_only")
+    return kat_wort(str(row.get("kategorie", "?")))
+
+
+def akte_live_name(row):
+    """Name und Quelle einer Akte-Zeile, die der Live-Waechter bearbeitet hat (Bauplan Fixes FX5).
+    -> unescapter Text „Name (Quelle)“, "" ohne `quelle: live` oder ohne Namen"""
+    name = (row.get("frigate") or {}).get("label")
+    if row.get("quelle") != "live" or not name:
+        return ""
+    return f"{name} ({t('baustein.akte.quelle_live')})"
+
+
 def stufe_wort(st):
     """UI-Wort einer Vertrauens-Stufe (core/vertrauen.STUFEN).
     Sprach-Stufe 4: die Aufloesung ist nach core/vertrauen.label_sprachig()

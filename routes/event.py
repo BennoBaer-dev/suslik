@@ -22,7 +22,7 @@ from core import registry as _reg
 from core.sprache import t, t_n
 from webui.bausteine import KAT_FARBE, bild_nn, gt_leiste
 from webui.bausteine import fehler_grund as _fehler_grund
-from webui.bausteine import kat_wort as _kat_wort, stufe_wort as _stufe_wort
+from webui.bausteine import akte_kat_wort as _akte_kat_wort, akte_live_name as _akte_live_name, stufe_wort as _stufe_wort
 from core import logbuch as _logbuch
 _log = _logbuch.logger(__name__)
 
@@ -96,7 +96,8 @@ def render(cfg, log_path, eid, gt_schnellpersonen, master_persons):
         # statt des englischen Meldetext-Labels _vt.label().
         _ow.append(t_n("event.ours_zeile", v.get("win3s", 0),
                                 person=p, stufe=_stufe_wort(_st9)))
-    ours_wort = (", ".join(_ow) or t("event.ours_keiner")) + (
+    # Bauplan Fixes FX5: eine Zeile des Live-Waechters zeigt seinen Namen mit der Quelle, ohne Score.
+    ours_wort = _akte_live_name(row) or (", ".join(_ow) or t("event.ours_keiner")) + (
         t_n("event.ours_rest", _ow_rest)
         if _ow and _ow_rest else "")
     best = row.get("bestaetigt") or []
@@ -192,7 +193,7 @@ def render(cfg, log_path, eid, gt_schnellpersonen, master_persons):
     _vt = verwurf_text(row)
     kbadge = (f'<span class=k style=background:{KAT_FARBE.get(kat, "#666")}'
               + (f' title="{html.escape(_vt, quote=True)}"' if _vt else "")
-              + f'>{html.escape(_kat_wort(kat))}</span>')
+              + f'>{html.escape(_akte_kat_wort(row))}</span>')
     if row.get("frames_fehlen"):   # W1: unvollstaendig gelesener Clip sichtbar machen
         kbadge += (' <span class=k style="background:#8a6d1a" '
                    f'title="{t("event.attr_unvollstaendig", gelesen=row.get("frames_gelesen"), soll=row.get("frames_soll"))}"'

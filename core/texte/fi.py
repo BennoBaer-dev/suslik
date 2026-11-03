@@ -3437,6 +3437,9 @@ T = {
     "baustein.kat.frigate_nur": "Vain Frigate",
     "baustein.kat.wir_nur": "Vain suslik",
     "baustein.kat.beide_unknown": "Molemmat tuntemattomia",
+    # Bauplan Fixes FX5: Akte-Zeile des Live-Waechters (bausteine.akte_kat_wort, akte_live_name).
+    "baustein.akte.live_only": "Live-vahdin käsittelemä",
+    "baustein.akte.quelle_live": "Live-vahti",
     "baustein.stufe.clear": "selvä osuma",
     "baustein.stufe.narrow": "juuri rajan yllä",
     "baustein.stufe.below": "rajan alla",

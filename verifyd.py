@@ -2648,6 +2648,15 @@ def api_post(cfg, path, payload):
         raise FrigateHttpFehler(e, path) from None
 
 
+def frigate_error_transient(e):
+    """Ob sich ein neuer Versuch bei diesem Frigate-Fehler lohnt (Bauplan analysen/bauplan_fixes_0_1_1_050.md, Stufe FX3):
+    ein `OSError` ohne HTTP-Code (Timeout, keine Verbindung) oder mit Code ab 500. -> bool"""
+    if not isinstance(e, OSError):
+        return False
+    code = getattr(e, "code", None)
+    return code is None or code >= 500
+
+
 _frigate_ok = {"ts": 0.0}   # Wanduhr der letzten ECHTEN Frigate-Antwort
 #                             (.281: Banner-Entwarnung; der Schoner selbst
 #                             laeuft auf monotonic und taugt nicht zum
@@ -3008,6 +3017,71 @@ def fixed_filters(cfg, ev, own_write):
         if rz and not sub_label and not set(ev.get("zones") or []) & set(rz):
             return "required_zone", sub_label
     return None, sub_label
+
+
+def live_only_skip(cfg, camera, eid, f_label, marke, live_health, log):
+    """Bauplan Fixes FX2 (O982): die Entscheidung .407 „Live ersetzt die Ereignis-Analyse“; gemeinsam fuer `Service.process`
+    und den Disponenten. `live_health` ist ein Aufruf, er wird nur gefragt, wenn `worker_aus` und `enabled` gesetzt sind.
+    -> (True wenn der Uebersprung gilt, True wenn die Kennung ein eigenes Waechter-Ereignis ist; der zweite Wert wird nur
+    bei gesetztem Schalter gelesen und ist sonst False, Bauplan Fixes FX4, Erweiterung O990)"""
+    # .407 LIVE ERSETZT DIE EREIGNIS-ANALYSE (User-Spezifikation):
+    # Sieht der Live-Waechter dieser Kamera ohnehin zu, ist die
+    # Event-Analyse desselben Feeds Doppelarbeit — dieselbe Person
+    # zweimal gerechnet. DREI Bedingungen muessen zusammenkommen, und
+    # zwar alle drei zur LAUFZEIT geprueft:
+    #   1. der Nutzer hat es fuer diese Kamera gewollt (worker_aus)
+    #      UND ihr Waechter ist eingeschaltet (enabled) — der Wunsch
+    #      allein reicht nie;
+    #   2. der Waechter LAEUFT wirklich. Der Zustand kommt aus
+    #      live_health(), also aus der Engine-QUITTUNG (K1) und nicht
+    #      aus dem Config-Wunsch: faellt die Engine aus oder ist der
+    #      Waechter gestoert, wird sofort wieder normal analysiert.
+    #      Genau das ist der Sinn — der Schalter darf nie zu einem
+    #      stillen Loch werden, in dem gar nichts mehr schaut;
+    #   3. Frigates EIGENE Behauptung ueber die Person
+    #      wird IMMER geprueft, dieselbe Sicherheitslogik wie beim
+    #      Zonen-Filter und beim Kamera-Aus darueber (Review 21.07.:
+    #      ohne dieses Netz wird ein Fremder->Bekannt-Fehlmatch nie
+    #      widerlegt); eigene Waechter-Ereignisse nur mit eigene_pruefen.
+    from core import livewache as _lw_wa
+    _lg = ((cfg.get("live") or {}).get("guards") or {}).get(camera) or {}
+    try:
+        # _bool_lesen statt roher bool()-Wahrheit: ein
+        # hand-editiertes "worker_aus": "false" ist als String
+        # truthy und haette die Analyse dieser Kamera still
+        # abgeschaltet — genau der Fehler, den _live_guards_aktiv
+        # schon einmal hatte (Widerleger phase34 MUSS-1). Log
+        # stumm: die LAUTE Meldung gehoert guards_lesen beim
+        # Start, hier laeuft es je Event.
+        _still = lambda _z: None                  # noqa: E731
+        _will = (isinstance(_lg, dict)
+                 and _lw_wa._bool_lesen(_lg.get("worker_aus"), False,
+                                        _still, "worker_aus")
+                 and _lw_wa._bool_lesen(_lg.get("enabled"), False,
+                                        _still, "enabled"))
+    except Exception:                             # noqa: BLE001
+        _will = False
+    if not _will:
+        return False, False
+    _own_event = _frigateevents.is_own_event(cfg, eid)
+    _recheck_own = _lw_wa._bool_lesen(_lg.get("eigene_pruefen"), False,
+                                      log, "eigene_pruefen")
+    if not _einspiel.name_requires_check(f_label, _own_event, _recheck_own):
+        _wz = ((live_health().get("watchers") or {})
+               .get(camera) or {}).get("state")
+        # H1 / E-P9 (.507, Feldbefund 05.09.): der letzte Schritt
+        # der Entscheidung steht als REINE Funktion in
+        # core/einspielen — sie kennt zusaetzlich die Marke des
+        # Queue-Eintrags. Eine Support-Einspielung umgeht den
+        # Uebersprung BEWUSST (ihr Zweck IST die Re-Analyse
+        # dieses Ereignisses); bis .506 antwortete die API
+        # "eingereiht 7" und der Worker uebersprang alle sieben
+        # still. Normalbetrieb (Poll/MQTT) reicht keine Marke
+        # herein und verhaelt sich damit bitgleich zu .506.
+        if _einspiel.live_only_ueberspringen(
+                _wz == _reg.LIVE_AKTIV, marke):
+            return True, _own_event
+    return False, _own_event
 
 
 def open_deadline(cfg, ev):
@@ -7336,7 +7410,8 @@ class Vorlauf:
     der letzten Abfrage, Abrufversuche und Ruecklaeufe (Konzept 3.2, 3.3).
 
     EINORDNUNG in der Reihenfolge von `process()`: Metadaten (Eingespieltes lokal, sonst Frigate mit 404), offen
-    (Frist ueber `open_deadline`), feste Filter (`fixed_filters`), `has_clip`, sonst holen. Eingeordnet wird entlang
+    (Frist ueber `open_deadline`), feste Filter (`fixed_filters`), Uebersprung `live_only` (`live_only_skip`, Bauplan
+    Fixes FX2), `has_clip`, sonst holen. Eingeordnet wird entlang
     der gewichteten Reihenfolge, bis das Ziel an Clip-Kandidaten erreicht ist — nie die ganze Schlange auf einmal.
 
     HOLEN in der Reihenfolge, in der zugeteilt wird (7/2/1 ueber alle faelligen Ereignisse, in der Stufe das
@@ -7534,6 +7609,12 @@ class Vorlauf:
         return dispatch_order(je_stufe, runde)
 
     # ------------------------------------------------------------------ Einordnung
+    def _marke_lesen(self, eid):
+        """Die Marke des Queue-Eintrags von eid lesen, ohne sie zu nehmen (genommen wird sie beim Abholen).
+        -> die Marke oder None (auch fuer Dienst-Attrappen ohne Marken)"""
+        with self._wecker():
+            return (getattr(self.svc, "_ev_marken", None) or {}).get(eid)
+
     def _einordnen(self, eid):
         """Ein Ereignis einordnen (Punkt 2, Reihenfolge von `process()`); fragt Frigate, also nie unter einem Schloss.
         -> False nach einem Abfragefehler ausser 404 (die Runde fragt dann nicht weiter), sonst True"""
@@ -7560,8 +7641,14 @@ class Vorlauf:
             abgelaufen = open_deadline(cfg, ev)[2]
             self._setzen(eid, True, state=DISPATCH_NO_CLIP if abgelaufen else DISPATCH_OPEN,
                          reason="offen" if abgelaufen else None, **zeiten)
-        elif fixed_filters(cfg, ev, eid in getattr(self.svc, "own_writes", ()))[0] is not None:
+            return True
+        filter_reason, f_label = fixed_filters(cfg, ev, eid in getattr(self.svc, "own_writes", ()))
+        if filter_reason is not None:
             self._setzen(eid, True, state=DISPATCH_NO_CLIP, reason="filter", **zeiten)
+        elif live_only_skip(cfg, ev.get("camera", "?"), eid, f_label, self._marke_lesen(eid),
+                            lambda: self.svc.live_health(), self.svc.log)[0]:
+            # Bauplan Fixes FX2 (O982): der Worker braucht diesen Clip nicht; `process` entscheidet neu und bucht.
+            self._setzen(eid, True, state=DISPATCH_NO_CLIP, reason="live_only", **zeiten)
         elif ev.get("has_clip") is False and self._lokal_bytes(eid) <= 0:
             self._setzen(eid, True, state=DISPATCH_NO_CLIP, reason="clip_weg", **zeiten)
         elif ev.get("has_clip") is False:
@@ -8646,7 +8733,7 @@ class Service:
         Akte-Feld `namenszuordnung`, sonst bleibt alles wie bisher. Die Parameter bleiben `entry` und `nachhol`, weil
         Proben die Funktion durch eine mit genau diesen ersetzen. Traegt die Zuordnung fuer dieses Ereignis einen
         Namen, wird er geschrieben, sonst der
-        staerkste Name des Clips (Ersatzweg; die WARNING steht in process). Dazu berichtigt der Lauf eigene fruehere
+        staerkste Name des Clips (Ersatzweg; die INFO steht in process). Dazu berichtigt der Lauf eigene fruehere
         Schreibvorgaenge mit einem anderen Namen, auch den eines frueheren Laufs dieses Ereignisses: nur, wenn die
         letzte Zeile des Schreibprotokolls fuer das Ereignis von suslik stammt, und in der Spur erst, wenn Frigate
         noch genau diesen Namen traegt (ein fremder oder inzwischen geaenderter Name bleibt). Ein Nachhol-Lauf
@@ -8742,8 +8829,62 @@ class Service:
         # sub_label auch dann, wenn der POST spaeter scheitert — der
         # Fehlschlag steht laut im Log (bis .398 stand dann None in der
         # Akte, der writes-Protokoll-Eintrag existierte aber genauso).
-        self._spur(f"sub_label {eid}", lambda: _senden(eid, top, score))
+        # Bauplan analysen/bauplan_fixes_0_1_1_050.md, Stufe FX3: nur dieser Hauptweg wiederholt nach einem
+        # voruebergehenden Fehler (_sublabel_attempt), die Berichtigung oben bleibt beim einen Versuch.
+        self._spur(f"sub_label {eid}", lambda: self._sublabel_attempt(eid, top, score, _senden))
         return top
+
+    def _sublabel_target(self, eid, name, score):
+        """Der Zielname einer Wiederholung (Stufe FX3): `label` und `score` der letzten Zeile des Schreibprotokolls fuer
+        diese Kennung, Zeilen mit `readonly` zaehlen nicht; so gewinnt eine inzwischen beschlossene Berichtigung auch dann,
+        wenn sie selbst nicht schreiben konnte. -> (Name, Wert); ohne solche Zeile mit WARNING der uebergebene Name"""
+        letzte = None
+        p = self._writes_pfad()
+        if os.path.exists(p):
+            with open(p) as f:
+                for l in f:
+                    try:
+                        d = json.loads(l)
+                    except Exception:
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
+                        continue
+                    if d.get("eid") == eid and not d.get("readonly"):
+                        letzte = d
+        if letzte is None:
+            self.log.warning(f"{eid}: sub_label retry finds no line in the write log, keeping '{name}'")
+            return name, score
+        return letzte["label"], letzte["score"]
+
+    def _sublabel_attempt(self, eid, name, score, senden, versuch=1):
+        """Ein Versuch des Hauptwegs in der Melde-Spur (Stufe FX3). Ab dem zweiten Versuch gilt der Zielname des
+        Schreibprotokolls, und geschrieben wird nur, wenn Frigate noch leer ist. Nach einem voruebergehenden Fehler kommt
+        der naechste Versuch per Timer zurueck in die Spur, die dadurch nie blockiert; ohne gestartete Spur bleibt es beim
+        einen Versuch. -> None (zaehlt als gesendet) oder `_SPUR_UNCOUNTED`; wirft beim endgueltigen Scheitern"""
+        try:
+            if versuch > 1:
+                name, score = self._sublabel_target(eid, name, score)
+                ist = api(self.cfg, f"/api/events/{eid}").get("sub_label")
+                if ist == name:
+                    self.log.info(f"{eid}: sub_label '{name}' is already in Frigate at attempt {versuch}, "
+                                  f"not written again")
+                    return None
+                if ist:
+                    self.log.info(f"{eid}: sub_label retry '{name}' NOT written — Frigate carries '{ist}' "
+                                  f"(a name already in Frigate is not overwritten by a retry)")
+                    return self._SPUR_UNCOUNTED
+            senden(eid, name, score)
+            return None
+        except Exception as e:                              # noqa: BLE001
+            if (not frigate_error_transient(e) or versuch >= DISPATCH_ATTEMPTS_MAX
+                    or not hasattr(self, "_spur_q")):
+                raise
+            self.log.warning(f"{eid}: sub_label attempt {versuch}/{DISPATCH_ATTEMPTS_MAX} failed "
+                             f"({type(e).__name__}: {e}), next attempt in {DISPATCH_RETRY_S:g} s")
+            timer = threading.Timer(DISPATCH_RETRY_S, self._spur, args=(
+                f"sub_label {eid}", lambda: self._sublabel_attempt(eid, name, score, senden, versuch + 1)))
+            timer.daemon = True
+            timer.start()
+            return self._SPUR_UNCOUNTED
 
     # Modulumbau R3: MQTT-Publisher lebt in core/melden.py (Docstrings/
     # Begruendungen dort). Hier nur Einhaenge: der Dienst bleibt Halter von
@@ -9986,8 +10127,8 @@ class Service:
                         self._spur_wecker.wait(timeout=30)
                     beschreibung, fn = self._spur_q.popleft()
                 try:
-                    fn()
-                    self._spur_stat["gesendet"] += 1
+                    if fn() is not self._SPUR_UNCOUNTED:
+                        self._spur_stat["gesendet"] += 1
                 except Exception as e:                      # noqa: BLE001
                     self._spur_stat["fehler"] += 1
                     self.log.error(f"delivery lane: {beschreibung} failed "
@@ -10892,6 +11033,10 @@ class Service:
                  f"at its limit for this event's priority ({self.EV_QUEUE_MAX} per "
                  f"priority); nothing is waiting for this event, please retry later")
         return False
+
+    # Rueckgabe eines Spur-Auftrags, der weder als gesendet noch als fehler zaehlt: der naechste Versuch steht noch aus
+    # oder der Auftrag endet ohne Versand (Stufe FX3, _sublabel_attempt).
+    _SPUR_UNCOUNTED = object()
 
     def _spur(self, beschreibung, fn):
         """Einen Versand in die Nachwehen-Spur legen (nie blockierend)."""
@@ -23650,113 +23795,66 @@ class Service:
                 else:
                     self.log.warning(f"{eid} ({camera}): skipped (no required_zone, no sub_label)")
                 return None
-            # .407 LIVE ERSETZT DIE EREIGNIS-ANALYSE (User-Spezifikation):
-            # Sieht der Live-Waechter dieser Kamera ohnehin zu, ist die
-            # Event-Analyse desselben Feeds Doppelarbeit — dieselbe Person
-            # zweimal gerechnet. DREI Bedingungen muessen zusammenkommen, und
-            # zwar alle drei zur LAUFZEIT geprueft:
-            #   1. der Nutzer hat es fuer diese Kamera gewollt (worker_aus)
-            #      UND ihr Waechter ist eingeschaltet (enabled) — der Wunsch
-            #      allein reicht nie;
-            #   2. der Waechter LAEUFT wirklich. Der Zustand kommt aus
-            #      live_health(), also aus der Engine-QUITTUNG (K1) und nicht
-            #      aus dem Config-Wunsch: faellt die Engine aus oder ist der
-            #      Waechter gestoert, wird sofort wieder normal analysiert.
-            #      Genau das ist der Sinn — der Schalter darf nie zu einem
-            #      stillen Loch werden, in dem gar nichts mehr schaut;
-            #   3. Frigates EIGENE Behauptung ueber die Person
-            #      wird IMMER geprueft, dieselbe Sicherheitslogik wie beim
-            #      Zonen-Filter und beim Kamera-Aus darueber (Review 21.07.:
-            #      ohne dieses Netz wird ein Fremder->Bekannt-Fehlmatch nie
-            #      widerlegt); eigene Waechter-Ereignisse nur mit eigene_pruefen.
+            # .407 LIVE ERSETZT DIE EREIGNIS-ANALYSE: die Entscheidung steht seit Bauplan Fixes FX2 (O982) in der
+            # gemeinsamen Funktion `live_only_skip`, die auch der Disponent fragt; Akte und Log bleiben hier.
             # Die Akte bekommt eine ehrliche Zeile (kategorie uebersprungen,
             # Grund live_only) statt eines stillen Verschwindens: der Event
             # taucht in der Ereignis-Liste auf und sagt, warum hier nichts
             # gerechnet wurde.
-            from core import livewache as _lw_wa
-            _lg = ((cfg.get("live") or {}).get("guards") or {}).get(camera) or {}
-            _own_event = _frigateevents.is_own_event(cfg, eid)
-            _recheck_own = (_lw_wa._bool_lesen(_lg.get("eigene_pruefen"), False,
-                                            self.log, "eigene_pruefen")
-                            if isinstance(_lg, dict) else False)
-            if not _einspiel.name_requires_check(f_label, _own_event, _recheck_own):
-                try:
-                    # _bool_lesen statt roher bool()-Wahrheit: ein
-                    # hand-editiertes "worker_aus": "false" ist als String
-                    # truthy und haette die Analyse dieser Kamera still
-                    # abgeschaltet — genau der Fehler, den _live_guards_aktiv
-                    # schon einmal hatte (Widerleger phase34 MUSS-1). Log
-                    # stumm: die LAUTE Meldung gehoert guards_lesen beim
-                    # Start, hier laeuft es je Event.
-                    _still = lambda _z: None                  # noqa: E731
-                    _will = (isinstance(_lg, dict)
-                             and _lw_wa._bool_lesen(_lg.get("worker_aus"), False,
-                                                    _still, "worker_aus")
-                             and _lw_wa._bool_lesen(_lg.get("enabled"), False,
-                                                    _still, "enabled"))
-                except Exception:                             # noqa: BLE001
-                    _will = False
-                if _will:
-                    _wz = ((self.live_health().get("watchers") or {})
-                           .get(camera) or {}).get("state")
-                    # H1 / E-P9 (.507, Feldbefund 05.09.): der letzte Schritt
-                    # der Entscheidung steht als REINE Funktion in
-                    # core/einspielen — sie kennt zusaetzlich die Marke des
-                    # Queue-Eintrags. Eine Support-Einspielung umgeht den
-                    # Uebersprung BEWUSST (ihr Zweck IST die Re-Analyse
-                    # dieses Ereignisses); bis .506 antwortete die API
-                    # "eingereiht 7" und der Worker uebersprang alle sieben
-                    # still. Normalbetrieb (Poll/MQTT) reicht keine Marke
-                    # herein und verhaelt sich damit bitgleich zu .506.
-                    if _einspiel.live_only_ueberspringen(
-                            _wz == _reg.LIVE_AKTIV, marke):
-                        # .415 DEADLOCK-FIX (Tester-Realfall 02.09.: erster
-                        # Live-only-Event fror den Verarbeitungs-Thread fuer
-                        # immer ein): process() HAELT self.lock bereits (Zeile
-                        # "with self.lock:" am Anfang), threading.Lock ist NICHT
-                        # reentrant — ein zweites `with self.lock` hier blockiert
-                        # gegen sich selbst, ohne Logzeile, /health bleibt ok.
-                        # Der Akte-Schreibweg ist durch den aeusseren Lock
-                        # bereits serialisiert. Gate: QS-Laufprobe LIVEONLY-RUN.
-                        with self.lock, open(self.log_path, "a") as f:
-                            f.write(json.dumps(
-                                {"schema": 3, "ts": round(time.time(), 1), "eid": eid,
-                                 "camera": camera, "start": ev.get("start_time"),
-                                 "faces": 0, "max_bw": 0, "frames_gelesen": None,
-                                 "frames_soll": None,
-                                 "frigate": {"label": None, "score": None, "cos": None},
-                                 "ours": {}, "bestaetigt": [],
-                                 "kategorie": "uebersprungen",
-                                 # v1 gleich: es lief keine Analyse, ein
-                                 # verdict()-Wert waere hier gelogen (Muster
-                                 # der start_catchup-Zeile im Sweep).
-                                 "kategorie_v1": "uebersprungen", "dauer_s": 0.0,
-                                 "alerted": False,
-                                 "ende_ts": ev.get("end_time"),
-                                 "uebersprungen": {"grund": "live_only"}},
-                                ensure_ascii=False) + "\n")
-                            f.flush()
-                        with self.lock: self.processed.add(eid)
-                        # .409 (F1, Kontrolle 02.09.): hier BEWUSST KEINE
-                        # Luecken-Marke. .408 schrieb eine — semantisch
-                        # falsch: der Uebersprung passiert NUR, wenn der
-                        # Live-Waechter dieser Kamera laeuft (state active,
-                        # oben geprueft), und der schaut hin. Das ist
-                        # "betrachtet, niemand benannt" (gruen), nicht
-                        # "nicht hingesehen" (leer). Mit Luecke waere jede
-                        # Live-only-Kamera ohne benannte Person dauernd
-                        # leer gewesen. Die Luecken bei start_catchup=off und
-                        # kategorie fehler bleiben richtig — dort lief
-                        # wirklich nichts. PYANW sichert das zu.
-                        # .511: Routine-Buchhaltung — bei einer Anlage mit
-                        # Live-Waechtern faellt diese Zeile je Ereignis an
-                        # (12.755 in zwei Tagen beim Feldtester). Der Uebersprung
-                        # selbst steht als 'uebersprungen'-Zeile in der Akte,
-                        # geht also nicht verloren, wenn debug aus ist.
-                        self.log.debug(f"{eid} ({camera}): skipped (live watcher "
-                                   f"covers this camera)"
-                                   + (" — own watcher event" if _own_event else ""))
-                        return None
+            _live_skip, _own_event = live_only_skip(cfg, camera, eid, f_label, marke,
+                                                    lambda: self.live_health(), self.log)
+            if _live_skip:
+                # .415 DEADLOCK-FIX (Tester-Realfall 02.09.: erster
+                # Live-only-Event fror den Verarbeitungs-Thread fuer
+                # immer ein): process() HAELT self.lock bereits (Zeile
+                # "with self.lock:" am Anfang), threading.Lock ist NICHT
+                # reentrant — ein zweites `with self.lock` hier blockiert
+                # gegen sich selbst, ohne Logzeile, /health bleibt ok.
+                # Der Akte-Schreibweg ist durch den aeusseren Lock
+                # bereits serialisiert. Gate: QS-Laufprobe LIVEONLY-RUN.
+                with self.lock, open(self.log_path, "a") as f:
+                    f.write(json.dumps(
+                        {"schema": 3, "ts": round(time.time(), 1), "eid": eid,
+                         "camera": camera, "start": ev.get("start_time"),
+                         "faces": 0, "max_bw": 0, "frames_gelesen": None,
+                         "frames_soll": None,
+                         # Bauplan Fixes FX5: ein eigenes Ereignis behaelt den Namen, den der Waechter entschieden hat,
+                         # und traegt die Quelle; ours, bestaetigt und Scores bleiben leer, es lief hier keine Analyse.
+                         "frigate": {"label": f_label if _own_event else None,
+                                     "score": None, "cos": None},
+                         "ours": {}, "bestaetigt": [],
+                         "kategorie": "uebersprungen",
+                         # v1 gleich: es lief keine Analyse, ein
+                         # verdict()-Wert waere hier gelogen (Muster
+                         # der start_catchup-Zeile im Sweep).
+                         "kategorie_v1": "uebersprungen", "dauer_s": 0.0,
+                         "alerted": False,
+                         "ende_ts": ev.get("end_time"),
+                         "uebersprungen": {"grund": "live_only"},
+                         **({"quelle": "live"} if _own_event else {})},
+                        ensure_ascii=False) + "\n")
+                    f.flush()
+                with self.lock: self.processed.add(eid)
+                # .409 (F1, Kontrolle 02.09.): hier BEWUSST KEINE
+                # Luecken-Marke. .408 schrieb eine — semantisch
+                # falsch: der Uebersprung passiert NUR, wenn der
+                # Live-Waechter dieser Kamera laeuft (state active,
+                # oben geprueft), und der schaut hin. Das ist
+                # "betrachtet, niemand benannt" (gruen), nicht
+                # "nicht hingesehen" (leer). Mit Luecke waere jede
+                # Live-only-Kamera ohne benannte Person dauernd
+                # leer gewesen. Die Luecken bei start_catchup=off und
+                # kategorie fehler bleiben richtig — dort lief
+                # wirklich nichts. PYANW sichert das zu.
+                # .511: Routine-Buchhaltung — bei einer Anlage mit
+                # Live-Waechtern faellt diese Zeile je Ereignis an
+                # (12.755 in zwei Tagen beim Feldtester). Der Uebersprung
+                # selbst steht als 'uebersprungen'-Zeile in der Akte,
+                # geht also nicht verloren, wenn debug aus ist.
+                self.log.debug(f"{eid} ({camera}): skipped (live watcher "
+                           f"covers this camera)"
+                           + (" — own watcher event" if _own_event else ""))
+                return None
             # Bauplan Disponent D2 Punkt 1: Frigate sagt ausdruecklich, die Aufnahme ist weg (`has_clip` genau False),
             # und hier liegt kein lokaler Clip mit Inhalt. Nach allen Filtern und vor dem Analyseauftrag endgueltig als
             # `uebersprungen` mit Grund `clip_weg` abschliessen statt eines Abrufs, der nur scheitern kann; nicht in
@@ -24418,9 +24516,9 @@ class Service:
                         entry["namenszuordnung"] = {k: _nz_eig[k] for k in ("name", "grund", "t0", "schaerfe")}
                         _namenszuordnung.zaehlen(_nz_eig["grund"])
                         if _nz_eig["name"] is None:
-                            self.log.warning(f"{eid} ({camera}): name assignment without a name "
-                                             f"({_nz_eig['grund']}) — fallback, the strongest name of the clip "
-                                             f"applies")
+                            self.log.info(f"{eid} ({camera}): name assignment without a name "
+                                          f"({_nz_eig['grund']}) — fallback, the strongest name of the clip "
+                                          f"applies")
                         else:
                             self.log.info(f"{eid} ({camera}): name assignment '{_nz_eig['name']}' "
                                           f"({_nz_eig['grund']}, start {_nz_eig['t0']}, sharpness "
@@ -32143,7 +32241,7 @@ def make_handler(svc):
                 from routes import kalibrierung as _r_kal
                 from routes import livekalib as _r_lk
                 kamera = urllib.parse.unquote(path[len("/kalibrierung/"):])
-                _d_lk, _g_lk = _lwk.guards_lesen(cfg, _logbuch.NULL)
+                _, _g_lk = _lwk.guards_lesen(cfg, _logbuch.NULL)
                 _cams_lk, _ = frigate_cameras(cfg)
                 if kamera not in _kk.bekannt(cfg, _cams_lk):
                     # Den Namen nie aus der URL uebernehmen (keine zweite
@@ -32173,7 +32271,7 @@ def make_handler(svc):
                 _pru_lk = _ru_lk.pruef_werte(_ru_lk.pruef_latten(cfg), kamera)
                 inhalt = _r_lk.render(
                     kamera, _lwk.kalib_lesen(cfg, kamera), _g_lk.get(kamera),
-                    {"det": _d_lk["min_score"],
+                    {"det": cfg["det_thresh"],
                      "e": _kk.anzeige_start()["e"], "t": _kk.anzeige_start()["t"]},
                     {"akt": _kat_lk, "std": _kk.katalog_start()},
                     pruef={"akt": _pru_lk, "std": dict(_ru_lk.PRUEF_STARTWERTE)},
@@ -33457,9 +33555,10 @@ def make_handler(svc):
                 # Satz mit der juengsten aktiven Bindung (Lese-Stufe b, Feld
                 # personen, erste ref_id), die Zahl der Referenzen kommt aus
                 # master_umfang — kein Lesen von faces/ und refs_meta mehr.
+                # Bauplan analysen/bauplan_fixes_0_1_1_050.md Stufe FX6: dieselbe Auswahl aus der Sicht ohne Katalog-Kopie.
                 with _rt.step("catalog"):                 # Bauplan Seiten-Zeitprotokoll SZ1 Punkt 6
                     _pl = [(_p, _rids[0]) for _p, _rids in sorted(
-                        _rq_fc.read_catalog({"data_dir": cfg["data_dir"]})["personen"].items())]
+                        _rq_fc.persons_view({"data_dir": cfg["data_dir"]}).items())]
                 _nb = master_umfang(cfg)[1]
                 # Stufe V1c: Identitaeten mit mindestens einem Mitglied (Satz oder
                 # Altbestand) ueber den einen Leser core.unbekanntpool.mitglieder.
@@ -33480,10 +33579,11 @@ def make_handler(svc):
                 except Exception:
                     _lo = 0
                 # .273 Bestands-QS-Karte: Stand der letzten Pruefung (E3b-2b: ueber
-                # anlernen.qs_lesen, entfernte Saetze zaehlen nicht mehr mit)
+                # anlernen.qs_lesen, entfernte Saetze zaehlen nicht mehr mit; seit Stufe FX6 ohne die Urteile, die Karte
+                # braucht nur ts und die gefilterten Listen)
                 _qs_stand = None
                 try:
-                    _q = anlernen.qs_lesen()
+                    _q = anlernen.qs_lesen(urteile=False)
                     if _q.get("ts"):
                         _qs_stand = {"ts": _q.get("ts"),
                                      "funde": (len(_q.get("ungeeignet") or [])

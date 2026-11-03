@@ -38,13 +38,14 @@ def render(personen, data_dir, gefiltert=False, alle=None, pruefung=None):
     (Lese-Stufe b, Feld personen: juengste Bindung zuerst), das Bild kommt
     ueber /lernlauf/satz/<ref_id> (Lese-Stufe d), der Entfernen-Knopf gibt die
     ref_id weiter. Kein Lesen von faces/; der Altbestand dort erscheint erst
-    nach dem Umzug (E4)."""
+    nach dem Umzug (E4). Seit Stufe FX6 (Bauplan analysen/bauplan_fixes_0_1_1_050.md) dieselbe Auswahl aus
+    Lese-Stufe e, ohne Katalog-Kopie; hier wird die Liste nur gelesen."""
     opts = "".join(f"<option>{html.escape(p)}</option>"
                    for p in (personen if alle is None else alle))
 
     def _js(s):        # JS-String-Kontext in onclick (s. Qualitaet-Route)
         return html.escape(s.replace("\\", "\\\\").replace("'", "\\'"), quote=True)
-    saetze = refquelle.read_catalog({"data_dir": data_dir})["personen"]
+    saetze = refquelle.persons_view({"data_dir": data_dir})
     gal = []
     for pp in personen:
         bil = saetze.get(pp, [])

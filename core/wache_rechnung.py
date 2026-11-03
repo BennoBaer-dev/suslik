@@ -74,16 +74,23 @@ class ReferenceStore:
         self.cfg, self.identity = {"data_dir": str(data_dir)}, identity
         self.source, self.log = source, log
         self.snapshot, self.generation, self.error = None, 0, "References have not been read"
+        self.watch = None
 
     def refresh(self):
-        """Liest nach einem Katalogwechsel einen ganzen, nach Modell gesiebten Abzug.
+        """Liest einen ganzen, nach Modell gesiebten Abzug, wenn neue Katalogzeilen die Referenzen betreffen.
         -> ReferenceSnapshot oder None; ein Fehler entwertet alte Generationen.
         """
         import worker_kern as wk
         try:
             state = self.source.state_id(self.cfg)
-            if self.snapshot is not None and state == self.snapshot.recognition["stand"]:
-                return self.snapshot
+            if self.snapshot is not None:
+                known = self.watch["stand"] if self.watch is not None else self.snapshot.recognition["stand"]
+                if state == known:
+                    return self.snapshot
+                if not self.source.matrix_affected(self.cfg, self.watch):
+                    self.log.debug(f"reference catalog changed ({known} -> {self.watch['stand']}): "
+                                   "no new line touches the references, snapshot kept")
+                    return self.snapshot
             if self.snapshot is None:
                 self.source.heads_clear(self.cfg)
             self.source.catalog_ref_ids(self.cfg)
@@ -92,8 +99,6 @@ class ReferenceStore:
             if reading["ausgelassen"] or (watch is not None and watch["fehlte"]):
                 raise ValueError("Incomplete reference read")
             all_names, reference_names, recognition = wk.referenzen_laden(reading, self.identity)
-            if self.source.state_id(self.cfg) != recognition["stand"]:
-                raise ValueError("Reference state changed during read")
             for key in ("refs", "refs_t"):
                 recognition[key].flags.writeable = False
             snapshot = ReferenceSnapshot(self.generation + 1, tuple(all_names),
@@ -106,6 +111,7 @@ class ReferenceStore:
             self.snapshot, self.error = None, reason
             return None
         self.snapshot, self.generation, self.error = snapshot, snapshot.generation, None
+        self.watch = watch
         self.log.info("Complete reference generation installed")
         if not snapshot.reference_names:
             self.log.warning("No usable references; name notifications blocked")

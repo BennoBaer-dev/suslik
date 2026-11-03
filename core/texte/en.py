@@ -3344,6 +3344,9 @@ T = {
     "baustein.kat.frigate_nur": "Frigate only",
     "baustein.kat.wir_nur": "suslik only",
     "baustein.kat.beide_unknown": "Both unknown",
+    # Bauplan Fixes FX5: Akte-Zeile des Live-Waechters (bausteine.akte_kat_wort, akte_live_name).
+    "baustein.akte.live_only": "Handled by live watcher",
+    "baustein.akte.quelle_live": "Live watcher",
     # 3d: Wortstufen-ANZEIGE (bausteine.stufe_wort) — Meldetexte/Logs
     # lesen weiter core/vertrauen.label() englisch. EN == vertrauen.LABELS.
     "baustein.stufe.clear": "clear match",

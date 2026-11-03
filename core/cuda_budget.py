@@ -42,13 +42,28 @@ def pair_reason(measured, total):
     -> Grund oder None; fehlend, veraltet und fremder Zyklus sind getrennt benannt,
     fehlende/alte Werte sind keine Nullmessung. Die Gründe bleiben ohne Messzahlen
     (gleicher Grund, gleiche Meldung); Zeiten und Alter stehen im Debugweg des Dienstes."""
+    return _pair_fault(measured, total, True)
+
+
+def own_unknown(measured, total):
+    """Sagt, ob am Messpaar nur der eigene Anteil des Workers fehlt (Stufe FX9, O1006).
+    -> bool; wahr nur, wenn sonst alles besteht, was `pair_reason` prüft."""
+    if not measured:
+        return False
+    own = measured["own"]
+    return bool(own.get("grund") or own.get("mb") == 0) and _pair_fault(measured, total, False) is None
+
+
+def _pair_fault(measured, total, own_required):
+    """Die Prüfungen von `pair_reason`; ohne `own_required` zählen Grund und Menge des eigenen Anteils nicht.
+    -> Grund oder None."""
     if not measured:
         return "missing measurement: no card/worker pair for the running worker"
     card, own = measured["card"], measured["own"]
     now, age = measured["now"], measured["max_age"]
     if not measured.get("alive", True):
         return "worker no longer alive"
-    if card.get("grund") or own.get("grund"):
+    if card.get("grund") or (own_required and own.get("grund")):
         return f"missing measurement: card={card.get('grund')}, own={own.get('grund')}"
     if card.get("worker") != measured["worker"] or own.get("worker") != measured["worker"]:
         return "worker generation mismatch"
@@ -62,8 +77,9 @@ def pair_reason(measured, total):
             or not 0 <= own["ts"] - card.get("ende", card["ts"]) <= age
             or not 0 <= own.get("ende", own["ts"]) - own["ts"] <= age):
         return f"stale measurement: card and own samples more than {age} s apart in one cycle"
-    if (type(card.get("mb")) is not int or type(own.get("mb")) is not int
-            or card["mb"] < 0 or own["mb"] <= 0 or own["mb"] + card["mb"] > total):
+    own_mb = own.get("mb") if own_required else 0
+    if (type(card.get("mb")) is not int or type(own_mb) is not int
+            or card["mb"] < 0 or (own_required and own_mb <= 0) or own_mb + card["mb"] > total):
         return "invalid card and own amounts"
     return None
 
@@ -84,26 +100,35 @@ def ladder(budget, wish, maximum, prices, decoder_mb):
 
 
 def selection(out, free, own, reason, guards, guard_reason, running_n, stock,
-              prices, maximum, decoder_mb):
+              prices, maximum, decoder_mb, own_unknown=False):
     """Plant CUDA aus nativfrei und gültigem Eigenbestand, ohne Tabellen-Rückgutschrift.
-    -> Ergebnis im bestehenden Dienstformat; echte Knappheit bleibt verweigert."""
+    -> Ergebnis im bestehenden Dienstformat; echte Knappheit bleibt verweigert.
+
+    `own_unknown` (Stufe FX9): der Anteil des laufenden Workers fehlt, die Karte ist gemessen. Das Budget enthält ihn dann,
+    ohne ihn gutzuschreiben, und sagt nichts darüber, ob die Karte ihn trägt; deshalb verweigert `unter_pflicht` hier nicht.
+    Trägt es den Wunsch nicht, bleibt die Zahl bei den laufenden Strängen, damit kein Drain auf eine Zahl ohne Deckung folgt."""
     total, wish = out["gesamt_mb"], out["reserve_wunsch_mb"]
     res = reserve(total, wish)
     budget = max(0, free + own - res - guards)
     lt = ladder(budget, out["nutzer_n"], maximum, prices, decoder_mb)
+    unknown = own_unknown and reason is None
+    wanted = lt["n"]
+    held = unknown and lt["unter_pflicht"] and running_n < wanted
+    if held:
+        lt = ladder(budget, running_n, maximum, prices, decoder_mb)
     n = lt["n"]
     if running_n and own:
         peak, source = state(prices,max(n,running_n),max(1,stock or 1))
         lt["summe_mb"] = max(lt["summe_mb"], own, peak)
         lt["current_peak_mb"] = peak if source.startswith("measured") else None
-    refused = total <= 0 or reason is not None or lt["unter_pflicht"]
+    refused = total <= 0 or reason is not None or (lt["unter_pflicht"] and not unknown)
     cap = max(1, stock or 0) if running_n else 1
     arena = max(1, budget - n * decoder_mb)
     # MP1: Anlaufbedarf (vorläufig oder gemessener Zustand) und gültige laufende
     # Messung getrennt benennen; nur Aussagen, keine Rechen- oder Freigaberegel.
     if not running_n:
         own_text = "no running worker"
-    elif reason is not None:
+    elif reason is not None or unknown:
         own_text = "running worker measurement unavailable, not credited"
     else:
         own_text = f"running worker measured {own} MiB (worker/decoders)"
@@ -122,6 +147,10 @@ def selection(out, free, own, reason, guards, guard_reason, running_n, stock,
             f"{arena_text}, not a worker PID measurement")
     warning = reason or (f"no measured state for {n} thread(s)/one geometry yet, startup need "
                          f"stays provisional ({lt['quelle']})" if not lt["gemessen_mb"] else None)
+    if unknown:
+        warning = "own card share of the running worker unknown, planned from measured free memory without crediting it"
+        if held:
+            warning += f"; the budget does not carry the {wanted} requested thread(s), staying at the {n} running"
     out.update(n=n, formel_n=n, leiter=lt, g_zusatz=max(0, cap - 2), geometrien_max=cap,
                reserve_mb=res, reserve_quelle="config" if wish >= 0 else "absolute CUDA profile",
                worker_budget_mb=budget, frei_mb=budget, frei_quelle="gemessen",
@@ -190,7 +219,9 @@ def geometry_plan(st, arena_mb, running_n=0, stock_known=True, measured=None):
     if st.get("kind") != "cuda" or st.get("verweigert"):
         return st
     out = dict(st)
-    reason = pair_reason(measured, st["gesamt_mb"]) if running_n else None
+    # Stufe FX9: fehlt nur der eigene Anteil, zählt der Spielraum aus dem gemessenen Frei ohne Gutschrift.
+    reason = (pair_reason(measured, st["gesamt_mb"])
+              if running_n and not own_unknown(measured, st["gesamt_mb"]) else None)
     cap = max(1, st.get("geometrien_max") or 1)
     held_decoders = int(((measured or {}).get("own") or {}).get("decoder_mb") or 0)
     pending = max(0, int(st.get("posten_ausserhalb_mb") or 0) - held_decoders)

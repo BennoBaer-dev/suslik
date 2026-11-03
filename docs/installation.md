@@ -79,11 +79,11 @@ docker pull ghcr.io/bennobaer-dev/suslik:latest-gpu-legacy  # Intel Gen8/9/11 (t
 docker pull ghcr.io/bennobaer-dev/suslik:latest-rocm        # AMD (testing)
 
 # the same release, pinned so it never moves under you:
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.048-gpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.048-cuda
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.048-cpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.048-gpu-legacy
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.048-rocm
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.050-gpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.050-cuda
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.050-cpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.050-gpu-legacy
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.050-rocm
 ```
 
 > **Testing variants:** `gpu-legacy` and `rocm` follow every release under `latest-*` like
@@ -291,6 +291,11 @@ image (CUDA 12.8) runs on any host driver from **R525** upward via CUDA minor-ve
 compatibility, covering GPUs from Maxwell to the RTX 50 series. Details and the consumer-GPU
 compatibility note are in [hardware-acceleration.md](hardware-acceleration.md).
 
+If the log shows the WARNING `worker PID not in the nvidia-smi process list although the card is
+measured`, the worker keeps working normally and only can't see its own share of the card. On some
+drivers `pid: host` in the compose service (`--pid=host` with `docker run`) makes it visible; this
+isn't required, and it doesn't help everywhere.
+
 ---
 
 ## AMD variant (ROCm / MIGraphX)
@@ -401,7 +406,7 @@ A `latest-*` tag only moves once a release has been deployed and verified on rea
 when to move, pin the version explicitly:
 
 ```yaml
-    image: ghcr.io/bennobaer-dev/suslik:0.1.1.048-cpu
+    image: ghcr.io/bennobaer-dev/suslik:0.1.1.050-cpu
 ```
 
 To move, change the tag and run `docker compose up -d`. Recent versions stay pullable, but a

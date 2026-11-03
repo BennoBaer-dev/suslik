@@ -850,7 +850,11 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
                        engine_alter_s=engine_alter_s)
             return _cuda.fallback(aus, guards, guard_reason, DECODER_CUDA_MB)
         why = _cuda.pair_reason(measured, gesamt) if laufend_n else None
-        own = measured["own"]["mb"] if laufend_n and why is None else 0
+        # Stufe FX9: fehlt nur der eigene Anteil, gilt das Paar ohne Gutschrift, die Karte ist gemessen.
+        own_unknown = bool(laufend_n) and _cuda.own_unknown(measured, gesamt)
+        if own_unknown:
+            why = None
+        own = measured["own"]["mb"] if laufend_n and why is None and not own_unknown else 0
         free = (measured["card"]["mb"] if laufend_n and why is None
                 else max(0, int(frei_gemessen_mb or 0)))
         if isinstance(frei_band, dict) and frei_band.get("moment_mb") is not None and not laufend_n:
@@ -864,7 +868,8 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
                    - s["dienst_mb"] - waechter_posten_mb(n_waechter, kind),
                    engine_alter_s=engine_alter_s)
         result = _cuda.selection(aus, free, own, why, guards, guard_reason, laufend_n,
-                               running_geometries, preise, STRAENGE_MAX, DECODER_CUDA_MB)
+                               running_geometries, preise, STRAENGE_MAX, DECODER_CUDA_MB,
+                               own_unknown=own_unknown)
         for source, target in (("band_mb", "frei_band_mb"), ("fenster_s", "frei_band_fenster_s"),
                                ("n", "frei_band_n"), ("moment_mb", "frei_moment_mb"),
                                ("grund", "frei_band_grund")):
