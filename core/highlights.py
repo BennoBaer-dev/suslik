@@ -12,7 +12,10 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.050"   # 0.1.1.050: neuer Box-Eintrag „Small fixes.“ (Eigentuemer 03.11.2026 15:36:15 "Sorry, what's new, meine ich. Nur small fixes.");
+STAND = "0.1.1.051"   # 0.1.1.051: neuer Box-Eintrag „Small fixes for large systems.“ (Eigentuemer 04.11.2026 09:15:33 "Und bei What's
+                      # New nehmen wir als Text Small Fixes for Large Systems."); Stufen S2 und S2b des Bauplans
+                      # analysen/bauplan_startlesung.md, der CHANGELOG-Abschnitt nennt sie.
+                      # Davor 0.1.1.050: neuer Box-Eintrag „Small fixes.“ (Eigentuemer 03.11.2026 15:36:15 "Sorry, what's new, meine ich. Nur small fixes.");
                       # Stufen FX1 bis FX9, der CHANGELOG-Abschnitt nennt sie.
                       # Davor 0.1.1.049: kein neuer Box-Eintrag (Eigentuemer 02.11.2026 10:18:18 "Ja, Nummer vorbereiten" auf den Vorschlag
                       # ohne Eintrag); Stufe RS1, der CHANGELOG-Abschnitt nennt sie.
@@ -871,6 +874,17 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.1.051 — EIN Punkt, INHALT VOM INHABER: Eigentuemer 04.11.2026 09:15:33 („Und bei What's New nehmen wir als Text
+    # Small Fixes for Large Systems.“). DE, ES, IT, FR und FI nach EN uebersetzt, das Wort fuer die Systeme je Sprache wie
+    # im Eintrag zum GPU-Schalter.
+    ("0.1.1.051", (
+        {"de": "Kleine Korrekturen für große Systeme.",
+         "en": "Small fixes for large systems.",
+         "es": "Pequeñas correcciones para sistemas grandes.",
+         "it": "Piccole correzioni per grandi impianti.",
+         "fr": "Petites corrections pour les grandes installations.",
+         "fi": "Pieniä korjauksia suuriin järjestelmiin."},
+    )),
     # 0.1.1.050 — EIN Punkt, INHALT VOM INHABER: Eigentuemer 03.11.2026 15:36:15 („Sorry, what's new, meine ich. Nur small
     # fixes.“). DE, ES, IT, FR und FI von der Hauptsession (Opus) nach EN uebersetzt.
     ("0.1.1.050", (

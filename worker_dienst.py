@@ -765,10 +765,13 @@ def referenzen_laden(cfg, kennung, log, rechenwerk=None):
     Geraet, Genauigkeit oder Bibliothek bleibt in der Matrix und wird gezaehlt (Entscheid 8), ein
     Satz eines anderen Modells bleibt draussen. Beides, ausgelassene Saetze und ein leerer Katalog
     stehen laut im Log und in der Bindung; ein leerer Katalog ist kein Abbruch (leere Matrix, kein
-    Name moeglich, bis eine Referenz gebunden ist)."""
+    Name moeglich, bis eine Referenz gebunden ist). Bei aktivem DEBUG steht um das Lesen die Zeile der NFS-Zaehler
+    (dateiprobe.nfs_abschnitt, Bauplan analysen/bauplan_startlesung.md S2b Punkt 4)."""
+    from core import dateiprobe                             # noqa: PLC0415
     from core import refquelle                              # noqa: PLC0415
     t0 = time.monotonic()
-    lesung = refquelle.read_matrix(cfg, None)
+    with dateiprobe.nfs_abschnitt(cfg["data_dir"], "worker read_matrix"):
+        lesung = refquelle.read_matrix(cfg, None)
     alle, mit_refs, erk = wk.referenzen_laden(lesung, kennung)
     z = erk["zahlen"]
     bericht = {"stand": erk["stand"], "zeilen": erk["zeilen"],

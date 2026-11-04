@@ -14182,12 +14182,19 @@ class Service:
         Der Start selbst ist ein `ping`: er geht durch dieselbe Mechanik wie jeder
         Job und beweist damit den Rueckweg (Antwort-Pipe, Job-Id) statt nur ein
         Popen abzusetzen. Schlaegt er fehl, ist das KEIN Boot-Abbruch — der erste
-        echte Job startet dann eben lazy, wie bisher."""
+        echte Job startet dann eben lazy, wie bisher.
+
+        DIE FRIST (Bauplan analysen/bauplan_startlesung.md Stufe S2b Punkt 1): ein frischer Worker liest vor seiner
+        Antwort die Referenzen; das dauert auf einem langsamen NFS Minuten, und ein Schuss dabei ist grundlos. Deshalb die
+        Frist eines ersten Analysejobs aus job_deadline, keine eigene Zahl. Ehrliche Grenze: ein wirklich haengender
+        Worker haelt den Boot bis zu dieser Frist auf; ein Absturz faellt weiter sofort auf."""
         d = self.worker_dienst()
         if d is None:
             return False
+        frist_s = job_deadline(self.cfg)[0]
+        t0 = time.monotonic()
         try:
-            antwort = d.job({"typ": "ping"}, 180)
+            antwort = d.job({"typ": "ping"}, frist_s)
         except Exception as e:                             # noqa: BLE001
             self.log.warning(f"worker service did not come up at boot "
                      f"({type(e).__name__}: {e}) — it will start with the first job")
@@ -14196,6 +14203,7 @@ class Service:
             self.log.warning("worker service did not answer its boot ping — it will start "
                      "with the first job")
             return False
+        self.log.info(f"worker service answered its boot ping after {time.monotonic() - t0:.1f} s (deadline {frist_s} s)")
         return True
 
     def referenzquelle_umzug_im_boot(self, skript=None):
@@ -35685,19 +35693,29 @@ def startup_selfcheck(svc):
 
 
 def prewarm_views(svc):
-    """Startet nach dem Start-Selbsttest einen Daemon-Faden, der Akten-Sicht und Namen-Sicht je einmal anfordert.
+    """Startet nach dem Start-Selbsttest einen Daemon-Faden, der Akten-Sicht, Namen-Sicht und Satz-Koepfe je einmal anfordert.
     -> der gestartete Faden
 
     Bauplan analysen/bauplan_perf_katalog.md, Stufe PK2 (Eigentuemer 23.10.2026 17:43:17, einfache Form 18:03:09,
     Fehlerweg 18:17:44). Die Akten-Sicht ueber denselben Weg wie /anwesenheit (core/akte.sicht, ein Abruf), die
-    Namen-Sicht ueber master_persons (Referenz-Quelle). Kein eigenes Schloss, keine Ablage, keine Wiederholung; ein
+    Namen-Sicht ueber master_persons (Referenz-Quelle), als dritte die Satz-Koepfe (refquelle.heads_warm, Bauplan
+    analysen/bauplan_startlesung.md S2: der Nachlauf, der die Stoerungsliste fuellt und den Seiten die Koepfe vorliest;
+    darum seit S2b Punkt 4 bei aktivem DEBUG die Zeile der NFS-Zaehler, dateiprobe.nfs_abschnitt).
+    Kein eigenes Schloss, keine Ablage, keine Wiederholung; ein
     Seitenabruf waehrend des Aufbaus wartet am Schloss der Sicht auf denselben Aufbau. Scheitert ein Aufbau, zaehlt
     das wie ein gescheiterter Startschritt: ERROR-Zeile, FAIL-Eintrag in der Startdatei (core/selfcheck.add_fail),
     startup_fails und damit /health rot bis zum naechsten Start; danach die naechste Sicht. Zeilen ohne Namen und Pfad."""
     from core import akte as _akte_pw
+    from core import dateiprobe as _dp_pw
+    from core import refquelle as _rq_pw
     from core import selfcheck as _sc_pw
+
+    def koepfe():
+        with _dp_pw.nfs_abschnitt(svc.cfg["data_dir"], "set heads"):
+            return _rq_pw.heads_warm(svc.cfg)
     sichten = (("case-file view", lambda: _akte_pw.sicht(svc.log_path).kameras()),
-               ("person-name view", lambda: master_persons(svc.cfg)))
+               ("person-name view", lambda: master_persons(svc.cfg)),
+               ("set heads", koepfe))
 
     def lauf():
         for name, anfordern in sichten:

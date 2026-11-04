@@ -5,6 +5,12 @@ never pushed to GHCR; they ship bundled with the next release (each release entr
 says which steps it bundles). This file keeps the last five releases; the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git history.
 
+## 0.1.1.051 (2026-11-04)
+
+Start on large installations: the service no longer opens every reference set at startup. It reads the catalog and the folder lists and loads the set headers in the background; the analysis worker reads only the sets of its matrix. The worker's startup ping now has the deadline of a first analysis job instead of 180 s, so a worker still reading its references on slow storage is no longer killed. Seen at a field installation with 20,000 sets on NFS, where the start took over 30 minutes and the worker was restarted in a loop.
+
+Diagnostics (debug mode): reads of the reference source log their open times, progress every 30 s and the NFS counters around them. The file probe lists every NFS request kind, measures opening the config file on its own and reports system load and the container's processes.
+
 ## 0.1.1.050 (2026-11-03)
 
 Camera calibration: the calibration page of a camera opens again. Since 0.1.1.045 it failed with a connection error on every installation. A detection value outside the slider's usual range is now shown and saved as it is, instead of being clamped.
@@ -36,7 +42,3 @@ Fault alerts: the 'inactive' alert (no event analysis for more than four hours d
 What's new box: an entry for the live watcher change from 0.1.1.045.
 
 Live watcher: MQTT messages and Frigate events now also go out for a watcher that is switched on, or gets one of these channels, while the live engine is already running; before, they only went out if such a watcher was already on when the engine started.
-
-## 0.1.1.045 (2026-10-30)
-
-Live watcher: the watcher now recognises faces with the same computation as the event analysis (the same models, quality, head-pose and feature-norm checks and the same vote stack) at full camera resolution, on every hardware variant.
