@@ -5,6 +5,10 @@ never pushed to GHCR; they ship bundled with the next release (each release entr
 says which steps it bundles). This file keeps the last five releases; the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git history.
 
+## 0.1.1.052 (2026-11-04)
+
+Large installations: reference sets are read from one copy file instead of one file per set, so start and the daily cleanup no longer open thousands of files.
+
 ## 0.1.1.051 (2026-11-04)
 
 Start on large installations: the service no longer opens every reference set at startup. It reads the catalog and the folder lists and loads the set headers in the background; the analysis worker reads only the sets of its matrix. The worker's startup ping now has the deadline of a first analysis job instead of 180 s, so a worker still reading its references on slow storage is no longer killed. Seen at a field installation with 20,000 sets on NFS, where the start took over 30 minutes and the worker was restarted in a loop.
@@ -36,9 +40,3 @@ What's new box: an entry for the new per-watcher switch.
 Live watcher: when a watcher replaces the event analysis for its camera, the Frigate events it creates itself are no longer analysed a second time; a new per-watcher option 'Also re-check this watcher's own Frigate events in the event analysis' (off by default) brings the old behaviour back.
 
 Fault alerts: the 'inactive' alert (no event analysis for more than four hours during the day) is no longer sent while the MQTT reconciliation has just confirmed that nothing is missing and the queue is empty, as after a quiet night.
-
-## 0.1.1.047 (2026-10-30)
-
-What's new box: an entry for the live watcher change from 0.1.1.045.
-
-Live watcher: MQTT messages and Frigate events now also go out for a watcher that is switched on, or gets one of these channels, while the live engine is already running; before, they only went out if such a watcher was already on when the engine started.

@@ -23188,7 +23188,9 @@ class Service:
         nicht stumm (Bauplan MQTT-Stummwache, Entscheid 2, ED008), und der Aufraeum-Schritt „ähnlich zu P“ des Verbrauchers
         scheiterte nicht zuletzt (Bauplan analysen/bauplan_aehnlich.md Entscheide 9 und 17, ED008; rot bis ein Lauf wieder
         gelingt), und der Faden des Disponenten lebt (Bauplan Disponent D3b Punkt 9, ED008; der Grund steht im Block
-        `vorlauf` unter `faden_grund` und als ERROR im Log). -> bool"""
+        `vorlauf` unter `faden_grund` und als ERROR im Log), und die Lese-Kopie der Referenz-Quelle meldet keinen Fehler
+        (Bauplan analysen/bauplan_lesen_drei_dateien.md E5, D2 Punkt 7, ED008: Schreibfehler, kaputte Zeile, gescheiterter
+        Nachtrag; der planmaessige Nachtrag ist nicht rot; Block `lesekopie`). -> bool"""
         serie = serie if serie is not None else self.analyse_serie_stand()
         # `getattr` wie in `_worker_warm`: die Proben stellen den Dienst ohne Worker auf.
         haenger_offen = getattr(getattr(self, "_dienst_obj", None), "haenger_offen", None)
@@ -23198,6 +23200,7 @@ class Service:
         _um = _rq_um.migration_state(_cfg) if _cfg.get("data_dir") else None
         umzug_rot = _um is not None and (_um["phase"] == _rq_um.umzug.RED
                                          or _um["rechnung"]["phase"] == _rq_um.basis.COMPUTE_RED)
+        kopie_rot = bool(_cfg.get("data_dir")) and _rq_um.copies_state(_cfg)["rot"]
         from core import aehnlich as _aeh_ok
         # Nur ein GESTARTETER und dann gestorbener Faden ist rot (False); None heisst
         # „nicht gestartet" (Proben, --once, die Startsekunden vor main()).
@@ -23206,6 +23209,7 @@ class Service:
                 and not self.stillstand_stand()["aktiv"]
                 and self.aufraeum_stand()["faden_lebt"] is not False
                 and not umzug_rot
+                and not kopie_rot
                 and not self._kompilat_stopp_grund()
                 and not self._unbekannt_rot()
                 and not self._frigate_mqtt_rot()
@@ -33834,6 +33838,12 @@ def make_handler(svc):
                      # kein_altbestand), Schritt und Stand der laufenden Standdatei, das Ergebnis
                      # gekuerzt ohne Namen, Archiv, Zeit. Rot macht `ok` rot (health_ok, ED008).
                      "umzug": _rq_health.migration_state(cfg),
+                     # Bauplan analysen/bauplan_lesen_drei_dateien.md E5, D2 Punkt 7: die Lese-Kopie der
+                     # Referenz-Quelle in diesem Prozess, nur aus dem Speicher — Zeilen, fehlende Saetze nach dem
+                     # letzten Nachtrag, Phase des Nachtrags, Rueckfaelle auf die Saetze, letzter Fehler; `rot`
+                     # nur bei einem Fehler (Schreibfehler, kaputte Zeile, gescheiterter Nachtrag), nicht
+                     # waehrend des planmaessigen Nachtrags; `rot` macht `ok` rot (Service.health_ok).
+                     "lesekopie": _rq_health.copies_state(cfg),
                      "version": os.environ.get("SUSLIK_VERSION", "dev"),
                      "processed": len(svc.processed),
                      # E0: die Platz-Vergabe sichtbar machen. Ohne diese Zeile waere ein
@@ -35693,14 +35703,15 @@ def startup_selfcheck(svc):
 
 
 def prewarm_views(svc):
-    """Startet nach dem Start-Selbsttest einen Daemon-Faden, der Akten-Sicht, Namen-Sicht und Satz-Koepfe je einmal anfordert.
-    -> der gestartete Faden
+    """Startet nach dem Start-Selbsttest einen Daemon-Faden, der Akten-Sicht, Namen-Sicht und Lese-Kopie je einmal
+    anfordert. -> der gestartete Faden
 
     Bauplan analysen/bauplan_perf_katalog.md, Stufe PK2 (Eigentuemer 23.10.2026 17:43:17, einfache Form 18:03:09,
     Fehlerweg 18:17:44). Die Akten-Sicht ueber denselben Weg wie /anwesenheit (core/akte.sicht, ein Abruf), die
-    Namen-Sicht ueber master_persons (Referenz-Quelle), als dritte die Satz-Koepfe (refquelle.heads_warm, Bauplan
-    analysen/bauplan_startlesung.md S2: der Nachlauf, der die Stoerungsliste fuellt und den Seiten die Koepfe vorliest;
-    darum seit S2b Punkt 4 bei aktivem DEBUG die Zeile der NFS-Zaehler, dateiprobe.nfs_abschnitt).
+    Namen-Sicht ueber master_persons (Referenz-Quelle), als dritte der Nachtrag der Lese-Kopie (refquelle.copies_fill,
+    Bauplan analysen/bauplan_lesen_drei_dateien.md D3 Punkt 1, an der Stelle des frueheren heads_warm: traegt aus den
+    Saetzen nach, was der Kopie fehlt, und legt danach den Seiten die Koepfe aus der Kopie in den Speicher), bei aktivem
+    DEBUG im Fenster der NFS-Zaehler (dateiprobe.nfs_abschnitt, Bauplan analysen/bauplan_startlesung.md S2b Punkt 4).
     Kein eigenes Schloss, keine Ablage, keine Wiederholung; ein
     Seitenabruf waehrend des Aufbaus wartet am Schloss der Sicht auf denselben Aufbau. Scheitert ein Aufbau, zaehlt
     das wie ein gescheiterter Startschritt: ERROR-Zeile, FAIL-Eintrag in der Startdatei (core/selfcheck.add_fail),
@@ -35710,12 +35721,12 @@ def prewarm_views(svc):
     from core import refquelle as _rq_pw
     from core import selfcheck as _sc_pw
 
-    def koepfe():
-        with _dp_pw.nfs_abschnitt(svc.cfg["data_dir"], "set heads"):
-            return _rq_pw.heads_warm(svc.cfg)
+    def lesekopie():
+        with _dp_pw.nfs_abschnitt(svc.cfg["data_dir"], "reading copy"):
+            return _rq_pw.copies_fill(svc.cfg)
     sichten = (("case-file view", lambda: _akte_pw.sicht(svc.log_path).kameras()),
                ("person-name view", lambda: master_persons(svc.cfg)),
-               ("set heads", koepfe))
+               ("reading copy", lesekopie))
 
     def lauf():
         for name, anfordern in sichten:

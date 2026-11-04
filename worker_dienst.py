@@ -766,7 +766,9 @@ def referenzen_laden(cfg, kennung, log, rechenwerk=None):
     Satz eines anderen Modells bleibt draussen. Beides, ausgelassene Saetze und ein leerer Katalog
     stehen laut im Log und in der Bindung; ein leerer Katalog ist kein Abbruch (leere Matrix, kein
     Name moeglich, bis eine Referenz gebunden ist). Bei aktivem DEBUG steht um das Lesen die Zeile der NFS-Zaehler
-    (dateiprobe.nfs_abschnitt, Bauplan analysen/bauplan_startlesung.md S2b Punkt 4)."""
+    (dateiprobe.nfs_abschnitt, Bauplan analysen/bauplan_startlesung.md S2b Punkt 4). Kopf und Fingerabdruck kommen aus der
+    Lese-Kopie der Referenz-Quelle; `aus_saetzen` im Bericht zaehlt die Saetze, die das Lesen aus ihrem Ordner holen
+    musste (Bauplan analysen/bauplan_lesen_drei_dateien.md E5, D2 Punkt 7)."""
     from core import dateiprobe                             # noqa: PLC0415
     from core import refquelle                              # noqa: PLC0415
     t0 = time.monotonic()
@@ -777,7 +779,8 @@ def referenzen_laden(cfg, kennung, log, rechenwerk=None):
     bericht = {"stand": erk["stand"], "zeilen": erk["zeilen"],
                "personen_mit_vektoren": len(mit_refs), "fremd": z.get("fremd"),
                "anderes_modell": z[refquelle.MODEL_OTHER], "ausgelassen": erk["ausgelassen"],
-               "dauer_ms": round((time.monotonic() - t0) * 1000.0, 1), "weg": erk["weg"]}
+               "dauer_ms": round((time.monotonic() - t0) * 1000.0, 1), "weg": erk["weg"],
+               "aus_saetzen": lesung["aus_saetzen"]}
     text = (f"references read from the reference source: {bericht['zeilen']} row(s), "
             f"{len(mit_refs)} person(s) with vectors, {len(alle)} person(s) bound, "
             f"catalog state {bericht['stand']}, {bericht['dauer_ms']} ms")
