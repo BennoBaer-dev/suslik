@@ -8723,52 +8723,55 @@ class Service:
 
     def _maybe_sublabel(self, entry, nachhol=0):
         """AP2 (User-Entscheid: sofort aktiv): bestaetigte Person nach Frigate schreiben.
-        Echo-Freiheit nach Plan §1: writes-Protokoll VOR dem POST; Gegenpruefung mit
-        Retry (Frigate persistiert asynchron, AP0-Befund ~3 s).
+        Echo-Freiheit nach Plan §1: writes-Protokoll VOR dem POST. Als Erfolg zaehlt die Antwort auf den POST, ohne
+        Schlaf und ohne Gegenpruefung (Bauplan analysen/bauplan_frigate_schreiber.md, Stufe FS1, Eigentuemer
+        04.11.2026: „Nur schreiben ohne prüfen“).
 
         Bauplan analysen/bauplan_namenszuordnung.md, Stufe NZ3 Punkte 2 und 3: process legt bei einer
-        Frigate-Personenzahl ab zwei unter seiner Sperre `_nz_lauf` an (Kennung, `zuordnung` = Ergebnis von
+        Frigate-Personenzahl ab zwei unter der Sperre seiner Kamera in `_nz_lauf` einen Eintrag je Kennung an
+        (Bauplan analysen/bauplan_frigate_schreiber.md, Stufe FS2 Punkt 3; `zuordnung` = Ergebnis von
         core.namenszuordnung.zuordnen fuer die Frigate-Ereignisse dieser Kamera, `nachbarn` = Akte-Zeilen des
-        Durchgangs je Kennung fuer den Wert einer Berichtigung); gelesen wird es nur fuer dasselbe Ereignis mit dem
-        Akte-Feld `namenszuordnung`, sonst bleibt alles wie bisher. Die Parameter bleiben `entry` und `nachhol`, weil
+        Durchgangs je Kennung fuer den Wert einer Berichtigung); gelesen wird der Eintrag der eigenen Kennung, nur mit
+        dem Akte-Feld `namenszuordnung`, sonst bleibt alles wie bisher. Die Parameter bleiben `entry` und `nachhol`, weil
         Proben die Funktion durch eine mit genau diesen ersetzen. Traegt die Zuordnung fuer dieses Ereignis einen
         Namen, wird er geschrieben, sonst der
         staerkste Name des Clips (Ersatzweg; die INFO steht in process). Dazu berichtigt der Lauf eigene fruehere
         Schreibvorgaenge mit einem anderen Namen, auch den eines frueheren Laufs dieses Ereignisses: nur, wenn die
         letzte Zeile des Schreibprotokolls fuer das Ereignis von suslik stammt, und in der Spur erst, wenn Frigate
-        noch genau diesen Namen traegt (ein fremder oder inzwischen geaenderter Name bleibt). Ein Nachhol-Lauf
-        berichtigt nichts (dort wird ein Name in Frigate nie ueberschrieben); im Nur-Lesen wird nur protokolliert.
+        keinen Namen oder einen Namen traegt, den suslik fuer dieses Ereignis je geschrieben hat (ein fremder Name
+        bleibt; leer und fruehere eigene Namen zaehlen mit, weil Frigate einen Namen erst nach rund 3 s zurueckgibt,
+        Stufe FS1 Punkt 1b, Bauplan Fassung 3).
+        Ein Nachhol-Lauf berichtigt nichts (dort wird ein Name in Frigate nie ueberschrieben); im Nur-Lesen wird nur protokolliert.
         -> der fuer dieses Ereignis beschlossene Name oder None"""
         cfg = self.cfg
         if not cfg["sub_label_schreiben"] or self.dry_alert:
             return None
         eid = entry["eid"]
-        lauf = self.__dict__.get("_nz_lauf") or {}
-        zuordnung = lauf.get("zuordnung") if lauf.get("eid") == eid and "namenszuordnung" in entry else None
+        lauf = (self.__dict__.get("_nz_lauf") or {}).get(eid) or {}
+        zuordnung = lauf.get("zuordnung") if "namenszuordnung" in entry else None
         nachbarn = lauf.get("nachbarn") if zuordnung is not None else None
 
         def _score(cos):
             return round(1.0 / (1.0 + math.exp(-20.0 * (cos - 0.3))), 3)
 
-        def _senden(ziel, name, sc, alt=None):
-            # NZ3 Punkt 3: eine Berichtigung (`alt` gesetzt) schreibt nur, wenn Frigate noch unseren Namen traegt
+        def _senden(ziel, name, sc, alt=None, eigene=frozenset()):
+            # NZ3 Punkt 3: eine Berichtigung (`alt` gesetzt) schreibt nur, wenn Frigate noch keinen Namen traegt oder
+            # einen, den suslik fuer dieses Ziel je geschrieben hat (`eigene`); nur ein fremder Name haelt sie auf
+            # (FS1 Punkt 1b, Bauplan Fassung 3: ohne Wartezeit zeigt Frigate oft noch keinen oder einen frueheren
+            # eigenen Namen einer Kette). FS1: nach dem POST weder Schlaf noch Abfrage, die Antwort ist der Erfolg.
             if alt is not None:
                 ist = api(cfg, f"/api/events/{ziel}").get("sub_label")
-                if ist != alt:
+                if ist and ist not in eigene:
                     self.log.info(f"{ziel}: name correction '{alt}' -> '{name}' NOT written — Frigate carries "
                                   f"'{ist}', not our '{alt}' (a name suslik did not write is never overwritten)")
                     return
             api_post(cfg, f"/api/events/{ziel}/sub_label", {"subLabel": name, "subLabelScore": sc})
-            for wartezeit in (2, 6):
-                time.sleep(wartezeit)
-                if api(cfg, f"/api/events/{ziel}").get("sub_label") == name:
-                    self.log.info(f"{ziel}: sub_label -> '{name}' ({sc}) written + verified")
-                    return
-            self.log.warning(f"{ziel}: sub_label write without GET echo (async? check later)")
+            self.log.info(f"{ziel}: sub_label -> '{name}' ({sc}) written")
 
         berichtigt = None
         if zuordnung is not None and not nachhol:
             letzte = {}                           # Kennung -> letzte Zeile des eigenen Schreibprotokolls
+            eigene = {}                           # Kennung -> alle Namen ihrer Zeilen ohne readonly (FS1 Punkt 1b)
             p = self._writes_pfad()
             if os.path.exists(p):
                 with open(p) as f:
@@ -8780,6 +8783,8 @@ class Service:
                             continue
                         if d.get("eid") in zuordnung:
                             letzte[d["eid"]] = d
+                            if not d.get("readonly") and d.get("label"):
+                                eigene.setdefault(d["eid"], set()).add(d["label"])
             nur_lesen = frigate_read_only(cfg)
             for ziel, r in sorted(zuordnung.items()):
                 alt = (letzte.get(ziel) or {}).get("label")
@@ -8799,7 +8804,8 @@ class Service:
                 self.log.info(f"{ziel}: name assignment correction sub_label '{alt}' -> '{r['name']}' "
                               f"({r['grund']}, recomputed with {eid})")
                 self._spur(f"sub_label {ziel}",
-                           lambda z=ziel, n=r["name"], s=_score(cos), a=alt: _senden(z, n, s, a))
+                           lambda z=ziel, n=r["name"], s=_score(cos), a=alt, e=frozenset(eigene.get(ziel, ())):
+                           _senden(z, n, s, a, e))
                 if ziel == eid:
                     berichtigt = r["name"]
         if not entry["bestaetigt"]:
@@ -8821,10 +8827,10 @@ class Service:
         self._writes_append(eid=eid, label=top, score=score, cos=cos)
         self.own_writes.add(eid)
 
-        # W3 Stufe 1 (.399): POST + Gegenpruefung (2+6 s SCHLAF!) liefen bis
-        # .398 unter dem Analyse-Lock — je bestaetigtem Event bis zu ~10 s
-        # Blockade der naechsten Analyse. Beschluss + writes-Protokoll stehen
-        # (oben, unveraendert unterm Lock); der Versand laeuft in der Spur.
+        # W3 Stufe 1 (.399): der Versand laeuft in der Spur, nicht unter dem
+        # Analyse-Lock. Beschluss + writes-Protokoll stehen (oben, unveraendert
+        # unterm Lock). Seit Stufe FS1 (analysen/bauplan_frigate_schreiber.md)
+        # ist der Versand nur noch der POST, ohne Schlaf und ohne Gegenpruefung.
         # Semantik-Delta, deklariert: die Akte traegt den BESCHLOSSENEN
         # sub_label auch dann, wenn der POST spaeter scheitert — der
         # Fehlschlag steht laut im Log (bis .398 stand dann None in der
@@ -10106,11 +10112,11 @@ class Service:
 
     def start_melde_spur(self):
         """W3 Stufe 1 (.399): die EINE serielle Nachwehen-Spur fuer externe
-        Melde-Traeger (Pushover/Telegram-HTTP, Frigate-sub_label-POST samt
-        Gegenpruefungs-Schlaf). Bis .398 liefen sie UNTER dem Analyse-Lock —
-        ein haengender 20-s-Push oder die 2+6-s-sub_label-Gegenpruefung
-        blockierte die NAECHSTE Analyse (Feldbeleg: 20-min-Rueckstands-
-        Plateau bei freier GPU). Der BESCHLUSS (Kategorie, Cooldown, Text,
+        Melde-Traeger (Pushover/Telegram-HTTP, Frigate-sub_label-POST; seit
+        Stufe FS1, analysen/bauplan_frigate_schreiber.md, ohne Schlaf und ohne
+        Gegenpruefung). Bis .398 liefen sie UNTER dem Analyse-Lock — ein
+        haengender Push blockierte die NAECHSTE Analyse (Feldbeleg: 20-min-
+        Rueckstands-Plateau bei freier GPU). Der BESCHLUSS (Kategorie, Cooldown, Text,
         Beweisbild, writes-Protokoll) faellt weiter unter dem Lock in
         heutiger Reihenfolge; nur der VERSAND laeuft hier, seriell und in
         Einreihungs-Reihenfolge (keine neuen Races an Cooldown/Zustand).
@@ -24474,11 +24480,25 @@ class Service:
             # `_nz_offen`, auch bevor dessen Akte-Zeile geschrieben ist. Bei einer Person bleibt alles wie bisher, ebenso bei einem
             # eingespielten Ereignis: es hat keine Frigate-Personenzahl (seine Zahl kommt aus den Metadaten, `_pz_evs`
             # bleibt leer) und laeuft ohne Zuordner und ohne WARNING (Hauptsession 26.10.2026 18:43:05).
-            _nz, _nz_akten = None, None
-            _nz_sperre = (self.__dict__.setdefault("_nz_sperre", threading.Lock())
-                          if _pz_evs and isinstance(_pzahl, int) and _pzahl >= 2 and res is not None else None)
+            # Bauplan analysen/bauplan_frigate_schreiber.md, Stufe FS2 (E7, E8, H1): die Sperre gilt je Kamera (Ziele
+            # und Berichtigungen gehoeren immer zur Kamera des Ereignisses), angelegt unter dem kleinen Schloss
+            # `_nz_klein`. `_nz_offen` bleibt EIN Verzeichnis Kennung -> Akte-Zeile; geraeumt und gefuellt werden nur
+            # Eintraege der eigenen Kamera unter deren Sperre, jedes Lesen und Aendern des Verzeichnisses dazu kurz
+            # unter `_nz_klein`, ebenso der Zaehler (core.namenszuordnung laedt kein threading). Geoeffnet werden nur
+            # die Akten der Frigate-Ereignisse des Clips (`_pz_evs`); `zuordnen` ueberspringt die uebrigen ohnehin.
+            # Nur die Akten-Oeffnungen sind damit je Kamera entkoppelt: Tageszeilen der Akten-Sicht, Durchgaenge des
+            # Tages und das Schreibprotokoll bleiben gemeinsame Tagesarbeit (Fassung 3). Reihenfolge der Schloesser:
+            # Kamera-Sperre, `_nz_klein` kurz, Akten-Sicht, Sperrdatei des Schreibprotokolls, Melde-Spur; keins
+            # zusammen mit self.lock. `_nz_m` haelt die Zeiten der DEBUG-Zeile `timing name assignment` (E6).
+            _nz, _nz_akten, _nz_sperre, _nz_m, _nz_n = None, None, None, [], 0
+            if _pz_evs and isinstance(_pzahl, int) and _pzahl >= 2 and res is not None:
+                _nz_klein = self.__dict__.setdefault("_nz_klein", threading.Lock())
+                with _nz_klein:
+                    _nz_sperre = self.__dict__.setdefault("_nz_sperren", {}).setdefault(str(camera), threading.Lock())
+                _nz_m.append(time.monotonic())
             with _nz_sperre or contextlib.nullcontext():
                 if _nz_sperre is not None:
+                    _nz_m.append(time.monotonic())          # Ende des Wartens an der Kamera-Sperre
                     from core import namenszuordnung as _namenszuordnung
                     try:
                         # Nachzug 19:05:31: die Akte-Zeilen des Tages kommen aus der Akten-Sicht wie bei /heute
@@ -24488,20 +24508,27 @@ class Service:
                             hour=0, minute=0, second=0, microsecond=0)
                         _nz_t0, _nz_t1 = _nz_tag.timestamp(), (_nz_tag + datetime.timedelta(days=1)).timestamp()
                         _nz_akten = _akte.sicht(self.log_path).heute(_nz_t0, _nz_t1)[0]
-                        _nz_offen = self.__dict__.setdefault("_nz_offen", {})
-                        for _k in [k for k, v in _nz_offen.items()
-                                   if k in _nz_akten or float(v.get("start") or 0) < _nz_t0]:
-                            del _nz_offen[_k]               # steht inzwischen in der Akte oder liegt vor diesem Tag
-                        _nz_akten.update(_nz_offen)
+                        with _nz_klein:
+                            _nz_offen = self.__dict__.setdefault("_nz_offen", {})
+                            for _k in [k for k, v in _nz_offen.items() if str(v.get("camera")) == str(camera)
+                                       and (k in _nz_akten or float(v.get("start") or 0) < _nz_t0)]:
+                                del _nz_offen[_k]           # steht inzwischen in der Akte oder liegt vor diesem Tag
+                            # Eintraege anderer Kameras zaehlen fuer den Durchgang mit, wie bisher; was schon in der
+                            # Akte steht oder vor diesem Tag liegt, haette der Weg bis FS2 vorher geraeumt
+                            _nz_akten.update({k: v for k, v in _nz_offen.items() if k not in _nz_akten
+                                              and float(v.get("start") or 0) >= _nz_t0})
                         _nz_akten[eid] = entry
                         _nz_gang = next((s.get("evs") or [] for s in _szenarien.szenarien_des_tages(
                             _nz_akten, _nz_t0, _nz_t1, cfg, {})
                             if any(x.get("eid") == eid for x in s.get("evs") or [])), [])
+                        _nz_m.append(time.monotonic())      # Ende des Kontexts
+                        _nz_clip = {str(e.get("id")) for e in _pz_evs}
                         _nz_res = [res]
                         for _x in _nz_gang:                 # Zeilen der Durchgangs-Liste: eid, t, cam, conf
-                            if _x.get("eid") == eid or str((_nz_akten.get(_x.get("eid")) or {}).get("camera")) \
-                                    != str(camera):
+                            if _x.get("eid") == eid or str(_x.get("eid")) not in _nz_clip \
+                                    or str((_nz_akten.get(_x.get("eid")) or {}).get("camera")) != str(camera):
                                 continue
+                            _nz_n += 1
                             _r = None
                             try:
                                 with open(os.path.join(cfg["data_dir"], "events", str(_x["eid"]).replace("/", "_"),
@@ -24516,17 +24543,21 @@ class Service:
                                 _r = None               # noch keine Akte: das Ereignis zaehlt ohne Gesichter
                             if isinstance(_r, dict):
                                 _nz_res.append(_r)
+                        _nz_m.append(time.monotonic())      # Ende der Akten
                         # das Ereignis selbst steht unter `_pz_evs` (sonst gaebe aus_frigate keine Zahl): Ergebnis je Kennung
                         _nz = _namenszuordnung.zuordnen(_nz_res, _pz_evs, int(cfg.get("stapel_stimmen") or 0))
-                        _nz_offen[eid] = entry
+                        with _nz_klein:
+                            _nz_offen[eid] = entry
                     except Exception as e:                  # noqa: BLE001  nie die Analyse reissen, laut
                         self.log.error(f"{eid} ({camera}): name assignment failed ({type(e).__name__}: {e}) — "
                                        f"the strongest name of the clip applies")
                         _nz = None
+                    _nz_m += [time.monotonic()] * (5 - len(_nz_m))     # Ende der Zuordnung; nach einem Fehler auch
                     if _nz is not None:
                         _nz_eig = _nz[eid]
                         entry["namenszuordnung"] = {k: _nz_eig[k] for k in ("name", "grund", "t0", "schaerfe")}
-                        _namenszuordnung.zaehlen(_nz_eig["grund"])
+                        with _nz_klein:
+                            _namenszuordnung.zaehlen(_nz_eig["grund"])
                         if _nz_eig["name"] is None:
                             self.log.info(f"{eid} ({camera}): name assignment without a name "
                                           f"({_nz_eig['grund']}) — fallback, the strongest name of the clip "
@@ -24535,12 +24566,21 @@ class Service:
                             self.log.info(f"{eid} ({camera}): name assignment '{_nz_eig['name']}' "
                                           f"({_nz_eig['grund']}, start {_nz_eig['t0']}, sharpness "
                                           f"{_nz_eig['schaerfe']})")
-                        # Uebergabe an _maybe_sublabel unter der Sperre, ohne seinen Aufruf zu aendern (Proben ersetzen
-                        # es durch eine Funktion mit genau den Parametern entry und nachhol)
-                        self.__dict__["_nz_lauf"] = {"eid": eid, "zuordnung": _nz, "nachbarn": _nz_akten}
-                entry["sublabel"] = self._maybe_sublabel(entry, nachhol=nachhol)
-                if _nz_sperre is not None:
-                    self.__dict__.pop("_nz_lauf", None)     # nur unter der Sperre, die sie gesetzt hat
+                        # Uebergabe an _maybe_sublabel unter der Sperre der Kamera, ohne seinen Aufruf zu aendern (Proben
+                        # ersetzen es durch eine Funktion mit genau den Parametern entry und nachhol); je Kennung ein
+                        # Eintrag, damit zwei Kameras sich die Zuordnung nicht gegenseitig ueberschreiben (FS2 Punkt 3)
+                        self.__dict__.setdefault("_nz_lauf", {})[eid] = {"zuordnung": _nz, "nachbarn": _nz_akten}
+                try:
+                    entry["sublabel"] = self._maybe_sublabel(entry, nachhol=nachhol)
+                finally:                                # der Eintrag je Kennung bleibt auch nach einem Fehler nicht liegen
+                    if _nz_sperre is not None:
+                        (self.__dict__.get("_nz_lauf") or {}).pop(eid, None)   # unter der Sperre, die ihn setzte
+                        _nz_m.append(time.monotonic())  # Ende des Beschlusses
+            if _nz_m:
+                _nz_d = [(b - a) * 1000.0 for a, b in zip(_nz_m, _nz_m[1:])]
+                self.log.debug(f"timing name assignment: {eid} ({camera}) lock wait {_nz_d[0]:.1f} ms | context "
+                               f"{_nz_d[1]:.1f} ms | results {_nz_n} in {_nz_d[2]:.1f} ms | assignment "
+                               f"{_nz_d[3]:.1f} ms | decision {_nz_d[4]:.1f} ms")
             _m7.append(("sublabel", time.monotonic()))
             if not nachhol:
                 self.publish_erkennung(entry)     # kein Live-Echo fuer alte Ereignisse

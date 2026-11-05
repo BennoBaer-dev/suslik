@@ -5,6 +5,10 @@ never pushed to GHCR; they ship bundled with the next release (each release entr
 says which steps it bundles). This file keeps the last five releases; the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git history.
 
+## 0.1.1.053 (2026-11-05)
+
+Small fixes.
+
 ## 0.1.1.052 (2026-11-04)
 
 Large installations: reference sets are read from one copy file instead of one file per set, so start and the daily cleanup no longer open thousands of files.
@@ -32,11 +36,3 @@ Log: the fallback of the name assignment is now logged as INFO instead of WARNIN
 ## 0.1.1.049 (2026-11-02)
 
 Live watcher: saving new face candidates in the event analysis no longer stops the watcher. It re-reads its references only when a reference actually changes, and a catalog line arriving during a read is no longer treated as an error.
-
-## 0.1.1.048 (2026-10-31)
-
-What's new box: an entry for the new per-watcher switch.
-
-Live watcher: when a watcher replaces the event analysis for its camera, the Frigate events it creates itself are no longer analysed a second time; a new per-watcher option 'Also re-check this watcher's own Frigate events in the event analysis' (off by default) brings the old behaviour back.
-
-Fault alerts: the 'inactive' alert (no event analysis for more than four hours during the day) is no longer sent while the MQTT reconciliation has just confirmed that nothing is missing and the queue is empty, as after a quiet night.

@@ -377,7 +377,8 @@ def zaehlen(grund):
     -> None
 
     Ohne eigenes Schloss (das Modul importiert nur numpy und core.registry, Probe e3_76 Fall g): der Dienst ruft
-    `zaehlen` nur unter seiner Sperre der Namenszuordnung (verifyd.Service.process, Stufe NZ3)."""
+    `zaehlen` nur unter seinem kleinen Schloss `_nz_klein`, das alle Kameras teilen (verifyd.Service.process, Stufe
+    NZ3; seit Stufe FS2 des Bauplans analysen/bauplan_frigate_schreiber.md gilt die Sperre der Zuordnung je Kamera)."""
     _zaehler[str(grund)] = _zaehler.get(str(grund), 0) + 1
 
 
