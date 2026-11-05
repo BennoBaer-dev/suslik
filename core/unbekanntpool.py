@@ -126,6 +126,12 @@ def member_ts(m):
         return None
 
 
+def pool_path(data_dir):
+    """Der Pfad der Identitaetsdatei des Unbekannt-Pools (Bauplan analysen/bauplan_render_cache.md, Fassung 3 H4).
+    -> Pfad <data_dir>/learn/unbekannte.jsonl"""
+    return os.path.join(data_dir, "learn", "unbekannte.jsonl")
+
+
 def _cluster_lesen(data_dir, zaehler=None):
     """Zeilenweiser Roh-Leser der unbekannte.jsonl — fehlende Datei/kaputte
     Zeilen fallen still raus (die Kacheln fallen dann auf die alte Anzeige
@@ -133,7 +139,7 @@ def _cluster_lesen(data_dir, zaehler=None):
     nackte Zahl als JSON-Zeile traefe sonst jeden Konsumenten mit
     AttributeError — kc_unbekannt R-4). zaehler (dict, Stufe BN2): zaehlt
     uebersprungene Zeilen und nennt einen Lesefehler ausser einer fehlenden Datei."""
-    pfad = os.path.join(data_dir, "learn", "unbekannte.jsonl")
+    pfad = pool_path(data_dir)
     try:
         f = open(pfad)
     except OSError as e:

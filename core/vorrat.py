@@ -129,8 +129,6 @@ def angebote_bewerten(lauf_dir, events_liste, schwellen, refs,
          auf der NORM-Achse die einzige Grenze, kein Zahlen-Deckel).
       3. Identitaet 'sicher': eigen >= sim_min; fremd >= eigen -> raus;
          eigen >= sim_neu -> gedeckt (Bestands-Duplikat).
-    Je Durchgang (Szenario) haelt das Journal der Nutzung angebotene und abgelehnte Saetze mit Grund fest
-    (core.refquelle.usage_rating, Bauplan analysen/bauplan_katalog_lebenszyklus.md Stufe LK1).
     -> Bilanz-Dict (v_gesamt, angebote, gruende, durchgaenge, fehlend, kaputt,
        ohne_fingerabdruck, nachtraege)."""
     from core.anker import durchgaenge_bilden
@@ -138,7 +136,7 @@ def angebote_bewerten(lauf_dir, events_liste, schwellen, refs,
     cfg = _ll.datenort_cfg()
     vek = _ll.fingerabdruecke(cfg, os.path.basename(os.path.normpath(lauf_dir)), status="kandidat")["vek"]
     dg = durchgaenge_bilden(events_liste, schwellen["szenario_gap_min"])
-    zeilen, gruende, umfeld, szenarien = [], {}, [], []
+    zeilen, gruende, umfeld = [], {}, []
     fehlend = kaputt = ohne_fp = 0
 
     def _grund(name):
@@ -226,7 +224,6 @@ def angebote_bewerten(lauf_dir, events_liste, schwellen, refs,
                     z["zwilling_von"] = naechster["ref_id"]
                     _grund("zwilling")
         zeilen.extend(dg_zeilen)
-        szenarien.append((d["start"], dg_zeilen))
     # Atomar NEU schreiben (mkstemp-Muster wie anker_lauf_schreiben)
     fd, tmp = tempfile.mkstemp(dir=lauf_dir, prefix=".vorrat.", suffix=".tmp")
     try:
@@ -249,10 +246,6 @@ def angebote_bewerten(lauf_dir, events_liste, schwellen, refs,
         _log.error(f"stock rating ({lauf_dir}): {ohne_fp} stock line(s) without a readable "
                    f"fingerprint in their reference set — left out")
     n = _umfeld_nachtragen(cfg, umfeld, refs)
-    # Bauplan analysen/bauplan_katalog_lebenszyklus.md, Stufe LK1: je Szenario (Durchgang) eine Zeile im Journal der
-    # Nutzung mit angebotenen und abgelehnten Saetzen samt Grund; ein Schreibfehler dort aendert die Bilanz nicht.
-    from core import refquelle as _rq
-    _rq.usage_rating(cfg, szenarien)
     return {"v_gesamt": len(zeilen),
             "angebote": sum(1 for z in zeilen if z["angebot"]),
             "gruende": gruende, "durchgaenge": len(dg),

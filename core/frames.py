@@ -35,6 +35,7 @@ import time
 import urllib.error
 import urllib.request
 
+from core import atomar as _atomar       # D3 (Bauplan weniger schreiben): Ordner einmal je Prozess
 from core import frigate_auth as _fauth   # 5e: DER eine Frigate-HTTP-Griff
 from core import logbuch as _logbuch
 _log = _logbuch.logger(__name__)
@@ -50,17 +51,18 @@ def cache_dir(data_dir=None):
     (verifyd.py:571/:621/:2629), dort liest make_browser_copy den Clip
     (verifyd.py:3768) und nur diesen Ordner raeumen cleanup_cache/
     clip_cache_bytes (:3823/:3838). Ein zweiter Ordner waere ein Cache,
-    den niemand raeumt und aus dem niemand sonst liest."""
+    den niemand raeumt und aus dem niemand sonst liest.
+
+    Bauplan weniger schreiben, Stufe D3: angelegt wird einmal je Prozess
+    (core.atomar.ordner_einmal); fehlt der Ordner spaeter, legt ihn der
+    naechste Schreiber laut neu an (pin, pin_named, behalten)."""
     for d in (os.path.join(data_dir, "clips") if data_dir else None,
               os.environ.get("VERIFY_DATA_DIR") and os.path.join(
                   os.environ["VERIFY_DATA_DIR"], "clips"),
               os.environ.get("SCRATCH_DIR")):
         if d:
-            os.makedirs(d, exist_ok=True)
-            return d
-    d = os.path.join(tempfile.gettempdir(), "suslik-scratch")
-    os.makedirs(d, exist_ok=True)
-    return d
+            return _atomar.ordner_einmal(d)
+    return _atomar.ordner_einmal(os.path.join(tempfile.gettempdir(), "suslik-scratch"))
 
 
 def cache_pfad(eid, data_dir=None):
@@ -75,7 +77,7 @@ def _pin_pfad(pfad):
 def pin(eid, data_dir=None):
     """Refcount-Marke DIESES Halters setzen (idempotent je Halter)."""
     p = _pin_pfad(cache_pfad(eid, data_dir))
-    open(p, "a").close()
+    _atomar.mit_ordner(os.path.dirname(p), lambda: open(p, "a").close())   # D3: fehlender Ordner laut neu
     return p
 
 
@@ -107,7 +109,7 @@ def pin_named(eid, name, data_dir=None):
     """Sets the named holder for the clip of eid and renews its modification time (idempotent).
     -> path of the holder"""
     p = named_pin_path(eid, name, data_dir)
-    open(p, "a").close()
+    _atomar.mit_ordner(os.path.dirname(p), lambda: open(p, "a").close())   # D3: fehlender Ordner laut neu
     os.utime(p, None)
     return p
 
@@ -180,11 +182,14 @@ def behalten(eid, data_dir=None, lauf_id=None):
     das alte Touch-Verhalten (Marke ohne Lauf-Bezug, wird nie automatisch
     freigegeben — Audit-Befund 24.08.: genau diese Marken waren unloesbar)."""
     p = cache_pfad(eid, data_dir) + BEHALTEN_SUFFIX
+    ordner = os.path.dirname(p)              # D3: fehlender Ordner laut neu (core.atomar.mit_ordner)
     if lauf_id and str(lauf_id) not in _behalten_zeilen(p):
-        with open(p, "a", encoding="utf-8") as f:
-            f.write(str(lauf_id) + "\n")
+        def _anhaengen():
+            with open(p, "a", encoding="utf-8") as f:
+                f.write(str(lauf_id) + "\n")
+        _atomar.mit_ordner(ordner, _anhaengen)
     elif not os.path.exists(p):
-        open(p, "a").close()
+        _atomar.mit_ordner(ordner, lambda: open(p, "a").close())
 
 
 def _behalten_zeilen(pfad):
@@ -756,10 +761,9 @@ TOR_POLL_S = 0.25            # Runde ueber die Slots; Downloads dauern Sekunden
 
 
 def tor_dir(data_dir=None):
-    """Ablage der Slot- und Warte-Marken — neben dem Clip-Cache (s.o.)."""
-    d = os.path.join(cache_dir(data_dir), TOR_ORDNER)
-    os.makedirs(d, exist_ok=True)
-    return d
+    """Ablage der Slot- und Warte-Marken — neben dem Clip-Cache (s.o.); angelegt einmal je Prozess (D3),
+    fehlt sie spaeter, legen Torplatz und Warte-Marke sie laut neu an."""
+    return _atomar.ordner_einmal(os.path.join(cache_dir(data_dir), TOR_ORDNER))
 
 
 def _tor_slots(n, data_dir=None):
@@ -829,7 +833,9 @@ def tor_nehmen(n, data_dir=None, eid=None, poll_s=TOR_POLL_S,
         while True:
             for p in slots:
                 try:
-                    fd = os.open(p, os.O_CREAT | os.O_RDWR, 0o600)
+                    # D3: fehlt .cliptor/ (oder clips/), wird er laut neu angelegt, statt still am Tor vorbei
+                    fd = _atomar.mit_ordner(os.path.dirname(p),
+                                            lambda p=p: os.open(p, os.O_CREAT | os.O_RDWR, 0o600))
                 except OSError as e:
                     clip_dbg(f"{eid}: WARN clip gate slot unusable "
                              f"({type(e).__name__}) — fetching WITHOUT the gate")
@@ -861,7 +867,8 @@ def tor_nehmen(n, data_dir=None, eid=None, poll_s=TOR_POLL_S,
                 gemeldet = True
                 marke = _warte_marke(data_dir)
                 try:
-                    open(marke, "a").close()
+                    _atomar.mit_ordner(os.path.dirname(marke),          # D3: fehlender Ordner laut neu
+                                       lambda m=marke: open(m, "a").close())
                 except OSError:
                     marke = None
                 clip_dbg(f"{eid}: waiting at the clip gate "

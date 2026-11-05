@@ -1093,6 +1093,11 @@ def protokoll_schreiben(data_dir, pass_key, zeile):
             f.write(json.dumps(zeile, ensure_ascii=False) + "\n")
             f.flush()
             os.fsync(f.fileno())
+        # Bauplan analysen/bauplan_render_cache.md, RC1 Punkt 6 (E4): die Urteile haengen in einen Unterordner an und
+        # haben kein Dateisignal; nach jeder Urteilszeile (nicht nach Schrittzeilen) verfallen die gespeicherten Seiten.
+        if zeile.get("art") in (None, ART_URTEIL):
+            from core import render_cache as _rc
+            _rc.poke("vision")
         return p
     except OSError:
         _logbuch.swallowed(_log, _logbuch.ERROR, "returning None", throttle=False)

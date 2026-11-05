@@ -5,6 +5,10 @@ never pushed to GHCR; they ship bundled with the next release (each release entr
 says which steps it bundles). This file keeps the last five releases; the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git history.
 
+## 0.1.1.054 (2026-11-05)
+
+Small fixes.
+
 ## 0.1.1.053 (2026-11-05)
 
 Small fixes.
@@ -32,7 +36,3 @@ Faces: the Faces, Known and Suggestions pages no longer copy the whole reference
 CUDA: if the worker can't find its own process in the `nvidia-smi` list, as seen on some drivers without `pid: host`, it no longer stops after its first build and reports a full card. It keeps working and warns in the log, and the GPU page no longer says the worker isn't started. A refused build is no longer logged as a failed allocation.
 
 Log: the fallback of the name assignment is now logged as INFO instead of WARNING.
-
-## 0.1.1.049 (2026-11-02)
-
-Live watcher: saving new face candidates in the event analysis no longer stops the watcher. It re-reads its references only when a reference actually changes, and a catalog line arriving during a read is no longer treated as an error.

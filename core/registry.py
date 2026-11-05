@@ -2207,3 +2207,16 @@ def modellvertrag_deckung(modelle=None, geladen_ist=None, mixed_ist=None, quellt
                 abw.append("%s: Vertrag legt Task %r unter openvino:MIXED auf %s — in "
                            "face_audit.py steht kein %s" % (name, t, g, paar))
     return abw
+
+
+# --- Seitenspeicher fuer /heute und /anwesenheit (Bauplan analysen/bauplan_render_cache.md, Stufe RC1) -----------------
+# Werkswerte, gelesen am Leseort in core/render_cache.py. Der Schalter ist der Config-Schluessel `render_cache` ohne
+# Oberflaeche (Entscheid E2): kein Eintrag in CONFIG_WHITELIST, keine Zeile in load_config; aus heisst
+# `"render_cache": false` in Store oder yaml, danach Neustart.
+# Entscheid E1, Eigentuemer 05.11.2026 07:22:02 (befehle/2026-11-05.md): „Defaultmäßig soll der neue Render immer
+# eingeschaltet sein.“
+RENDER_CACHE_AN = True
+# Entscheid E8: hoechstens so viele Eintraege je Prozess, der am laengsten nicht benutzte faellt. Vorschlag, nicht gemessen.
+RENDER_CACHE_DECKEL = 8
+# Entscheid E7: Lebensdauer eines Eintrags in Sekunden, deckelt die Faelle ohne Signal. Vorschlag, nicht gemessen.
+RENDER_CACHE_ALTER_S = 900

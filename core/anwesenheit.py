@@ -259,10 +259,13 @@ def _zeile_schreiben(cfg, datum, zeile, log):
     """DIE eine Schreibstelle: open/write/close je Zeile (Kopfkommentar),
     danach der Deckel-Blick. -> True/False; ein Fehler kostet nur die Marke."""
     pfad = tag_pfad(cfg, datum)
-    try:
-        os.makedirs(os.path.dirname(pfad), exist_ok=True)
+
+    def _anhaengen():
         with open(pfad, "a", encoding="utf-8") as f:
             f.write(json.dumps(zeile, ensure_ascii=False) + "\n")
+    try:
+        # D3 (Bauplan weniger schreiben): der Ordner einmal je Prozess; fehlt er spaeter, laut neu anlegen
+        _atomar.mit_ordner(_atomar.ordner_einmal(os.path.dirname(pfad)), _anhaengen)
     except Exception as e:                                   # noqa: BLE001
         _fehler_loggen(log, f"write to {os.path.basename(pfad)} failed: "
                             f"{type(e).__name__}: {e}")

@@ -12,7 +12,7 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.053"   # 0.1.1.053: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 07:2x "What's new packen wir nichts rein"); 0.1.1.052: kein neuer Box-Eintrag (Eigentuemer 04.11.2026 17:32:17 "Changelog wuerde ich jetzt nicht
+STAND = "0.1.1.054"   # 0.1.1.054: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 15:5x "Wir lassen uns mit Small", CHANGELOG nur "Small fixes."); 0.1.1.053: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 07:2x "What's new packen wir nichts rein"); 0.1.1.052: kein neuer Box-Eintrag (Eigentuemer 04.11.2026 17:32:17 "Changelog wuerde ich jetzt nicht
                       # gross was reinpacken. What's new? Auch nichts. Weil das sind ja nur Fixes von Dingen, die wir schon
                       # gedacht haetten, haetten wir schon lange gefixt."). Box unveraendert: nur STAND geht hoch; Stufen D1
                       # bis D4 des Bauplans analysen/bauplan_lesen_drei_dateien.md, der CHANGELOG-Abschnitt hat einen Satz.

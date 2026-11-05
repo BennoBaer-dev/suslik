@@ -118,15 +118,17 @@ def einspeisen(pfad, kamera, data_dir, log=_log, kopieren=True, lauf_id=None):
         log.warning(f"file source: {os.path.basename(pfad)} — start time from {zeitquelle}; "
             "the grouping into passes depends on it (szenario_gap_min)")
     eid = eid_erzeugen(pfad, start)
-    ziel = _fr.cache_pfad(eid, data_dir)
-    os.makedirs(os.path.dirname(ziel), exist_ok=True)
+    ziel = _fr.cache_pfad(eid, data_dir)       # D3: der Ordner kommt einmal je Prozess aus cache_dir
     if not os.path.exists(ziel):
-        if kopieren:
-            tmp = f"{ziel}.einspeisen.part"
-            shutil.copyfile(pfad, tmp)
-            os.replace(tmp, ziel)              # atomar: nie ein halbes Video im Cache
-        else:
-            os.link(pfad, ziel)
+        def _ablegen():
+            if kopieren:
+                tmp = f"{ziel}.einspeisen.part"
+                shutil.copyfile(pfad, tmp)
+                os.replace(tmp, ziel)          # atomar: nie ein halbes Video im Cache
+            else:
+                os.link(pfad, ziel)
+        from core import atomar as _atomar     # noqa: PLC0415  D3: fehlender Ordner laut neu, dann einmal wiederholen
+        _atomar.mit_ordner(os.path.dirname(ziel), _ablegen)
     _fr.behalten(eid, data_dir, lauf_id=lauf_id)   # Dauermarke, s. Kopf; lauf_id
                                                # = Freigabe-Bezug (.334, Audit)
     log.info(f"file source: {os.path.basename(pfad)} -> {eid} "

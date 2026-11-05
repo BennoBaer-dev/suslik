@@ -279,10 +279,6 @@ def det_schwelle(det_global, guards, kamera):
 # Fehlertext); SW_ERZWUNGEN setzt der Dienst fuer den einen Neulauf (Wert: derselbe Text).
 HW_TEILABBRUCH = "hw_teilabbruch"
 SW_ERZWUNGEN = "sw_erzwungen"
-# Bauplan analysen/bauplan_katalog_lebenszyklus.md, Stufe LK1 (Nachbesserung, Codex-Befund 3): der Schluessel im
-# zaehler von event_rechnen fuer die Gesichter, die scores_rechnen gegen die Matrix gerechnet hat, auch wenn das
-# Norm-Sieb ihnen den Erkennungswert danach wieder nimmt; der Dienst liest ihn fuer das Journal der Nutzung.
-VERGLICHEN = "verglichen"
 # glibc-Allokator: Parameter-Nummer aus malloc.h. -3 ist M_MMAP_THRESHOLD.
 M_MMAP_THRESHOLD = -3
 # Die Schwelle, ab der malloc() einen Block direkt per mmap holt statt aus einer Arena.
@@ -1562,7 +1558,7 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
     (leerer Box-Ausschnitt fuer e) heisst bei einer siebenden Stufe Abbruch an ihr.
     Eine Latte <= 0 ist aus: der Wert wird nicht gemessen. Werte ungerundet;
     "abbruch" nennt die Stufe, an der ein Gesicht die KASKADE verliess; zaehler:
-    wie viele Gesichter jede Stufe bestanden, dazu VERGLICHEN (gegen die Matrix gerechnet, LK1).
+    wie viele Gesichter jede Stufe bestanden.
 
     v7: die Stufen laufen ueber den Satz dieses Rechenstrangs (satz.stufe), in
     Aufrufen fester Breite; das RGB-Vollbild entsteht einmal je Frame in satz.det()
@@ -1741,7 +1737,6 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
             # w[0]: L2-normiertes Embedding [512], w[1]: Feature-Norm (E1: die Stufe
             # liefert keine Scores mehr, die rechnet scores_rechnen hier)
             sc = scores_rechnen([w[0] for w in aus], erk)
-            zaehler[VERGLICHEN] += len(weiter)                      # LK1: gegen die Matrix gerechnet
             for q, (f, w) in enumerate(zip(weiter, aus)):
                 f["sc"] = {**ohne, **{pn: float(sc[q][j]) for j, pn in enumerate(mit_refs)}}
                 f["norm"] = float(np.ravel(w[1])[0])

@@ -754,9 +754,7 @@ def referenzen_laden(cfg, kennung, log, rechenwerk=None):
     ueber „fremd" (`fremd_urteilen`), vorher steht in der Bindung `fremd: None` (W4).
     Gelesen werden nur Katalog, quelle.json und fingerabdruck.npy, nie ein
     Bild; es wird nichts gerechnet und nichts auf Platte geschrieben (keine Matrizen-Datei mehr,
-    Entscheid 10), ausser der Zeile im Journal der Nutzung, wenn sich die Menge der Matrix fuer diesen
-    Leser geaendert hat (read_matrix, Bauplan analysen/bauplan_katalog_lebenszyklus.md Stufe LK1).
-    Damit sind die alten Fehlerklassen dieser Stelle weg: kein Lauf schreibt eine
+    Entscheid 10). Damit sind die alten Fehlerklassen dieser Stelle weg: kein Lauf schreibt eine
     Teilmenge zurueck (Prod-Fund 21.08.), kein Fingerabdruck wird aus einer kleinen Datei neu
     gerechnet (28 von 40 ohne Gesicht, core/refbeiwert.py), keiner auf einem anderen Rechenwerk
     (E2-Blocker CPU gegen GPU). Der Fingerabdruck eines Satzes ist der Wert seines Rechenwerks.
@@ -4462,8 +4460,12 @@ class Dienst:
         """Die Ereignis-Analyse eines Jobs: je eid ein Durchgang, results.jsonl,
         Bilder, Kandidaten. Der Rahmen ist der von analyze.py (Resume, Reihenfolge,
         Abbruchregeln), gerechnet wird mit dem Kern."""
-        outdir = opt["dir"] or os.path.join(wk.WURZEL, "samples", "analyze")
-        os.makedirs(outdir, exist_ok=True)
+        # D3 (Bauplan weniger schreiben, E3): wer einen Auftrag mit `dir` schickt, legt den Ordner vorher an
+        # (Dienst in Service.process, Wanduhr); nur der Werkzeugweg ohne `dir` legt hier an, einmal je Prozess.
+        outdir = opt["dir"]
+        if not outdir:
+            from core import atomar as _atomar                     # noqa: PLC0415
+            outdir = _atomar.ordner_einmal(os.path.join(wk.WURZEL, "samples", "analyze"))
         results_pfad = os.path.join(outdir, "results.jsonl")
         # RESUME wie analyze.py:351-357: ein Label, das schon in results.jsonl steht,
         # wird uebersprungen. Daran haengen vier Stellen im Dienst (Re-Analyse legt
@@ -4496,28 +4498,17 @@ class Dienst:
         alle = sorted(set(personen))
         bilanz = collections.Counter()
         frames_info = {}
-        # Bauplan analysen/bauplan_katalog_lebenszyklus.md, Stufe LK1 (Punkte 2 und 3): die tatsaechlichen Vergleiche
-        # gegen die Matrix je Ereignis, im Speicher gesammelt und am Ende des Auftrags EINMAL ins Journal der Nutzung
-        # (refquelle.usage_comparisons, eine Zeile je Matrix-Stand), auch wenn ein Ereignis scheitert
-        vergleiche = []
-        try:
-            for k, eid in enumerate(opt["eids"]):
-                label = (opt["labels"][k] if k < len(opt["labels"])
-                         else os.path.basename(eid).split(".")[0])
-                if label in done:
-                    lauf.log.zeile(f"\n=== {label} — bereits in results.jsonl, übersprungen ===")
-                    continue
-                info = self.event_lauf(lauf, opt, job, eid, label, lat, g_aus, pose_aus,
-                                       profil, personen, alle, outdir, results_pfad)
-                for kk, vv in info.get("bilanz", {}).items():
-                    bilanz[kk] += vv
-                frames_info = info.get("frames", frames_info)
-                if info.get("vergleich"):
-                    vergleiche.append(info["vergleich"])
-        finally:
-            if vergleiche and self._ref_cfg is not None:
-                from core import refquelle                  # noqa: PLC0415
-                refquelle.usage_comparisons(self._ref_cfg, vergleiche)
+        for k, eid in enumerate(opt["eids"]):
+            label = (opt["labels"][k] if k < len(opt["labels"])
+                     else os.path.basename(eid).split(".")[0])
+            if label in done:
+                lauf.log.zeile(f"\n=== {label} — bereits in results.jsonl, übersprungen ===")
+                continue
+            info = self.event_lauf(lauf, opt, job, eid, label, lat, g_aus, pose_aus,
+                                   profil, personen, alle, outdir, results_pfad)
+            for kk, vv in info.get("bilanz", {}).items():
+                bilanz[kk] += vv
+            frames_info = info.get("frames", frames_info)
         aus = {"frames": frames_info, "bilder": dict(bilanz)}
         if self.null_serie:
             # LAUF-WACHE, Rohsignal (Konzept §4 Schicht 3): „N Ereignisse in Folge
@@ -4661,10 +4652,6 @@ class Dienst:
             pz = _personenzahl.gueltig((opt.get("personenzahl") or {}).get(str(eid)))[0]
             # Bauplan Vorlauf-Diagnose D1, Stempel 6: Dekodieren und Modelle ueber beide Laeufe eines Neulaufs
             _d1 = {"dekodieren_s": 0.0, "modelle_s": 0.0, "bilder_s": 0.0}
-            # LK1 (Bauplan analysen/bauplan_katalog_lebenszyklus.md, Nachbesserung Codex-Befund 3): die Gesichter, die
-            # der Kern im letzten Lauf gegen die Matrix gerechnet hat (worker_kern.VERGLICHEN), auch die, denen das
-            # Norm-Sieb den Erkennungswert danach nahm; der letzte Lauf ist der, dessen Zeilen gelten
-            _lk1 = {"verglichen": 0}
 
             def rechnen(tor):
                 # je Lauf ein frischer Vorrat: im Stoerstellen-Neulauf verfaellt der Erstversuch
@@ -4677,7 +4664,6 @@ class Dienst:
                 _d1["dekodieren_s"] += tor._wache.dekodieren_s
                 _d1["modelle_s"] += sum(v for k, v in zeiten.items() if k != "bilder")
                 _d1["bilder_s"] += zeiten.get("bilder", 0.0)
-                _lk1["verglichen"] = zaehler[wk.VERGLICHEN]
                 return vorrat, zeilen, ende
 
             wache, (vorrat, zeilen, ende), neulauf = self.rechnen_mit_neulauf(vid, schritt, rechnen)
@@ -4828,14 +4814,7 @@ class Dienst:
             self.zaehler["null_gesichter"] += 1
         else:
             self.null_serie = 0
-        # LK1 (Bauplan analysen/bauplan_katalog_lebenszyklus.md): ein tatsaechlicher Vergleich heisst, mindestens ein
-        # Gesicht wurde gegen jede Zeile der Matrix dieses Abzugs gerechnet (scores_rechnen lief, auch wenn das
-        # Norm-Sieb den Score danach wieder nahm); nur dann eine Angabe, und nur fuer einen Abzug mit Lesestand und
-        # Zeilenzahl (referenzen_laden setzt beide immer). Der Lesestand ist der des Abzugs dieses Ereignisses.
-        vergleich = ({"stand": erk["stand"], "zeilen": erk["zeilen"], "gesichter": _lk1["verglichen"],
-                      "ts": time.time(), "ereigniszeit": _start}
-                     if _lk1["verglichen"] and "stand" in erk and "zeilen" in erk else None)
-        return {"bilanz": bilanz, "vergleich": vergleich,
+        return {"bilanz": bilanz,
                 "frames": {"gelesen": wache.gelesen, "soll": wache.soll,
                            "samples": wache.samples, "kette": wache.kette,
                            "decoder_fehler": wache.decoder_fehler,

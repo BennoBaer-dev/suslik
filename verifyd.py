@@ -2854,6 +2854,12 @@ def catchup_modus(cfg):
     return w if w in CATCHUP_MODI else "on"
 
 
+def ground_truth_path(data_dir):
+    """Der Pfad der Ground-Truth-Datei (Labels der Nutzer), gelesen von /heute und vom Seitenspeicher (Bauplan
+    analysen/bauplan_render_cache.md, Fassung 3 H4). -> Pfad <data_dir>/state/ground_truth.jsonl"""
+    return os.path.join(data_dir, "state", "ground_truth.jsonl")
+
+
 def master_persons(cfg):
     """Personenliste (AP1) — Frigate-unabhaengig. Seit E3b-2a (Bauplan analysen/bauplan_refquelle_einbau.md,
     Stufe E3 Punkt 2, Entscheid 6) aus der Referenz-Quelle statt aus den Ordnern unter faces/: die Personen mit
@@ -22420,15 +22426,16 @@ class Service:
         """Wartungsschritt „data cleanup" (Bauplan analysen/bauplan_datenordner_klein.md, Baustein „Ablauf", Stufen DK1 bis
         DK3): Unbekannt-Gruppen ohne Auftritt aufloesen (DK2, vor den Saetzen, damit frei gewordene Saetze im selben Lauf
         in den Papierkorb gehen; die Schutzmenge bildet sich danach aus dem neuen Gruppenbestand), Saetze in den
-        Papierkorb, Anlern-Warteschlange kuerzen, dann die Teile der Stufe DK3 (Messjournal, Archiv der Ereignisakte,
-        Schreibprotokoll nach Frigate; die Unbekannt-Schlange raeumt der Verbraucher in seiner Runde,
-        core.unbekannt_verbraucher.stuecke_raeumen), Papierkorb leeren; je Teil eigener Fang und eine INFO-Zeile mit
-        Zahlen, ein Fehler eine ERROR-Zeile. -> None"""
+        Papierkorb, Anlern-Warteschlange kuerzen, das fruehere Nutzungsjournal einmal in den Papierkorb (Bauplan
+        analysen/bauplan_weniger_schreiben_d.md Stufe D1 Punkt 6, an der Stelle des Kuerzens aus DK3 Punkt 1), dann die
+        Teile der Stufe DK3 (Archiv der Ereignisakte, Schreibprotokoll nach Frigate; die Unbekannt-Schlange raeumt der
+        Verbraucher in seiner Runde, core.unbekannt_verbraucher.stuecke_raeumen), Papierkorb leeren; je Teil eigener
+        Fang und eine INFO-Zeile mit Zahlen (das alte Nutzungsjournal nur, wenn eines lag), ein Fehler eine ERROR-Zeile.
+        -> None"""
         import anlernen as _al_d
         from core import lernlauf as _ll_d
         from core import refquelle as _rq_d
         from core import unbekanntpool as _ubp_d
-        from core.refquelle import nutzung as _nz_d
         rq_cfg = _ll_d.datenort_cfg(self.cfg["data_dir"])
         jetzt = time.time()
         try:
@@ -22457,13 +22464,10 @@ class Service:
                           f"to the trash, {q['behalten']} kept ({q['unlesbar']} unreadable kept)")
         except Exception as e:
             self.log.error(f"data cleanup: enrollment queue not rewritten ({type(e).__name__}: {e})")
-        try:                                            # DK3 Punkt 1
-            q = _nz_d.usage_trim(rq_cfg, jetzt)
-            self.log.info(f"data cleanup: usage journal trimmed — {q['entfernt']} of {q['zeilen']} line(s) older than "
-                          f"{_reg.ANGEBOT_TAGE_WERK} days moved to the trash, {q['behalten']} kept ({q['unlesbar']} "
-                          "without a readable time kept)")
+        try:                                            # D1 Punkt 6: INFO-Zeile schreibt der Schritt selbst
+            _rq_d.trash_old_usage_journal(rq_cfg, jetzt)
         except Exception as e:
-            self.log.error(f"data cleanup: usage journal not trimmed ({type(e).__name__}: {e})")
+            self.log.error(f"data cleanup: old usage journal not moved to the trash ({type(e).__name__}: {e})")
         try:                                            # DK3 Punkt 2: Monat ganz aelter als aufbewahrung_tage
             tage = self.cfg["aufbewahrung_tage"]
             grenze = jetzt - float(tage) * 86400
@@ -23196,7 +23200,9 @@ class Service:
         gelingt), und der Faden des Disponenten lebt (Bauplan Disponent D3b Punkt 9, ED008; der Grund steht im Block
         `vorlauf` unter `faden_grund` und als ERROR im Log), und die Lese-Kopie der Referenz-Quelle meldet keinen Fehler
         (Bauplan analysen/bauplan_lesen_drei_dateien.md E5, D2 Punkt 7, ED008: Schreibfehler, kaputte Zeile, gescheiterter
-        Nachtrag; der planmaessige Nachtrag ist nicht rot; Block `lesekopie`). -> bool"""
+        Nachtrag; der planmaessige Nachtrag ist nicht rot; Block `lesekopie`), und der Seitenspeicher von /heute und
+        /anwesenheit ist nicht rot (Bauplan analysen/bauplan_render_cache.md RC1 Punkt 5, ED008: rot nach einem Fehler in
+        Nachsehen oder Ablegen bis zum naechsten gelungenen Aufruf; Block `render_cache`). -> bool"""
         serie = serie if serie is not None else self.analyse_serie_stand()
         # `getattr` wie in `_worker_warm`: die Proben stellen den Dienst ohne Worker auf.
         haenger_offen = getattr(getattr(self, "_dienst_obj", None), "haenger_offen", None)
@@ -23208,6 +23214,7 @@ class Service:
                                          or _um["rechnung"]["phase"] == _rq_um.basis.COMPUTE_RED)
         kopie_rot = bool(_cfg.get("data_dir")) and _rq_um.copies_state(_cfg)["rot"]
         from core import aehnlich as _aeh_ok
+        from core import render_cache as _rc_ok
         # Nur ein GESTARTETER und dann gestorbener Faden ist rot (False); None heisst
         # „nicht gestartet" (Proben, --once, die Startsekunden vor main()).
         return (int(getattr(self, "startup_fails", 0) or 0) == 0 and not serie["aktiv"]
@@ -23220,6 +23227,7 @@ class Service:
                 and not self._unbekannt_rot()
                 and not self._frigate_mqtt_rot()
                 and not _aeh_ok.SPEICHER.rot()
+                and not _rc_ok.red()
                 and self._disponent_faden_lebt() is not False)
 
     def stillstand_stand(self):
@@ -27648,6 +27656,43 @@ def make_handler(svc):
             except (BrokenPipeError, ConnectionResetError):
                 pass                              # Client weg — nichts mehr zuzustellen
 
+        def _heute_senden(self, titel, inhalt, live_offen, ist_heute):
+            """Die Huelle der Seite /heute je Aufruf bauen (Banner, Nachhol-Knopf, Takt, Frigate-Hinweis) und senden;
+            aus dem Zweig /heute unveraendert verschoben (Bauplan analysen/bauplan_render_cache.md, RC1 Punkt 4). -> None"""
+            import webui
+            # Auto-Aktualisierung NUR am heutigen Tag: ein vergangener Tag aendert sich nicht
+            # mehr, ein Reload wuerde nur die Position im Blaettern zerstoeren.
+            # .340: den Banner ZUERST holen — erst danach steht fest, ob der
+            # Nachhol-Zweig gezogen hat und sein Angebot danebengehoert. Waehrend des
+            # Nachholens laeuft derselbe 30-s-Takt wie bei einem offenen Durchgang,
+            # damit der Zaehler sich sichtbar bewegt.
+            _bn = self._banner()
+            _bakt = ""
+            if (getattr(self, "_banner_quelle", "") == "nachholen"
+                    and not (getattr(svc, "_sweep_stand", None) or {}).get("auf_wunsch")):
+                _bakt = ('<button class="gtb" style="margin-left:10px" '
+                         'onclick="startNachholAus()">'
+                         + html.escape(_sprache.t("banner.nachholen_aus")) + '</button>')
+            # .341 (User 25.08.): dezenter Hinweis, wenn FRIGATES eigene
+            # Gesichtserkennung laeuft — suslik braucht sie nicht. NICHT zeigen,
+            # solange frigate_sync an ist: der Namens-Rueckschrieb BRAUCHT sie,
+            # dort waere die Empfehlung "schalt sie aus" ein Schuss ins Knie.
+            # .348 (Feldtester-Log 26.08., 26 Tracebacks): hier stand
+            # `self.cfg` — die Handler-Klasse H HAT kein cfg-Attribut, die
+            # Config heisst im Handler-Scope `cfg`. Bei uns unsichtbar, weil
+            # die Bedingung vor dem dritten Term abbricht (Frigate-FR aus);
+            # beim Tester (FR an) starb damit JEDE /heute-Anfrage. Gate-
+            # Anker verbietet self.cfg in H seitdem komplett.
+            _hw = None
+            if (_frigate_fr.get("bekannt") and _frigate_fr.get("an")
+                    and not cfg.get("frigate_sync")):
+                _hw = _sprache.t("hinweis.frigate_fr_an")
+            _seite = webui.layout(
+                titel, "/heute", inhalt, _bn,
+                refresh=(30 if (live_offen or _bakt) else 120) if ist_heute else 0,
+                banner_aktion=_bakt, hinweis=_hw)
+            return self._send(200, _seite)
+
         # ---- Body-Leser (E2, .505 — 05.09.2026, bauplan_0505) --------------
         # ANLASS (Feldfall 04.09., Screenshot der Lern-Bruecke): jede POST-Route
         # las ihren Body als `read(min(n, <Deckel>))`. Ein Body ueber dem Deckel
@@ -31231,6 +31276,24 @@ def make_handler(svc):
                     heute0 = tag_dt.timestamp()
                     tag_ende = (tag_dt + datetime.timedelta(days=1)).timestamp()
                 ist_heute = tag_dt.date() == _heute_dt.date()
+                # Bauplan analysen/bauplan_render_cache.md, Stufe RC1 Punkt 3 (E3, E4, E10): mit Schalter an erst im
+                # Seitenspeicher nachsehen; ein Treffer liefert Titel, Inhalt und „ist heute“, die Huelle entsteht neu.
+                # Der Schluessel traegt den Rohwert von ?area=, den Update-Hinweis und den roten Hinweis „ähnlich“.
+                from core import render_cache as _rc
+                _rc_griff = None
+                if _rc.enabled(cfg):
+                    import webui
+                    from core import aehnlich as _aeh
+                    _upd = webui.UPDATE_INFO or {}
+                    with _rt.step("render_cache"):
+                        _rc_griff = _rc.lookup(_rc.PAGE_TODAY, cfg, svc.log_path, tag_dt.strftime("%Y-%m-%d"),
+                                               _heute_dt.strftime("%Y-%m-%d"),
+                                               (qs.get("area", [""])[0], _upd.get("tag"), _upd.get("url"),
+                                                _aeh.SPEICHER.rot()),
+                                               gt_path=ground_truth_path(cfg["data_dir"]))
+                    if _rc_griff is not None and _rc_griff.hit is not None:
+                        return self._heute_senden(_rc_griff.hit.title, _rc_griff.hit.content, False,
+                                                  _rc_griff.hit.today_page)
                 z_events = 0
                 # by_h (last-wins je eid) MUSS vor die KPI: nach einem Nachhol-Lauf gibt es zwei
                 # Zeilen fuer dasselbe Event. Zaehlte die KPI wie frueher die ERSTE, stuende die
@@ -31305,8 +31368,7 @@ def make_handler(svc):
                 # F2 (.54): eid -> LETZTES Label — der Label-WERT entscheidet:
                 #  Person=beurteilt/raus, "Stranger"/"?"=BLEIBT sichtbar
                 #  (konzept_gt_label_fix.md); .313: EINE Lese-Quelle (szenarien.gt_labelmap).
-                gtmap_h = _szen.gt_labelmap(
-                    os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl"))
+                gtmap_h = _szen.gt_labelmap(ground_truth_path(cfg["data_dir"]))
                 # (by_h wird oben vor der KPI gebaut)
 
                 def _av_farbe(name):
@@ -32094,40 +32156,13 @@ def make_handler(svc):
                           + f'<div class="listhead" id="passes"><h3>{html.escape(_sprache.t("heute.rand.passes"))}</h3>'
                           f'<span class="cnt">{cnt}</span></div>'
                           f'{liste}{motiv}</div>{neben}</div>')
-                # Auto-Aktualisierung NUR am heutigen Tag: ein vergangener Tag aendert sich nicht
-                # mehr, ein Reload wuerde nur die Position im Blaettern zerstoeren.
-                # .340: den Banner ZUERST holen — erst danach steht fest, ob der
-                # Nachhol-Zweig gezogen hat und sein Angebot danebengehoert. Waehrend des
-                # Nachholens laeuft derselbe 30-s-Takt wie bei einem offenen Durchgang,
-                # damit der Zaehler sich sichtbar bewegt.
-                _bn = self._banner()
-                _bakt = ""
-                if (getattr(self, "_banner_quelle", "") == "nachholen"
-                        and not (getattr(svc, "_sweep_stand", None) or {}).get("auf_wunsch")):
-                    _bakt = ('<button class="gtb" style="margin-left:10px" '
-                             'onclick="startNachholAus()">'
-                             + html.escape(_sprache.t("banner.nachholen_aus")) + '</button>')
-                # .341 (User 25.08.): dezenter Hinweis, wenn FRIGATES eigene
-                # Gesichtserkennung laeuft — suslik braucht sie nicht. NICHT zeigen,
-                # solange frigate_sync an ist: der Namens-Rueckschrieb BRAUCHT sie,
-                # dort waere die Empfehlung "schalt sie aus" ein Schuss ins Knie.
-                # .348 (Feldtester-Log 26.08., 26 Tracebacks): hier stand
-                # `self.cfg` — die Handler-Klasse H HAT kein cfg-Attribut, die
-                # Config heisst im Handler-Scope `cfg`. Bei uns unsichtbar, weil
-                # die Bedingung vor dem dritten Term abbricht (Frigate-FR aus);
-                # beim Tester (FR an) starb damit JEDE /heute-Anfrage. Gate-
-                # Anker verbietet self.cfg in H seitdem komplett.
-                _hw = None
-                if (_frigate_fr.get("bekannt") and _frigate_fr.get("an")
-                        and not cfg.get("frigate_sync")):
-                    _hw = _sprache.t("hinweis.frigate_fr_an")
-                _seite = webui.layout(
-                    _titel, "/heute", inhalt, _bn,
-                    refresh=(30 if (live_offen or _bakt) else 120) if ist_heute else 0,
-                    banner_aktion=_bakt, hinweis=_hw)
+                # Bauplan analysen/bauplan_render_cache.md, Stufe RC1 Punkt 3 (E3, E6): ablegen mit dem Titel, den die
+                # Huelle bekommt, und mit den Signalen von vor dem Bau; laeuft ein Durchgang, wird nichts abgelegt.
+                if _rc_griff is not None:
+                    _rc.store(_rc_griff, _titel, inhalt, ist_heute, live_offen)
                 _log.debug(f"page /heute: {(time.monotonic() - _t0_seite) * 1000:.0f} ms total, deckung.jsonl view "
                            f"{_akte_s * 1000:.0f} ms ({len(by_h)} events of the day)")
-                return self._send(200, _seite)
+                return self._heute_senden(_titel, inhalt, live_offen, ist_heute)
             if path == "/lernlauf/anker":
                 # E3-Ansicht (read-only): Cluster mit Crops — der erste Blick vor
                 # der Benennung. Renderer im Modul (I1), hier nur Daten + Layout.
@@ -32961,6 +32996,18 @@ def make_handler(svc):
                 from routes import anwesenheit as _r_anw
                 _heute_a = _anw.tag_von_ts(time.time())
                 _datum_a = _r_anw.tag_waehlen(qs.get("tag", [""])[0], _heute_a)
+                # Bauplan analysen/bauplan_render_cache.md, Stufe RC1 (Fassung 2, E12): mit Schalter an erst im
+                # Seitenspeicher nachsehen; der Schluessel traegt die Rohwerte von ?kamera= und ?area=, die Jetzt-Zelle
+                # bildet das Modul selbst. Ein Treffer liefert Titel und Inhalt, Layout und Banner entstehen neu.
+                from core import render_cache as _rc
+                _rc_griff = None
+                if _rc.enabled(cfg):
+                    with _rt.step("render_cache"):
+                        _rc_griff = _rc.lookup(_rc.PAGE_PRESENCE, cfg, svc.log_path, _datum_a, _heute_a,
+                                               (qs.get("kamera", [""])[0], qs.get("area", [""])[0]))
+                    if _rc_griff is not None and _rc_griff.hit is not None:
+                        return self._send(200, webui.layout(_rc_griff.hit.title, "/anwesenheit",
+                                                            _rc_griff.hit.content, self._banner()))
                 # Bauplan Seiten-Tempo ST1: die Kameras aller Zeilen (jeder gesetzte Wert als Text) aus der Akten-Sicht
                 # (core/akte.py), ohne die Akte ganz zu lesen.
                 from core import akte as _akte
@@ -32981,6 +33028,8 @@ def make_handler(svc):
                                        _anw.fenster(cfg, log=svc.log),
                                        master_persons(cfg), _cams_a, _areas_a, _sicht_a,
                                        _anw.tage_vorhanden(cfg))
+                if _rc_griff is not None:                 # RC1: ablegen mit den Signalen von vor dem Bau
+                    _rc.store(_rc_griff, _sprache.t("anwesenheit.titel"), inhalt, _datum_a == _heute_a, False)
                 _seite = webui.layout(_sprache.t("anwesenheit.titel"), "/anwesenheit", inhalt, self._banner())
                 _log.debug(f"page /anwesenheit: {(time.monotonic() - _t0_seite) * 1000:.0f} ms total, deckung.jsonl view "
                            f"{_akte_s * 1000:.0f} ms ({len(_cams_a)} cameras)")
@@ -33870,6 +33919,7 @@ def make_handler(svc):
                 # Grund `stillstand` des Stoerungswaechters (Punkt 2).
                 from core import refquelle as _rq_health
                 from core import aehnlich as _aeh_health
+                from core import render_cache as _render_cache_health
                 h = {"ok": svc.health_ok(_serie),
                      "startup_fails": _sf,
                      "analyse_serie": _serie,
@@ -33884,6 +33934,10 @@ def make_handler(svc):
                      # nur bei einem Fehler (Schreibfehler, kaputte Zeile, gescheiterter Nachtrag), nicht
                      # waehrend des planmaessigen Nachtrags; `rot` macht `ok` rot (Service.health_ok).
                      "lesekopie": _rq_health.copies_state(cfg),
+                     # Bauplan analysen/bauplan_render_cache.md, Stufe RC1 Punkt 5: der Seitenspeicher dieses Prozesses,
+                     # nur aus dem Speicher — Schalter, Eintraege, Deckel, Lebensdauer, Treffer, Fehltreffer je Grund,
+                     # Verdraengte, Fehler, letzter Fehler; `red` macht `ok` rot (Service.health_ok, ED008).
+                     "render_cache": _render_cache_health.state(cfg),
                      "version": os.environ.get("SUSLIK_VERSION", "dev"),
                      "processed": len(svc.processed),
                      # E0: die Platz-Vergabe sichtbar machen. Ohne diese Zeile waere ein
