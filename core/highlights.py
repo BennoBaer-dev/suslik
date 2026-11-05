@@ -12,7 +12,7 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.054"   # 0.1.1.054: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 15:5x "Wir lassen uns mit Small", CHANGELOG nur "Small fixes."); 0.1.1.053: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 07:2x "What's new packen wir nichts rein"); 0.1.1.052: kein neuer Box-Eintrag (Eigentuemer 04.11.2026 17:32:17 "Changelog wuerde ich jetzt nicht
+STAND = "0.1.1.055"   # 0.1.1.055: EIN neuer Box-Eintrag, Inhalt vom Eigentuemer 05.11.2026 20:4x ("text für waths new: weniger deuteifunktion, speziell für große installationen und cache für die beiden seiten"), Kurzfassung abgenommen 20:5x ("Ja, passt"); 0.1.1.054: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 15:5x "Wir lassen uns mit Small", CHANGELOG nur "Small fixes."); 0.1.1.053: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 07:2x "What's new packen wir nichts rein"); 0.1.1.052: kein neuer Box-Eintrag (Eigentuemer 04.11.2026 17:32:17 "Changelog wuerde ich jetzt nicht
                       # gross was reinpacken. What's new? Auch nichts. Weil das sind ja nur Fixes von Dingen, die wir schon
                       # gedacht haetten, haetten wir schon lange gefixt."). Box unveraendert: nur STAND geht hoch; Stufen D1
                       # bis D4 des Bauplans analysen/bauplan_lesen_drei_dateien.md, der CHANGELOG-Abschnitt hat einen Satz.
@@ -878,6 +878,23 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.1.055 — EIN Punkt, INHALT VOM INHABER: Eigentuemer 05.11.2026 20:4x („text für waths new: weniger deuteifunktion,
+    # speziell für große installationen und cache für die beiden seiten“), Kurzfassung DE und EN von der Hauptsession
+    # vorgeschlagen, abgenommen 20:5x („Ja, passt“). ES, IT, FR und FI nach EN uebersetzt; die Seitennamen je Sprache wie
+    # in core/texte/<sprache>.py (nav.heute, anwesenheit.titel). Was dahinter steht: Stufen D1 und D3 des Bauplans
+    # analysen/bauplan_weniger_schreiben_d.md und RC1/RC2 des Bauplans analysen/bauplan_render_cache.md (0.1.1.054).
+    ("0.1.1.055", (
+        {"de": "Weniger Dateizugriffe, besonders bei großen Installationen; „Heute“ und „Anwesenheit“ kommen aus dem "
+               "Speicher.",
+         "en": "Fewer file accesses, especially for large installations; Today and Presence are served from memory.",
+         "es": "Menos accesos a archivos, sobre todo en instalaciones grandes; «Hoy» y «Presencia» se sirven desde la "
+               "memoria.",
+         "it": "Meno accessi ai file, soprattutto nelle installazioni grandi; «Oggi» e «Presenza» arrivano dalla "
+               "memoria.",
+         "fr": "Moins d'accès aux fichiers, surtout pour les grandes installations ; « Aujourd'hui » et « Présence » "
+               "sont servies depuis la mémoire.",
+         "fi": "Vähemmän tiedostokäyttöjä, erityisesti suurissa asennuksissa; Tänään ja Läsnäolo tulevat muistista."},
+    )),
     # 0.1.1.051 — EIN Punkt, INHALT VOM INHABER: Eigentuemer 04.11.2026 09:15:33 („Und bei What's New nehmen wir als Text
     # Small Fixes for Large Systems.“). DE, ES, IT, FR und FI nach EN uebersetzt, das Wort fuer die Systeme je Sprache wie
     # im Eintrag zum GPU-Schalter.
