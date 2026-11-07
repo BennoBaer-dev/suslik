@@ -79,8 +79,8 @@ docker pull ghcr.io/bennobaer-dev/suslik:latest-gpu-legacy  # Intel Gen8/9/11 (t
 docker pull ghcr.io/bennobaer-dev/suslik:latest-rocm        # AMD (testing)
 
 # the same release, pinned so it never moves under you:
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.055-gpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.055-cuda
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.056-gpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.056-cuda
 docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.055-cpu
 docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.055-gpu-legacy
 docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.055-rocm

@@ -955,6 +955,9 @@ KARTE_START_ZEITGRENZE_S = 30
 # Abfrageteil fehlt immer. So kommen keine Namen aus Pfaden oder Abfragen ins Log. Grenze: eine neue Route
 # ohne Eintrag hier erscheint als `other`, bis die Liste nachgezogen ist (Stand der Liste: die Zweige von
 # do_GET und do_POST in verifyd.make_handler am 22.10.2026).
+# Bauplan analysen/bauplan_lebenszeichen.md, Stufe LZ1: der eigene, einfache Weg, den die Selbstwache fragt; der
+# Webserver beantwortet ihn aus dem Speicher (kein Banner, keine Sprachwahl, keine Datei, keine Sperre des Dienstes).
+LEBENSZEICHEN_WEG = "/lebenszeichen"
 WEB_ROUTES = (
     "/", "/aehnliche", "/aehnliche_status", "/anlern_wartung_jetzt", "/anlernen", "/anlernen_benennen",
     "/anwesenheit", "/areas", "/areas_speichern", "/auftritt_lernen", "/auftritt_lernen_undo", "/auftritte",
@@ -964,7 +967,7 @@ WEB_ROUTES = (
     "/ereignisse", "/erkennung", "/erkennung_live", "/erkennungstest", "/faces", "/fremde", "/frigate",
     "/gesichter", "/gpu", "/gpu_speichern", "/gt", "/health", "/heute", "/kalibrierung",
     "/kalibrierung_fuellen", "/kalibrierung_fuellstand", "/kameras", "/kameras/steckbriefe_neu",
-    "/kameras_speichern", "/kette", "/konfig", "/konfiguration", "/lernen", "/lernlauf",
+    "/kameras_speichern", "/kette", "/konfig", "/konfiguration", LEBENSZEICHEN_WEG, "/lernen", "/lernlauf",
     "/lernlauf/alte_loeschen", "/lernlauf/anker", "/lernlauf/benenn_pruefung", "/lernlauf/benennen",
     "/lernlauf/lauf_loeschen", "/lernlauf/sichtung", "/lernlauf/uebernehmen", "/lernlauf/verwerfen",
     "/lernlauf_abbruch", "/lernlauf_fortsetzen", "/lernlauf_start", "/lernlauf_status", "/live",
@@ -995,9 +998,44 @@ WEB_ROUTE_PREFIXES = (
     "/personlauf/fremdbild/", "/static/", "/support/", "/video/", "/vision/galerie/bild/",
 )
 WEB_ROUTE_OTHER = "other"
-# Routen, deren Zeile nur auf DEBUG steht: /health, der Sekundentakt der Live-Seite (/live_status, die
-# Vorschaubilder unter /live_bild/) und die statischen Dateien.
-WEB_DEBUG_ROUTES = ("/health", "/live_status", "/live_bild/", "/static/")
+# Routen, deren Zeile nur auf DEBUG steht: /health, der Takt der Selbstwache (LEBENSZEICHEN_WEG), der Sekundentakt
+# der Live-Seite (/live_status, die Vorschaubilder unter /live_bild/) und die statischen Dateien.
+WEB_DEBUG_ROUTES = ("/health", LEBENSZEICHEN_WEG, "/live_status", "/live_bild/", "/static/")
+# Routen, fuer die der Handler die Sprache nicht aus dem Config-Store waehlt (Stufe LZ1: kein t(), kein Dateizugriff).
+# /health seit Stufe LZ5: der Anfrageweg liefert nur die Momentaufnahme, die Sprache setzt der Sammler je Lauf.
+WEB_ROUTEN_OHNE_SPRACHE = (LEBENSZEICHEN_WEG, "/health")
+
+# --- Selbstwache (Bauplan analysen/bauplan_lebenszeichen.md, Stufe LZ1, Entscheid 8) ---------------------------------
+# Werkswerte, keine Config-Schluessel (die Config kennt nur an und aus, `selbstwache`). Unveraendert aus dem frueheren
+# Code uebernommen (verifyd.Service.start_selbstwache: Takt 15 s, Frist 30 s, 4 Fehlversuche), nicht gemessen.
+# Stufe LZ2b (Entscheide 12 und 2): `web_neustart_frist_s` = so lange wartet der Neustart des Webserver-Fadens auf das
+# Ende der alten Schleife und die Wache auf den Neustart (Bauplan LZ2b Fix-Stelle 2), gesetzt, nicht gemessen;
+# `web_neustart_pause_s` = hoechstens ein Neustartversuch je Pause, auch nach gescheitertem Binden (Fix-Stellen 2 und 3),
+# gesetzt, nicht gemessen; `lebens_fenster_s` = die Arbeit lebt, wenn ihre juengste Marke hoechstens so alt ist
+# (Eigentuemer 07.11.2026 12:06:03 „innerhalb von 60 Sekunden“), nicht gemessen und nicht aus Takt und Fehlversuchen abgeleitet.
+SELBSTWACHE = {"takt_s": 15, "frist_s": 30, "fehlversuche": 4,
+               "web_neustart_frist_s": 10, "web_neustart_pause_s": 300, "lebens_fenster_s": 60}
+# Ab dieser Antwortdauer meldet /health sich als WARNING (verifyd.Service.health_dauer_melden). Wert unveraendert,
+# bisher die halbe Frist der Selbstwache; seit LZ1 fragt die Selbstwache /health nicht mehr, der Wert steht fuer sich.
+HEALTH_LANGSAM_S = 15
+# --- Sammler von /health (Bauplan analysen/bauplan_lebenszeichen.md, Stufe LZ5, Entscheid 7) -------------------------
+# Werkswerte, gesetzt, nicht gemessen. Der Sammler (verifyd.Service.start_health_sammler) baut den Inhalt von /health
+# je `takt_s`, aber nur, solange der letzte Abruf hoechstens `ruhe_nach_takten` x `takt_s` zurueckliegt; danach
+# schlaeft er, bis ein Abruf ihn weckt, und dieser Abruf wartet hoechstens `erste_frist_s` auf den frischen Stand.
+# Die Dateibloecke (Umzug, Speichergrenzen, Wanduhr, Erkennungskette, Live) liest er nur je `dateien_takt_s`.
+# `fehler_zeichen`: so viele Zeichen des Fehlertexts traegt `momentaufnahme.letzter_fehler`; derselbe Wert wie bei den
+# Fehlertexten der Nachbarbloecke in /health (verifyd.Vorlauf: `letzter_fehler`, `faden_grund`, je `str(e)[:200]`).
+HEALTH_SAMMLER = {"takt_s": 10, "ruhe_nach_takten": 2, "erste_frist_s": 3, "dateien_takt_s": 60, "fehler_zeichen": 200}
+# --- Fortschrittsmarken (Bauplan analysen/bauplan_lebenszeichen.md, Stufe LZ2 Punkt 3) -----------------------------
+# Grenze je Marke = faktor x Dauer einer Runde der Schleife (Ausnahme plaetze: die Stumm-Grenze der Plaetze); gelesen
+# von core.lebenszeichen.grenzen. `faktor` nach dem Muster MQTT_STUMMWACHE.stumm_faktor, ein Vorschlag, nicht gemessen.
+# Die uebrigen Werte sind heute Literale im Code und stehen hier benannt, damit die Grenzen sie lesen (Hauptsession
+# 07.11.2026, Variante A); an ihren Fundstellen ausserhalb dieser Stufe stehen sie noch als Literale (Nebenbefund):
+#   abruf_grund_s / abruf_zuwachs_je: Abruffrist des Sweeps `20 + LIMIT // 250` (verifyd.Service.sweep) und
+#     Vorgabe-Frist eines Frigate-Abrufs 20 s (verifyd.api);
+#   sende_max_s: laengste Sendefrist der Meldewege, `urlopen(..., timeout=60)` (core/melden.py, Telegram);
+#   spur_warte_s: Wartefrist der Melde-Spur (verifyd.Service.start_melde_spur, liest sie von hier).
+LEBENSZEICHEN = {"faktor": 3, "abruf_grund_s": 20, "abruf_zuwachs_je": 250, "sende_max_s": 60, "spur_warte_s": 30}
 # Die Methoden, die die Zeile nennt; jedes andere erste Wort der Anfrage heisst WEB_METHOD_OTHER.
 WEB_METHODS = ("GET", "HEAD", "POST")
 WEB_METHOD_OTHER = "OTHER"

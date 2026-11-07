@@ -12,7 +12,7 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.055"   # 0.1.1.055: EIN neuer Box-Eintrag, Inhalt vom Eigentuemer 05.11.2026 20:4x ("text für waths new: weniger deuteifunktion, speziell für große installationen und cache für die beiden seiten"), Kurzfassung abgenommen 20:5x ("Ja, passt"); 0.1.1.054: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 15:5x "Wir lassen uns mit Small", CHANGELOG nur "Small fixes."); 0.1.1.053: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 07:2x "What's new packen wir nichts rein"); 0.1.1.052: kein neuer Box-Eintrag (Eigentuemer 04.11.2026 17:32:17 "Changelog wuerde ich jetzt nicht
+STAND = "0.1.1.056"   # 0.1.1.056: EIN neuer Box-Eintrag (Kette Lebenszeichen, Bauplan analysen/bauplan_lebenszeichen.md, Stufen LZ1, LZ2, LZ4, LZ5, LZ2b, LZ6); CHANGELOG-Satz vom Eigentuemer 07.11.2026 17:41:46 abgenommen ("Ja, so"), Box-Zeile 17:42:32 ("ok"); 0.1.1.055: EIN neuer Box-Eintrag, Inhalt vom Eigentuemer 05.11.2026 20:4x ("text für waths new: weniger deuteifunktion, speziell für große installationen und cache für die beiden seiten"), Kurzfassung abgenommen 20:5x ("Ja, passt"); 0.1.1.054: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 15:5x "Wir lassen uns mit Small", CHANGELOG nur "Small fixes."); 0.1.1.053: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 07:2x "What's new packen wir nichts rein"); 0.1.1.052: kein neuer Box-Eintrag (Eigentuemer 04.11.2026 17:32:17 "Changelog wuerde ich jetzt nicht
                       # gross was reinpacken. What's new? Auch nichts. Weil das sind ja nur Fixes von Dingen, die wir schon
                       # gedacht haetten, haetten wir schon lange gefixt."). Box unveraendert: nur STAND geht hoch; Stufen D1
                       # bis D4 des Bauplans analysen/bauplan_lesen_drei_dateien.md, der CHANGELOG-Abschnitt hat einen Satz.
@@ -878,6 +878,24 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.1.056 — EIN Punkt, INHALT ABGESTIMMT: CHANGELOG-Satz und Box-Zeile (EN) von der Hauptsession vorgeschlagen,
+    # Eigentuemer 07.11.2026 17:41:46 („Ja, so“) und 17:42:32 („ok“). DE, ES, IT, FR und FI nach EN uebersetzt; „health“
+    # bleibt in jeder Sprache das Wort der Abfrage /health. Was dahinter steht: Stufen LZ1, LZ2, LZ4, LZ5, LZ2b und LZ6
+    # des Bauplans analysen/bauplan_lebenszeichen.md (Selbstwache fragt /lebenszeichen, Webserver-Neustart, Sammler).
+    ("0.1.1.056", (
+        {"de": "Die Selbstwache prüft, ob der Dienst lebt, statt zu messen, wie lange health braucht; der Webserver "
+               "startet sich selbst neu; health ist eine Momentaufnahme.",
+         "en": "Self-watch checks liveness instead of health timing; the web server restarts on its own; health is a "
+               "snapshot.",
+         "es": "La autovigilancia comprueba si el servicio sigue vivo en vez de medir cuánto tarda health; el servidor "
+               "web se reinicia solo; health es una instantánea.",
+         "it": "L'autosorveglianza controlla se il servizio è vivo invece di misurare quanto impiega health; il server "
+               "web si riavvia da solo; health è un'istantanea.",
+         "fr": "L'auto-surveillance vérifie que le service est vivant au lieu de mesurer la durée de health ; le "
+               "serveur web redémarre tout seul ; health est un instantané.",
+         "fi": "Itsevalvonta tarkistaa, että palvelu on elossa, sen sijaan että mittaisi health-vastauksen kestoa; "
+               "verkkopalvelin käynnistyy itse uudelleen; health on tilannekuva."},
+    )),
     # 0.1.1.055 — EIN Punkt, INHALT VOM INHABER: Eigentuemer 05.11.2026 20:4x („text für waths new: weniger deuteifunktion,
     # speziell für große installationen und cache für die beiden seiten“), Kurzfassung DE und EN von der Hauptsession
     # vorgeschlagen, abgenommen 20:5x („Ja, passt“). ES, IT, FR und FI nach EN uebersetzt; die Seitennamen je Sprache wie

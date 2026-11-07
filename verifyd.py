@@ -7090,10 +7090,14 @@ class Analyseplaetze:
         UNGEBUNDEN: dieser Griff pulst den Platz, egal WER ruft. Aufrufer, die einen
         Platz halten, nehmen deshalb `puls_fuer(nr)` — die an ihre Belegung gebundene
         Fassung (A3, Begruendung dort). `puls()` bleibt fuer Proben und als schlichter
-        Zustands-Griff bestehen."""
+        Zustands-Griff bestehen.
+        Stufe LZ2 (Bauplan analysen/bauplan_lebenszeichen.md): ein Puls auf einem
+        belegten Platz setzt auch die Fortschrittsmarke `plaetze`."""
+        from core import lebenszeichen as _lz
         with self._mutex:
             if nr in self._belegt:
                 self._belegt[nr]["puls"] = time.monotonic()
+                _lz.setzen("plaetze")
 
     def puls_fuer(self, nr):
         """Lebenszeichen-Griff, GEBUNDEN an die Belegung, die jetzt auf Platz `nr`
@@ -7112,7 +7116,10 @@ class Analyseplaetze:
 
         MUSS innerhalb der `platz()`-Klammer gebaut werden. Davor gibt es keine Marke,
         und die Closure bliebe dauerhaft wirkungslos (ein freier Platz hat gar keine,
-        ein fremder eine andere)."""
+        ein fremder eine andere).
+        Stufe LZ2: nur bei gueltiger Belegung setzt der Griff auch die Fortschrittsmarke
+        `plaetze`; ein eingezogener Faden zaehlt damit nicht als Arbeit."""
+        from core import lebenszeichen as _lz
         with self._mutex:
             d = self._belegt.get(nr)
             marke = d["marke"] if d else None
@@ -7124,6 +7131,7 @@ class Analyseplaetze:
                 # zu: Marken sind fortlaufende Zahlen ab 1.
                 if d is not None and d["marke"] == marke:
                     d["puls"] = time.monotonic()
+                    _lz.setzen("plaetze")
 
         return _puls
 
@@ -8076,10 +8084,12 @@ class Vorlauf:
                               f"released {n_los} other(s)")
 
     def _lauf(self):
+        from core import lebenszeichen as _lz       # Stufe LZ2: Fortschrittsmarke je Runde
         try:
             while not self._stop.is_set():
                 self.wecken.wait(VORLAUF_TAKT_S)
                 self.wecken.clear()
+                _lz.setzen("vorlauf")
                 if self._stop.is_set():
                     break
                 try:
@@ -10133,10 +10143,15 @@ class Service:
         self._spur_stat = {"gesendet": 0, "fehler": 0}
 
         def lauf():
+            # Stufe LZ2: Fortschrittsmarke je Runde und je Aufwachen; die Wartefrist steht in der Registry.
+            from core import lebenszeichen as _lz
+            warte_s = _reg.LEBENSZEICHEN["spur_warte_s"]
             while True:
+                _lz.setzen("melde-spur")
                 with self._spur_wecker:
                     while not self._spur_q:
-                        self._spur_wecker.wait(timeout=30)
+                        self._spur_wecker.wait(timeout=warte_s)
+                        _lz.setzen("melde-spur")
                     beschreibung, fn = self._spur_q.popleft()
                 try:
                     if fn() is not self._SPUR_UNCOUNTED:
@@ -10212,10 +10227,14 @@ class Service:
         self.event_queue_anlegen()
 
         def lauf():
+            # Stufe LZ2: Fortschrittsmarke `plaetze` nach jedem Ereignis (Kopf der Runde) und bei jedem Aufwachen.
+            from core import lebenszeichen as _lz
             while True:
+                _lz.setzen("plaetze")
                 with self._ev_wecker:
                     while not self._ev_q:
                         self._ev_wecker.wait(timeout=30)
+                        _lz.setzen("plaetze")
                     # C2-T0 (05.09.2026, bauplan_0505.md §2 Gruppe C), seit LZ1
                     # (Bauplan analysen/bauplan_neueste_zuerst.md) von hinten: das
                     # ZULETZT EINGEREIHTE FAELLIGE Element, nicht blind das Ende.
@@ -11061,37 +11080,629 @@ class Service:
             self._spur_q.append((beschreibung, fn))
             self._spur_wecker.notify()
 
-    # Antwort-Frist der Selbstwache an ihr eigenes /health (bis Feldstau Stufe 5 ein Literal
-    # im urlopen-Aufruf). Bauplan Feldstau Stufe 5.3 (Klaerungspunkt 4): /health meldet sich
-    # mit einer WARNING, sobald eine Antwort die HALBE Frist ueberschreitet — abgeleitet, kein
-    # Config-Schluessel; ein drohender Abgang der Selbstwache steht damit vorher im Log.
-    SELBSTWACHE_FRIST_S = 30
-    HEALTH_LANGSAM_S = SELBSTWACHE_FRIST_S / 2
-
-    def health_dauer_melden(self, gesamt_s, log_block_s):
-        """Meldet die Antwort-Dauer eines /health-Abrufs samt dem Anteil des Log-Blocks mit den
-        Tee-Zaehlern (Bauplan Feldstau Stufe 5.3): ueber HEALTH_LANGSAM_S als WARNING (immer),
-        sonst als DEBUG-Zeile (steht nur bei eingeschaltetem Debug). -> None"""
-        text = (f"/health answered in {gesamt_s:.2f} s "
-                f"(log block with tee counters {log_block_s:.2f} s)")
-        if gesamt_s > self.HEALTH_LANGSAM_S:
-            self.log.warning(f"{text} — over half the self-watch deadline "
-                             f"({self.HEALTH_LANGSAM_S:g} of {self.SELBSTWACHE_FRIST_S} s)")
+    def health_dauer_melden(self, gesamt_s, schritte):
+        """Meldet die Dauer eines Sammellaufs von /health mit jedem Schritt und dem langsamsten.
+        -> None. Bauplan analysen/bauplan_lebenszeichen.md, Stufe LZ4 (davor nur Gesamtdauer und Log-Block, Bauplan
+        Feldstau Stufe 5.3; der Teil mit den Tee-Zaehlern ist seitdem der Schritt `log`): ueber
+        core.registry.HEALTH_LANGSAM_S als WARNING (immer), sonst als DEBUG-Zeile (steht nur bei eingeschaltetem
+        Debug). `schritte` ist Name -> Sekunden in der Reihenfolge der Zeile (Service.health_schritte). Seit Stufe LZ1
+        fragt die Selbstwache /health nicht mehr; die Schwelle steht fuer sich in der Registry und die WARNING nennt
+        die Selbstwache nicht. Seit Stufe LZ5 misst die Zeile den Lauf des Sammlers („/health collected in …“), und
+        Tabelle und langsamster Schritt werden nur formatiert, wenn die Zeile auch geschrieben wird (Debug an oder
+        Gesamtdauer ueber der Schwelle; Gegenpruefung LZ4, H6); die Messung selbst laeuft immer."""
+        langsam_s = _reg.HEALTH_LANGSAM_S
+        langsam = gesamt_s > langsam_s
+        if not (langsam or _logbuch.switches()["debug"]):
+            return
+        tabelle = " ".join(f"{name}={round(dauer * 1000)}" for name, dauer in schritte.items())
+        name, dauer = max(schritte.items(), key=lambda schritt: schritt[1], default=("n/a", 0.0))
+        text = f"/health collected in {gesamt_s:.2f} s — steps (ms): {tabelle} — slowest: {name} {dauer:.2f} s"
+        if langsam:
+            self.log.warning(f"{text} — over the slow-answer threshold ({langsam_s:g} s)")
         else:
             self.log.debug(text)
+
+    # Bauplan Lebenszeichen LZ4: Felder von /health, die EIN Aufruf fuellt, teilen sich einen Schritt
+    # (Feldname -> Schrittname); jedes andere Feld ist sein eigener Schritt.
+    HEALTH_SCHRITT_JE_FELD = {"clip_cache_gb": "clip_cache", "clip_cache_alter_s": "clip_cache"}
+
+    @staticmethod
+    def _health_messer(schritte, fertig=None, neu=None):
+        """Ein Messer fuer die Baufunktionen von /health: messer(name, fn) ruft fn() und schlaegt die Dauer auf
+        `schritte[name]` (gleiche Namen summieren sich). -> Funktion; sie gibt zurueck, was fn zurueckgibt.
+        Die Baufunktionen reichen je Feld ein Lambda mit dem Aufruf, der das Feld fuellt. Bauplan Lebenszeichen LZ5:
+        steht `name` in `fertig` (Dateibloecke aus dem eigenen Takt des Sammlers), kommt dieser Wert ohne Aufruf; der
+        Schritt steht dann mit 0 in der Zeile (nicht gelesen); sonst wird gerufen, gemessen und der Wert in `neu`
+        abgelegt (wenn gegeben)."""
+        def messer(name, fn):
+            if fertig is not None and name in fertig:
+                schritte.setdefault(name, 0.0)
+                return fertig[name]
+            t0 = time.monotonic()
+            try:
+                wert = fn()
+            finally:
+                schritte[name] = schritte.get(name, 0.0) + (time.monotonic() - t0)
+            if neu is not None:
+                neu[name] = wert
+            return wert
+        return messer
+
+    def health_inhalt(self, schritte, fertig=None, neu=None):
+        """Baut den Inhalt von /health Feld fuer Feld und misst jeden Schritt in `schritte` (Name -> Sekunden).
+        -> dict in Feldreihenfolge, ohne die Live-Felder `web` und `lebenszeichen` (Service.health_live).
+        Bauplan Lebenszeichen LZ4: der Aufbau stand bis dahin im Zweig `/health` von do_GET; Name eines Schritts ist
+        der Feldname (HEALTH_SCHRITT_JE_FELD legt zusammen). Die Reihenfolge der Aufrufe ist die des alten Zweigs:
+        Start-Fehler, Fehlerserie und Log-Block zuerst, dann die Felder. Seit LZ5 ruft der Sammler diese Funktion;
+        der Zustand des Worker-Prozesses wird einmal geholt (Schritt `worker`) und an `ok` und `worker_straenge`
+        weitergereicht, damit ein Aufbau nur einmal plant; `fertig` und `neu` gehen an das Messer."""
+        m = self._health_messer(schritte, fertig, neu)
+        sf = m("startup_fails", lambda: getattr(self, "startup_fails", 0))   # SD1: B8-Fang — Selbstcheck-FAIL
+        # .543 DIE AMPEL LERNT DIE LAUFZEIT (K1, dritter Beleg). Bis .542
+        # war `ok` ausschliesslich eine START-Aussage: `startup_fails == 0`.
+        # Genau deshalb blieb /health am 18. und 20.09. GRUEN, waehrend der
+        # Dienst nach einem i915-GPU-Hang des Wirts rund 80 Minuten lang
+        # jede Analyse mit CL_OUT_OF_RESOURCES verlor — der Start war ja
+        # tadellos gewesen. Eine Diagnose, die in genau der Lage gruen
+        # meldet, fuer die sie da ist, ist eine luegende Diagnose.
+        # Seitdem zaehlt auch die LAUFENDE Fehlerserie: drei gescheiterte
+        # Live-Analysen in Folge (SERIE_STRUKTURSIGNAL_N) schalten rot, und
+        # rot bleibt es, bis die erste Live-Analyse wieder gelingt oder die
+        # Serie verjaehrt (SERIE_FENSTER_S). Der Grund steht darunter in
+        # `analyse_serie` — wer rot sieht, soll nicht raten muessen.
+        serie = m("analyse_serie", lambda: self.analyse_serie_stand())
+        # Bauplan Feldstau Stufe 5.3: der Log-Block (Tee-Zaehler unter der Sperre, unter der jede
+        # Logzeile auf das Datenverzeichnis geht, Widerleger-Fund 16); seit LZ4 der Schritt `log`.
+        log_block = m("log", lambda: _logbuch.health_block(_LOGDATEI, (_STDOUT_SIEB, _STDERR_SIEB),
+                                                            self.log_startnummern()))
+        # E3.3/E3.4 (14.09.): DER WORKER-PROZESS SELBST. Bis hier stand
+        # sein Zustand nur auf der Systemseite (systemstat_dienst) —
+        # Support-Faelle schicken aber /health. Und seit dem Umbau haengt
+        # an diesem einen Prozess alles: Haenger-Schuesse, fremdverschuldet
+        # gebuchte Jobs, der Selbstbeweis. `svc.worker_health()` ist DIE
+        # Quelle, dieselbe, die auch die Systemseite liest. Seit LZ5 einmal je
+        # Aufbau geholt (eine Hardware-Planung statt vier), Feld `worker`.
+        worker = m("worker", lambda: self.worker_health())
+        return {**self._health_kern(m, sf, serie, worker), **self._health_arbeit(m, worker),
+                "start_catchup": m("start_catchup", lambda: self._health_catchup()),
+                **self._health_anlage(m), **self._health_system(m, log_block),
+                # Bauplan Lebenszeichen LZ2b Fix-Stelle 2 Punkt 4: Neustarts nur des Webserver-Fadens seit dem
+                # Dienststart und der letzte davon (Zeit, Grund), aus dem Speicher. `ok` bleibt unberuehrt (ED008).
+                "selbstwache": m("selbstwache", lambda: {
+                    "web_neustarts": int(getattr(self, "_web_neustarts", 0)),
+                    "letzter_web_neustart": getattr(self, "_letzter_web_neustart", None)})}
+
+    def _health_kern(self, m, sf, serie, worker):
+        """Die Felder `ok` bis `sample_deckel` von /health, je mit dem Messer `m` gemessen (Bauplan Lebenszeichen LZ4).
+        -> dict in Feldreihenfolge. `worker` ist der einmal geholte Zustand des Worker-Prozesses (LZ5)."""
+        cfg = self.cfg
+        from core import refquelle as _rq_health
+        from core import render_cache as _render_cache_health
+        # Bauauftrag E4-3 (Bauplan Referenz-Quelle einbauen, Stufe E4 Punkt 2, V2): der
+        # Umzug der Referenz-Quelle — Phase (gruen, laeuft, rot, ausstehend,
+        # kein_altbestand), Schritt und Stand der laufenden Standdatei, das Ergebnis
+        # gekuerzt ohne Namen, Archiv, Zeit. Rot macht `ok` rot (health_ok, ED008). Seit LZ5 vor `ok`
+        # gelesen (ein Dateiblock im Takt des Sammlers) und an health_ok gereicht, das ihn nicht mehr selbst liest.
+        umzug = m("umzug", lambda: _rq_health.migration_state(cfg))
+        # Feldbefunde G3: `ok` steht an EINER Stelle (Service.health_ok), die
+        # Pruef-Zeile `PRUEF health` liest dieselbe; dazu zaehlt seitdem der
+        # Grund `stillstand` des Stoerungswaechters (Punkt 2).
+        return {"ok": m("ok", lambda: self.health_ok(serie, worker=worker, umzug=umzug)),
+                "startup_fails": sf,
+                "analyse_serie": serie,
+                "umzug": umzug,
+                # Bauplan analysen/bauplan_lesen_drei_dateien.md E5, D2 Punkt 7: die Lese-Kopie der
+                # Referenz-Quelle in diesem Prozess, nur aus dem Speicher — Zeilen, fehlende Saetze nach dem
+                # letzten Nachtrag, Phase des Nachtrags, Rueckfaelle auf die Saetze, letzter Fehler; `rot`
+                # nur bei einem Fehler (Schreibfehler, kaputte Zeile, gescheiterter Nachtrag), nicht
+                # waehrend des planmaessigen Nachtrags; `rot` macht `ok` rot (Service.health_ok).
+                "lesekopie": m("lesekopie", lambda: _rq_health.copies_state(cfg)),
+                # Bauplan analysen/bauplan_render_cache.md, Stufe RC1 Punkt 5: der Seitenspeicher dieses Prozesses,
+                # nur aus dem Speicher — Schalter, Eintraege, Deckel, Lebensdauer, Treffer, Fehltreffer je Grund,
+                # Verdraengte, Fehler, letzter Fehler; `red` macht `ok` rot (Service.health_ok, ED008).
+                "render_cache": m("render_cache", lambda: _render_cache_health.state(cfg)),
+                # version zuerst (Task #12, User 28.07.): eingesandte Log-AUSSCHNITTE tragen
+                # die Startup-Banner-Zeile oft nicht, und "latest-gpu" im Issue-Formular ist
+                # mehrdeutig — /health ist die eine Zeile, die Support-Faelle eindeutig macht.
+                "version": m("version", lambda: os.environ.get("SUSLIK_VERSION", "dev")),
+                "processed": m("processed", lambda: len(self.processed)),
+                # E0: die Platz-Vergabe sichtbar machen. Ohne diese Zeile waere ein
+                # zweiter Analyse-Platz nirgends beobachtbar — /health zeigt sonst
+                # nur `_worker_obj`, also Worker 1 (Widerleger-Befund B8: Zustand,
+                # Tode-Zahl und Rueckfall-Statistik des zweiten Prozesses blind).
+                "analyse_plaetze": m("analyse_plaetze", lambda: self._plaetze.zustand()),
+                # E3.2 (14.09.): die Strang-Formel sichtbar machen — WIE VIELE
+                # Rechenstraenge der Worker-Dienst hat, WORAUS die Zahl kommt
+                # (Rechenweg in Klartext) und ob die Migrations-Klemme
+                # gegriffen hat. Ohne diese Zeile waere die wichtigste
+                # Speicher-Entscheidung der Anlage nur im Startlog zu finden,
+                # und Supportfaelle schicken /health, nicht 400 Logzeilen.
+                "worker_straenge": m("worker_straenge", lambda: self.worker_straenge_zustand(worker=worker)),
+                # .541: der wirksame K-Deckel UND seine HERKUNFT. Seit die
+                # Werkswerte je Image-Variante verschieden sind (cpu 120,
+                # gpu-legacy 180, sonst 240), beantwortet die Zahl allein die
+                # Frage nicht mehr: wer auf einem cpu-Image 120 sieht, muss
+                # erfahren koennen, dass das die Variante war und nicht ein
+                # Wert, den er selbst gesetzt und vergessen hat. Quelle ist
+                # `core.registry.SAMPLE_DECKEL_WERK`, aufgeloest in
+                # load_config und vom Config-Store ueberlagert.
+                "sample_deckel": m("sample_deckel", lambda: {
+                    "wert": int(cfg.get("sample_deckel") or 0),
+                    "quelle": cfg.get("sample_deckel_quelle"),
+                    "variante": os.environ.get("SUSLIK_VARIANT") or None})}
+
+    def _health_arbeit(self, m, worker):
+        """Die Felder `feinmessung` bis `frigate_mqtt` von /health, je mit dem Messer `m` gemessen (Bauplan
+        Lebenszeichen LZ4). -> dict in Feldreihenfolge. `worker` ist der einmal geholte Zustand (LZ5, Feld `worker`)."""
+        from core import aehnlich as _aeh_health
+        # .534 (B7): laeuft gerade eine Feinmessung, seit wann, bis
+        # wann und wie viele Zeilen. Sie ist von aussen schaltbar
+        # (/support/feinmessung) — dann muss von aussen auch sichtbar
+        # sein, dass sie laeuft.
+        return {"feinmessung": m("feinmessung", lambda: self.feinmessung().zustand()),
+                # .534 (B5): wo die Platzzeit je Ereignis wirklich
+                # hingeht — Median und Summe der letzten 100.
+                "zeiten": m("zeiten", lambda: self.zeiten_zustand()),
+                # .534 (B6c): der Vorrat fertiger Clips vor der
+                # Vergabestelle, mit beiden Marken und dem Pausen-Zustand.
+                "vorlauf": m("vorlauf", lambda: self.vorlauf().zustand()),
+                # E3.3/E3.4: der Zustand des Worker-Prozesses (geholt in health_inhalt, Begruendung dort).
+                "worker": worker,
+                # E3.4: die Anomalie-Wache. Sie ist die einzige Wache, die die
+                # STILLE Ausfall-Klasse sieht — sie gehoert dorthin, wo jemand
+                # nachsieht, wenn „eigentlich laeuft alles".
+                "null_gesichter": m("null_gesichter", lambda: self.null_serie_stand()),
+                # Bauplan K3, Stufe KP3: wie oft ein Ereignis seit dem Start ohne fruehes Ende
+                # lief (Personenzahl unbrauchbar oder Fehler der eigenen Logik), je Grund.
+                "personenzahl": m("personenzahl", lambda: _personenzahl.stand()),
+                "namenszuordnung": m("namenszuordnung",   # NZ3 Punkt 4
+                                     lambda: __import__("core.namenszuordnung", fromlist=["stand"]).stand()),
+                # Stufe V1b (Bauplan analysen/bauplan_verbraucher_unbekannt.md, W24): der
+                # Verbraucher der Unbekannt-Stapel — Faden, Lesestand, offene Zeilen der
+                # Schlange, letzte Runde, letzter Fehler. Das Feld `sammeln` ist mit dem
+                # Szenario-Sammeln entfallen.
+                "unbekannt": m("unbekannt", lambda: self.unbekannt_stand()),
+                # Bauplan analysen/bauplan_aehnlich.md Entscheide 9 und 17 (ED008, W3 V6): der Zustand des letzten
+                # Aufraeum-Schritts „ähnlich zu P“ im Verbraucher-Faden — rot nach einem Fehler mit dem letzten
+                # Fehler und seiner Zeit, sonst Zeit, Dauer, Zahlen und Grenzen des letzten Laufs. Rot macht `ok` rot
+                # (health_ok).
+                "aehnlich": m("aehnlich", lambda: _aeh_health.SPEICHER.stand()),
+                # .544 Teil 5b: wie oft der Nachhol-Lauf eine Luecke im
+                # Live-Betrieb genutzt hat (leere Warteschlange, freier
+                # Platz). Auf einer ruhigen Anlage bleibt die Zahl 0 — dort
+                # kommt das Ruhefenster von selbst zustande. Steht sie auf
+                # einer BELEBTEN Anlage still, faehrt der Nachhol-Lauf
+                # wieder gar nicht, und genau das war der Feldbefund.
+                "nachhol_unter_last_n": m("nachhol_unter_last_n",
+                                          lambda: int(getattr(self, "_nachhol_unter_last_n", 0) or 0)),
+                # Feldbefunde Punkt 3 (O296): endgueltig aufgegebene Ereignisse
+                # des Nachhol-Laufs seit Dienststart, je Grund.
+                "nachhol": m("nachhol", lambda: self.nachhol_verluste_stand()),
+                # Bauplan MQTT-Stummwache, Entscheid 2 (Vorfall O632): spricht Frigate ueber MQTT,
+                # seit wann nicht, und was der Abgleich nachgereicht hat. null im Poll-Betrieb;
+                # stumm macht `ok` rot (health_ok, ED008).
+                "frigate_mqtt": m("frigate_mqtt", lambda: self.frigate_mqtt_stand())}
+
+    def _health_catchup(self):
+        """Das Feld `start_catchup` von /health (Bauplan Lebenszeichen LZ4: aus dem Zweig hierher gewandert).
+        -> dict."""
+        cfg = self.cfg
+        # .340: Start-Nachholen — Schalter UND Fortschritt aus DERSELBEN
+        # Quelle wie der Banner (K1: die Anzeige kann dem Verhalten nicht
+        # widersprechen). Supportfaelle schicken /health, nicht 400 Logzeilen.
+        # .371: "an" bleibt fuer Bestandsleser erhalten (true, solange
+        # nicht ausdruecklich "off"), daneben der ausgelegte Modus und
+        # der zurueckgehaltene Stapel — die EINE Quelle fuer den Knopf
+        # in der Kopfleiste.
+        return {"an": catchup_modus(cfg) != "off",
+                "modus": catchup_modus(cfg),
+                "wartet": len(getattr(self, "_catchup_zurueck", ()) or ()),
+                "wartet_seit": round(getattr(self, "_catchup_seit", 0.0) or 0.0, 1),
+                # Die Spanne des Dialogs kommt aus der Whitelist,
+                # nicht als zweites Literal ins JS (Deckungs-Vertrag
+                # qs_ebenen.md: fachliche Werte haben EINE Quelle).
+                "grenzen": {
+                    "stunden": [self.CONFIG_WHITELIST["lookback_h"][1],
+                                self.CONFIG_WHITELIST["lookback_h"][2]],
+                    "limit": [self.CONFIG_WHITELIST["sweep_limit"][1],
+                              self.CONFIG_WHITELIST["sweep_limit"][2]]},
+                # Widerleger-Fund: hier stand cfg["lookback_h"].
+                # Damit war der Dialog auf ein Fenster
+                # vorbelegt, in dem der wartende Stapel oft
+                # gar nicht mehr liegt.
+                "vorgabe": {"stunden": self.catchup_vorgabe_stunden(),
+                            "limit": cfg.get("sweep_limit") or 200},
+                # .371 (User 29.08.: "den Knopf einfach
+                # ausgrauen, dass er nicht geklickt werden
+                # kann"): ohne angelernte Person steigt der
+                # Sweep vor der Analyse aus — ein Klick koennte
+                # dort nichts ausrichten. Die Oberflaeche sagt
+                # das jetzt VOR dem Klick, statt ihn ins Leere
+                # laufen zu lassen.
+                "bereit": bool(master_persons(cfg)),
+                **(getattr(self, "_sweep_stand", None) or {}),
+                # B2 (05.09.2026, Widerleger-Befund B1 B-1):
+                # `aktiv` ist der EINZIGE Grund, aus dem
+                # `_cuAnzeigen` (webui/app.js) den „Holen"-
+                # Knopf waehrend eines Laufs versteckt. B1
+                # strich das Feld aus `_sweep_stand` — zu
+                # Recht, es war ein Zaehlwerk des rechnenden
+                # Sweeps — und damit war `c.aktiv` im JS
+                # dauerhaft undefined: der Knopf stand auch
+                # mitten im Nachholen da, also genau die
+                # Doppelstart-Einladung, die der Widerleger
+                # am 29.08. geschlossen hatte.
+                #
+                # Deshalb LIVE aus derselben Quelle wie der
+                # 409-Riegel (`rueckstau_aktiv_nutzerlauf`):
+                # der Knopf ist genau dann sichtbar, wenn ein
+                # Klick auch etwas ausloesen wuerde. NACH dem
+                # Spread, damit ein Alt-Feld gleichen Namens
+                # im Steckbrief ihn nie ueberschreiben kann.
+                "aktiv": self.rueckstau_aktiv_nutzerlauf()}
+
+    def _health_anlage(self, m):
+        """Die Felder `backend` bis `live` von /health, je mit dem Messer `m` gemessen (Bauplan Lebenszeichen LZ4).
+        -> dict in Feldreihenfolge."""
+        cfg = self.cfg
+        # Bauplan Feldstau Stufe 3: Cache-Groesse aus dem gepflegten Stand, nie
+        # gezaehlt und nie gewartet; fehlt der Stand noch, stehen Wert und Alter
+        # auf null. Die Ampel liest beides nicht. Ein Aufruf fuellt zwei Felder,
+        # ein Schritt `clip_cache` (HEALTH_SCHRITT_JE_FELD).
+        cache_b, cache_alter = m("clip_cache", lambda: self.clip_cache_bytes())
+        return {"backend": m("backend", lambda: cfg.get("backend") or ""),
+                # N8b: Cache-Groesse SICHTBAR (Feldbericht: 74-GB-Steady-State erst am
+                # 97 % vollen Host bemerkt) + der wirksame Deckel daneben.
+                "clip_cache_gb": (round(cache_b / 1024**3, 2)
+                                  if cache_b is not None else None),
+                "clip_cache_alter_s": (round(cache_alter, 1)
+                                       if cache_alter is not None else None),
+                "clip_cache_max_gb": m("clip_cache_max_gb",   # .32x: WIRKSAM, nicht roh (0 = abgeleitet)
+                                       lambda: round(self.speichergrenzen()[0], 1)),
+                # Bauplan Feldstau Stufe 1.4: der Aufraeum-Faden — lebt er, laeuft
+                # gerade ein Lauf und seit wann, wann endete der letzte, wie lange
+                # dauerte er. Ein langer Lauf ist sichtbar und wird NICHT
+                # abgeschossen; ein toter Faden macht `ok` rot (health_ok).
+                "cleanup": m("cleanup", lambda: self.aufraeum_stand()),
+                # Ketten-Schalter (Issue #21, K1): konfigurierte Stufe UND
+                # tatsaechliche Scharf-Lage je Erkennungs-Weg — aus DENSELBEN
+                # Praedikaten wie die Quell-Hooks (kette_lage), die Anzeige
+                # kann dem Verhalten nicht widersprechen.
+                "erkennungskette": m("erkennungskette", lambda: self.kette_lage()),
+                # Wanduhr-Lage (K1, Issue #21): sagt WARUM (k)eine Selbst-
+                # messung vorliegt (uebersprungen auf kleinen Maschinen /
+                # letzter Fehlversuch), statt still zu fehlen.
+                "wanduhr": m("wanduhr", lambda: self.wanduhr_status()),
+                # Rechenprobe (Lieferung C): rechnet jedes Modell auf seinem
+                # Betriebs-Geraet das, was die CPU rechnet? Muster wanduhr —
+                # das Feld sagt, WOHER die Zahlen stammen (measured/cached/
+                # failed/given up), statt still zu fehlen (K1). Der Hauptweg
+                # bleibt das Docker-Log; dieses Feld macht die Zeilen
+                # maschinenlesbar (Tester schicken /health, nicht 400 Logzeilen).
+                "rechenprobe": m("rechenprobe", lambda: getattr(self, "rechenprobe", None)
+                                 or {"quelle": "not run yet"}),
+                # Live-Reiter (Phase 2): Engine-Herzschlag + Waechter-
+                # Zustaende aus DERSELBEN Ableitung wie die Kacheln
+                # (livewache.ui_zustand + registry.LIVE_ZUSTAENDE — die
+                # Anzeige kann den Kacheln nicht widersprechen, K3/K1).
+                "live": m("live", lambda: self.live_health())}
+
+    def _health_system(self, m, log_block):
+        """Die Felder `system`, `log`, `placement` (wenn gesetzt) und `frame_rueckfaelle` von /health, je mit dem
+        Messer `m` gemessen (Bauplan Lebenszeichen LZ4). -> dict in Feldreihenfolge."""
+        cfg = self.cfg
+        # .341 Systemseite: DIESELBE Momentaufnahme, die der
+        # 60-s-Sammler in den Ringpuffer schreibt — bewusst die
+        # zuletzt geschriebene und keine frische. Wuerde /health
+        # nebenher messen, klaute jeder Abruf den Delta-Zaehlern
+        # (CPU, NPU, i915) ihre Bezugsgroesse. Ein Tester ohne
+        # Browser sieht so exakt die Zahlen der Seite.
+        h = {"system": m("system", lambda: _systemstat.letzte() or {"grund": "erster_lauf"}),
+             # Log-Systematik E6 (V4): Zaehler des Tees je Prozess, Zustand
+             # von Tee und Sieben, Debug- und Pruef-Schalter, Startnummern.
+             # Bauplan Debug-Zeitfenster Stufe 1 Punkt 5: `debug_bis` ist das
+             # Fensterende (Sekunden seit 1970 wie `seit`), leer bei debug aus.
+             "log": m("log", lambda: {**log_block,
+                                      "debug_bis": (debug_fenster_ende(cfg) if cfg.get("debug")
+                                                    else None)})}
+        pi = cfg.get("placement_info")
+        if pi:                                     # P4: aufgeloestes Auto-Placement ausweisen
+            h["placement"] = m("placement", lambda: {"backend": pi.get("backend"), "quelle": pi.get("quelle"),
+                                                     "ts": pi.get("ts")})
+        h["frame_rueckfaelle"] = m("frame_rueckfaelle", lambda: self._health_rueckfaelle())
+        return h
+
+    def _health_rueckfaelle(self):
+        """Das Feld `frame_rueckfaelle` von /health (Bauplan Lebenszeichen LZ4: aus dem Zweig hierher gewandert).
+        -> dict."""
+        # Z8 Mitnahme A: Verteiler-Rueckfall sichtbar (konzept_frames.md §3.2 —
+        # "geloggt und in /health sichtbar"). Rueckfall = die Abnehmer eines Events
+        # wollten verschiedene steps, also lief der Decode GETRENNT statt einmal;
+        # ein Download bleibt, das Urteil auch. NUR ANZEIGE, nichts wird gesteuert.
+        # Zwei Toepfe, weil der Zaehler prozessweit ist: 'dienst' ist der des
+        # Dienstprozesses (heute faehrt hier kein Lauf, also normal 0), 'worker' die
+        # aufsummierten Meldungen des Analyse-Workers, wo die Laeufe wirklich wohnen.
+        _wk = getattr(self._worker_obj, "rueckfaelle", None) or {}
+        from core import frames as _frames_health
+        _dn = int(_frames_health.RUECKFAELLE.get("n") or 0)
+        fr = {"n": _dn + int(_wk.get("summe") or 0),
+              "dienst": _dn,
+              "worker": int(_wk.get("summe") or 0)}
+        _zl = _frames_health.RUECKFAELLE.get("zuletzt")
+        if _zl and _zl.get("steps"):               # nur die steps, nie der Clip-Name
+            fr["zuletzt_steps"] = _zl["steps"]
+        return fr
+
+    def health_live(self, h, schritte):
+        """Haengt die Live-Felder `web` und `lebenszeichen` an den Inhalt `h` von /health, je als Schritt gemessen.
+        -> None. Bauplan Lebenszeichen LZ4; beide Bloecke kommen nur aus dem Speicher."""
+        m = self._health_messer(schritte)
+        # Bauplan Seiten-Zeitprotokoll SZ1 Punkt 7: laufende Seitenaufrufe (Zahl, Route und Alter des
+        # aeltesten, ohne /health selbst) und Antworten mit Sendefehler seit dem Start. Nur lesend,
+        # `ok` bleibt davon unberuehrt (ED008).
+        h["web"] = m("web", lambda: _rt.health_block())
+        # Bauplan Lebenszeichen Stufe LZ2 Punkt 6: Lage der Fortschrittsmarken je Schleife, live aus dem
+        # Speicher (alter_s, grenze_s, steht, hoechst_s). `ok` bleibt davon unberuehrt (Entscheid 5, ED008).
+        # Stufe LZ5: dazu die Marke `health-sammler`, deren Grenze nur gilt, solange der Sammler wach ist.
+        from core import lebenszeichen as _lz_health
+        h["lebenszeichen"] = m("lebenszeichen", lambda: _lz_health.lage(
+            {**(getattr(self, "_lz_grenzen", None) or {}), **self._health_sammler_marke()}))
+
+    def health_schritte(self, h, schritte):
+        """Ordnet die gemessenen Schritte von /health fuer die Zeile: in der Feldreihenfolge von `h`, Schritte ohne
+        eigenes Feld zuletzt. -> dict Name -> Sekunden. Seit LZ5 ohne den Schritt `eintritt` des Anfragewegs."""
+        geordnet = {}
+        for feld in h:
+            name = self.HEALTH_SCHRITT_JE_FELD.get(feld, feld)
+            if name in schritte:
+                geordnet.setdefault(name, schritte[name])
+        for name, dauer in schritte.items():
+            geordnet.setdefault(name, dauer)
+        return geordnet
+
+    # Bauplan Lebenszeichen LZ5 (Entscheid 7): die Schritte von health_inhalt, deren Aufruf Dateien liest
+    # (migration_state, speichergrenzen, kette_lage, wanduhr_status, live_health); der Sammler holt sie nur je
+    # core.registry.HEALTH_SAMMLER["dateien_takt_s"]. `unbekannt` folgt der Aenderungszeit seiner Dateien.
+    HEALTH_DATEI_SCHRITTE = ("umzug", "clip_cache_max_gb", "erkennungskette", "wanduhr", "live")
+
+    def health_sammler_grenze(self):
+        """Die Grenze des Sammlers: so alt darf die Momentaufnahme sein, bevor `ok` falsch wird, und so alt seine Marke.
+        -> Sekunden, Faktor x (Takt + HEALTH_LANGSAM_S) aus core.registry (Werkswerte 3 x (10 + 15) = 75)."""
+        return _reg.LEBENSZEICHEN["faktor"] * (_reg.HEALTH_SAMMLER["takt_s"] + _reg.HEALTH_LANGSAM_S)
+
+    def _health_sammler_marke(self):
+        """Die Grenze der Marke `health-sammler` fuer den Block `lebenszeichen`: gilt nur, solange der Sammler wach ist.
+        -> {} ohne gestarteten Sammler, sonst {"health-sammler": Grenze oder None}."""
+        if getattr(self, "_health_faden", None) is None:
+            return {}
+        return {"health-sammler": None if self._health_schlaeft else self.health_sammler_grenze()}
+
+    def start_health_sammler(self):
+        """Startet den Faden `health-sammler`, der den Inhalt von /health auf Abruf im eigenen Takt baut (Bauplan
+        Lebenszeichen LZ5, Entscheid 7). -> der Faden. Der erste Lauf folgt sofort, damit /health so frueh bereit ist
+        wie vor LZ5; danach laeuft er nur, solange gelesen wird."""
+        self._health_wecker = threading.Event()
+        self._health_frisch = threading.Event()
+        self._health_schlaeft = False
+        self._health_abruf = time.monotonic()
+        self._health_faden = threading.Thread(target=self._health_sammler_lauf, daemon=True, name="health-sammler")
+        self._health_faden.start()
+        return self._health_faden
+
+    def _health_sammler_lauf(self):
+        """Die Schleife des Sammlers: ein Lauf je `takt_s`, solange der letzte Abruf hoechstens `ruhe_nach_takten`
+        Takte zurueckliegt, sonst Schlaf bis zum Wecker eines Abrufs. -> None (endet nie)."""
+        from core import lebenszeichen as _lz
+        while True:
+            w = _reg.HEALTH_SAMMLER
+            if time.monotonic() - self._health_abruf > w["ruhe_nach_takten"] * w["takt_s"]:
+                self._health_schlafen(w)
+                continue
+            t0 = time.monotonic()
+            gelungen = self.health_sammeln()
+            _lz.setzen("health-sammler")
+            # Wer auf einen frischen Stand wartet, haelt das Ereignis dieses Laufs; danach steht ein neues bereit. Nur
+            # ein gelungener Lauf ist frisch: nach einem gescheiterten wartet der Abruf bis zu seiner Frist und
+            # bekommt den alten Stand mit `schlief` (Gegenpruefung LZ5, B1).
+            if gelungen:
+                frisch, self._health_frisch = self._health_frisch, threading.Event()
+                frisch.set()
+            time.sleep(max(0.0, w["takt_s"] - (time.monotonic() - t0)))
+
+    def _health_schlafen(self, w):
+        """Schlaf des Sammlers ohne Leser: wartet ohne Frist auf den Wecker eines Abrufs, keine Last in der Ruhe.
+        -> None. Ein Abruf zwischen Entscheid und Schlaf wird durch die zweite Pruefung nach dem Leeren nicht verloren;
+        die Marke `health-sammler` zaehlt ab dem Aufwachen."""
+        from core import lebenszeichen as _lz
+        self._health_schlaeft = True
+        self._health_wecker.clear()
+        if time.monotonic() - self._health_abruf > w["ruhe_nach_takten"] * w["takt_s"]:
+            self._health_wecker.wait()
+        self._health_schlaeft = False
+        _lz.setzen("health-sammler")
+
+    def health_sammeln(self):
+        """Ein Lauf des Sammlers: Sprache einmal setzen, den Inhalt von /health mit Schrittmessung bauen, als
+        Momentaufnahme ablegen und die Zeile „/health collected in …“ schreiben. -> True mit neuem Stand, False, wenn
+        der Lauf scheiterte (der letzte Stand bleibt, `letzter_fehler` traegt Typ, Text und Zeit). Die Zeit der
+        Momentaufnahme ist ihr Ende, ihr Alter zaehlt ab dem Beginn des Laufs; jeder begonnene Lauf erhoeht
+        `_health_laeufe`, der Stand traegt die Nummer seines Laufs (Gegenpruefung LZ5 Runde 2, B2 und B5)."""
+        t0, jetzt = time.monotonic(), time.time()
+        lauf_nr = self._health_laeufe = getattr(self, "_health_laeufe", 0) + 1
+        schritte, neu = {}, {}
+        try:
+            _sprache.aktivieren()
+            h = self.health_inhalt(schritte, self._health_vorrat(t0), neu)
+        except Exception as e:                                # noqa: BLE001  laut: Zeile und letzter_fehler
+            self._health_fehler_melden(e, jetzt)
+            return False
+        t_ende = time.monotonic()
+        geordnet = self.health_schritte(h, schritte)
+        dateien_ts = self._health_vorrat_merken(neu, t0, jetzt)
+        # Inhalt, Zeit, Dauer und Schritte als EIN Tupel in einer Zuweisung: der Anfrageweg liest ohne Sperre.
+        self._health_stand = (h, jetzt + (t_ende - t0), t0, t_ende - t0, geordnet, dateien_ts, lauf_nr)
+        self.health_dauer_melden(t_ende - t0, geordnet)
+        return True
+
+    def _health_vorrat(self, t0):
+        """Was der Lauf nicht neu lesen muss: die Dateibloecke innerhalb von `dateien_takt_s` (der Dateianteil von
+        `unbekannt` folgt seinen Dateien, `_unbekannt_dateianteil`). -> fertig: Schrittname -> Wert."""
+        dateien = getattr(self, "_health_dateien", None)
+        if dateien is not None and t0 - dateien[0] < _reg.HEALTH_SAMMLER["dateien_takt_s"]:
+            return dict(dateien[2])
+        return {}
+
+    def _health_vorrat_merken(self, neu, t0, jetzt):
+        """Merkt frisch gelesene Dateibloecke fuer die naechsten Laeufe.
+        -> Zeit (Sekunden seit 1970) der letzten Lesung der Dateibloecke."""
+        if any(name in neu for name in self.HEALTH_DATEI_SCHRITTE):
+            self._health_dateien = (t0, jetzt, {name: neu[name] for name in self.HEALTH_DATEI_SCHRITTE if name in neu})
+        return self._health_dateien[1]
+
+    def _health_fehler_melden(self, e, jetzt):
+        """Ein gescheiterter Lauf des Sammlers: `letzter_fehler` setzen; vor der ersten Momentaufnahme eine DEBUG-Zeile
+        (Anlauf), danach je neuer Fehlerart einmal eine WARNING. -> None"""
+        art = type(e).__name__
+        self._health_fehler = {"typ": art, "text": str(e)[:_reg.HEALTH_SAMMLER["fehler_zeichen"]],
+                               "ts": round(jetzt, 1)}
+        text = f"/health collection failed ({art}: {e}) — the last snapshot stays"
+        if getattr(self, "_health_stand", None) is None:
+            self.log.debug(f"{text} (start-up, no snapshot yet)")
+            return
+        gemeldet = self.__dict__.setdefault("_health_fehler_arten", set())
+        if art not in gemeldet:
+            gemeldet.add(art)
+            self.log.warning(text)
+
+    def health_antwort(self):
+        """Die Antwort von /health aus der Momentaufnahme, ohne Datei, ohne Hardware und ohne Sperre des Dienstes
+        (Bauplan Lebenszeichen LZ5). -> (Status, dict); 503 vor der ersten Momentaufnahme, `ok` falsch bei altem Stand."""
+        w = _reg.HEALTH_SAMMLER
+        schlief = self._health_wecken(w)
+        stand, fehler = getattr(self, "_health_stand", None), getattr(self, "_health_fehler", None)
+        if stand is None:
+            return 503, {"ok": False, "version": os.environ.get("SUSLIK_VERSION", "dev"),
+                         "momentaufnahme": {"grund": "first collection pending", "letzter_fehler": fehler}}
+        inhalt, ts, t_beginn, dauer, schritte, dateien_ts, lauf_nr = stand
+        # Das Alter zaehlt ab dem Beginn des Laufs: die Werte stammen von dort, auch wenn ein Schritt lange hing
+        # (Gegenpruefung LZ5 Runde 2, B5); `ts` bleibt das Ende des Laufs.
+        alter = time.monotonic() - t_beginn
+        h = dict(inhalt)
+        # ED008: ein alter Stand meldet keinen Erfolg; massgeblich ist die Zeit des Laufs, nicht die der Dateibloecke.
+        h["ok"] = bool(inhalt.get("ok")) and alter <= self.health_sammler_grenze()
+        self.health_live(h, {})
+        # `lauf_nr` und `laeufe` (live, auch gescheiterte Laeufe): ein Leser erkennt ohne Uhrenvergleich, ob der Stand
+        # aus einem Lauf stammt, der nach seinem Abruf begann (Runde 2, B2).
+        h["momentaufnahme"] = {"ts": round(ts, 1), "alter_s": round(alter, 1), "dauer_s": round(dauer, 2),
+                               "takt_s": w["takt_s"],
+                               "schritte_ms": {name: round(s * 1000) for name, s in schritte.items()},
+                               "letzter_fehler": fehler, "dateien_ts": round(dateien_ts, 1), "schlief": schlief,
+                               "lauf_nr": lauf_nr, "laeufe": self._health_laeufe}
+        return 200, h
+
+    def _health_wecken(self, w):
+        """Vermerkt den Abruf fuer den Sammler; schlief er (oder fehlt noch jeder Stand), weckt sie ihn und wartet
+        hoechstens `erste_frist_s` auf seinen Lauf. -> True, wenn der Sammler schlief und kein Lauf rechtzeitig kam."""
+        self._health_abruf = time.monotonic()
+        wecker = getattr(self, "_health_wecker", None)
+        if wecker is None or not (self._health_schlaeft or getattr(self, "_health_stand", None) is None):
+            return False
+        frisch = self._health_frisch
+        wecker.set()
+        return not frisch.wait(w["erste_frist_s"])
+
+    def webserver_starten(self):
+        """Erzeugt den Webserver auf `web_port` und startet `serve_forever` im Daemon-Faden `webserver` (Bauplan
+        Lebenszeichen LZ2b Fix-Stelle 1). -> der Server; `_web` und `_web_faden` zeigen auf ihn und seinen Faden.
+        Wirft OSError, wenn das Binden scheitert (der neue Socket ist dann schon geschlossen). Einen Fehler in
+        `serve_forever` meldet der Faden-Excepthook aus core.logbuch.einrichten als ERROR."""
+        web = ThreadingHTTPServer(("0.0.0.0", int(self.cfg["web_port"])), make_handler(self))
+        faden = threading.Thread(target=web.serve_forever, daemon=True, name="webserver")
+        self._web, self._web_faden = web, faden
+        faden.start()
+        return web
+
+    def webserver_neu_starten(self, grund):
+        """Startet nur den Webserver-Faden neu, nicht den Prozess (Bauplan Lebenszeichen LZ2b Fix-Stelle 2, Entscheid
+        12). -> der Hilfsfaden `webserver-neustart`; er kann nach der Frist noch laufen und setzt den neuen Server dann
+        spaeter ein. Ablauf: ERROR mit Stand des alten Fadens; `shutdown()` im Hilfsfaden `webserver-shutdown` (darf
+        an einer stehenden Schleife haengen); der Hilfsfaden `webserver-neustart` wartet darauf hoechstens
+        SELBSTWACHE["web_neustart_frist_s"], schliesst den alten Lauschsocket in jedem Fall und bindet neu; die Wache
+        wartet auf ihn hoechstens dieselbe Frist. Scheitert das Binden: ERROR und Stoerungsmeldung, kein Abgang,
+        `_web` bleibt None, der naechste Versuch kommt erst nach `web_neustart_pause_s` (Takt der Selbstwache)."""
+        from core import lebenszeichen as _lz
+        frist_s = _reg.SELBSTWACHE["web_neustart_frist_s"]
+        alt, alt_faden = getattr(self, "_web", None), getattr(self, "_web_faden", None)
+        if alt_faden is None:
+            wo = "unknown"
+        elif alt_faden.is_alive():
+            wo = f"alive at {_lz.faden_stelle(alt_faden.ident) or 'unknown'}"
+        else:
+            wo = "not alive"
+        self.log.error(f"web server not answering ({grund}): restarting the web server thread (old thread {wo})")
+        stopp = threading.Thread(target=alt.shutdown if alt is not None else (lambda: None), daemon=True,
+                                 name="webserver-shutdown")
+        stopp.start()
+
+        def neu_binden():
+            stopp.join(frist_s)
+            if alt is not None:
+                try:
+                    alt.server_close()            # schliesst den Lauschsocket, joint nichts (Daemon-Faeden)
+                except OSError as e:
+                    self.log.error(f"web server restart: closing the old listening socket failed "
+                                   f"({type(e).__name__}: {e})")
+            self._web = None
+            try:
+                self.webserver_starten()
+            except OSError as e:
+                text = (f"SELF-WATCH: web server restart failed, cannot bind port {self.cfg.get('web_port')} "
+                        f"({type(e).__name__}: {e}) — no exit, next attempt in "
+                        f"{_reg.SELBSTWACHE['web_neustart_pause_s']:g} s")
+                self.log.error(text)
+                if not getattr(self, "dry_alert", False):
+                    for _f in stoerung_melden(self.cfg, text):
+                        self.log.error(f"fault notify failed: {_f}")
+                return
+            n = self._web_neustarts = getattr(self, "_web_neustarts", 0) + 1
+            self._letzter_web_neustart = {"ts": round(time.time(), 1), "grund": grund}
+            self.log.info(f"web server thread restarted ({n})")
+        neustart = threading.Thread(target=neu_binden, daemon=True, name="webserver-neustart")
+        neustart.start()
+        neustart.join(frist_s)
+        return neustart
 
     def start_selbstwache(self):
         """R(b) Fern-Reset-Paket (01.09., User-Go): Selbstwache gegen den
         Voll-Haenger. Zwei Tester-Haenger brauchten einen Hand-Neustart vor
         Ort; haengt der HTTP-Server selbst, erreicht auch der Fern-Reset
         (/support/restart) das System nicht mehr. Deshalb prueft ein Thread
-        das EIGENE /health auf 127.0.0.1: erst scharf nach der ersten
-        erfolgreichen Antwort (Anlauf-Schutz — ein langsam startender Dienst
-        wird nie erschossen), dann alle 15 s mit 30 s Antwort-Frist; nach
-        4 Fehlversuchen IN FOLGE (rund 3 min tot) lauter os._exit(1). Die
-        Frist ist bewusst grosszuegig (Fremd-Augen 01.09.): auf sehr
-        langsamen Systemen (USB-Platte, /health listet den Clip-Cache)
-        darf ein traeger, aber lebender Server nie als tot gelten.
+        den EIGENEN Lebenszeichen-Weg (core.registry.LEBENSZEICHEN_WEG) auf
+        127.0.0.1, Status 200 und Rumpf {"lebt": true}: erst scharf nach der
+        ersten erfolgreichen Antwort (Anlauf-Schutz — ein langsam startender
+        Dienst wird nie erschossen), dann im Takt core.registry.SELBSTWACHE
+        ["takt_s"] mit der Antwort-Frist ["frist_s"]; nach ["fehlversuche"]
+        Fehlversuchen IN FOLGE lauter os._exit(1).
+        Stufe LZ1 (Bauplan analysen/bauplan_lebenszeichen.md): bis dahin fragte
+        die Wache /health. Dessen Dauer sagt nichts darueber, ob der Dienst
+        lebt (am 06.11. bis 63,44 s bei laufender Arbeit); der Lebenszeichen-
+        Weg antwortet aus dem Speicher, ohne Datei, Sprachwahl oder Sperre.
+        Anlaufschutz und Zaehlweise sind wie vorher (LZ3 folgt fuer den Abgang).
+        Stufe LZ2 (Fortschrittsmarken, core/lebenszeichen.py): je Takt liest die
+        Wache die Lage der Arbeitsschleifen; eine zu alte Marke ergibt eine
+        WARNING mit Name, Alter, Grenze und den innersten drei Stapelstellen,
+        die naechste Marke eine INFO, nie einen Abgang. Nach N Fehlversuchen in
+        Folge beendet sie den Dienst nur, wenn keine Arbeitsschleife in den
+        letzten SELBSTWACHE["lebens_fenster_s"] eine Marke gesetzt hat (Entscheid
+        2, Zeitfenster seit Stufe LZ2b; die Marke `health-sammler` zaehlt nicht)
+        UND die Schlange leer ist (Entscheid 3); sonst je Folge eine ERROR-Zeile
+        und eine Stoerungsmeldung (nicht bei dry_alert), ohne Abgang. Die Grenzen
+        (`_lz_grenzen`) entstehen hier auch bei ausgeschalteter Wache: /health
+        zeigt sie im Block `lebenszeichen`.
+        Stufe LZ2b (Entscheid 12): lebt die Arbeit, startet sie ab dem N-ten
+        Fehlversuch den Webserver-Faden neu (webserver_neu_starten), hoechstens
+        einmal je SELBSTWACHE["web_neustart_pause_s"]; antwortet der Weg wieder,
+        zaehlt die Folge von vorn.
         BEWUSST os._exit statt Service.neustart(): neustart() wartet auf
         self.lock — bei einem Voll-Haenger klemmt genau der, die Wache
         wuerde selbst haengen. Der harte Exit beendet im Container PID 1,
@@ -11102,32 +11713,106 @@ class Service:
         auch dieser Thread nicht mehr — die Wache deckt tote/erschoepfte
         HTTP-Threads und einen toten serve_forever, nicht den toten Prozess.
         Schalter: Config 'selbstwache' (Default an)."""
+        from core import lebenszeichen as _lz
+        grenzen = self._lz_grenzen = _lz.grenzen(self.cfg, PLATZ_STUMM_FRIST_S, VORLAUF_TAKT_S)
         if not self.cfg.get("selbstwache"):
             self.log.info("self-watch disabled via config")
             return
-        url = f"http://127.0.0.1:{int(self.cfg['web_port'])}/health"
+        url = f"http://127.0.0.1:{int(self.cfg['web_port'])}{_reg.LEBENSZEICHEN_WEG}"
+        werte = _reg.SELBSTWACHE
+        takt_s, frist_s, fehlversuche = werte["takt_s"], werte["frist_s"], werte["fehlversuche"]
+        fenster_s, pause_s = werte["lebens_fenster_s"], werte["web_neustart_pause_s"]
+
+        def schleifen_pruefen(stehend):
+            # Stehende Schleife: WARNING mit Stelle beim Wechsel, INFO, sobald sie wieder eine Marke setzt.
+            for name, d in _lz.lage(grenzen).items():
+                if d["steht"] and name not in stehend:
+                    stehend.add(name)
+                    self.log.warning(f"self-watch: work loop '{name}' has not moved for {d['alter_s']:g} s "
+                                     f"(limit {d['grenze_s']:g} s) — at "
+                                     f"{_lz.stelle(name) or 'unknown (thread no longer running)'}")
+                elif not d["steht"] and name in stehend:
+                    stehend.discard(name)
+                    self.log.info(f"self-watch: work loop '{name}' moves again "
+                                  f"(last sign of life {d['alter_s']:g} s ago)")
+
+        def kein_abgang_grund(seit):
+            # Entscheid 2 und 3: (Art, Text), wenn der Abgang ausbleibt; None, wenn er richtig ist. `seit` ist der
+            # Beginn des Fensters (monoton): eine Arbeitsmarke ab dann heisst „die Arbeit lebt“.
+            vorn = f"SELF-WATCH: web server not answering ({fehlversuche} failed checks in a row)"
+            z = _lz.zuletzt()
+            if z is not None and z["zeit"] >= seit:
+                web = getattr(self, "_web_faden", None)
+                if web is None:
+                    wo = "unknown"
+                elif web.is_alive():
+                    wo = f"alive at {_lz.faden_stelle(web.ident) or 'unknown'}"
+                else:
+                    wo = "not alive"
+                return "arbeit", (f"{vorn}, but work continues, last sign of life {z['name']} {z['alter_s']:g} s "
+                                  f"ago — no restart; web server thread {wo}")
+            n_q = len(getattr(self, "_ev_q", None) or ())
+            if n_q:
+                return "schlange", (f"{vorn} and no work loop moved in the last {fenster_s:g} s, but {n_q} events "
+                                    f"are waiting in the queue — no restart, a restart would lose them")
+            return None
+
+        def stoerung(text):
+            self.log.error(text)
+            if not getattr(self, "dry_alert", False):
+                for _f in stoerung_melden(self.cfg, text):
+                    self.log.error(f"fault notify failed: {_f}")
 
         def lauf():
             import urllib.request
             scharf, fehler = False, 0
+            neustart_zuletzt = None                     # monotone Zeit des letzten Neustartversuchs (LZ2b)
+            stehend, gemeldet = set(), set()
             while True:
-                time.sleep(15)
+                time.sleep(takt_s)
                 try:
-                    with urllib.request.urlopen(url, timeout=self.SELBSTWACHE_FRIST_S) as r:
-                        r.read(64)
+                    schleifen_pruefen(stehend)
+                except Exception as e:                  # noqa: BLE001  laut; die Wache selbst lebt weiter
+                    self.log.error(f"self-watch: reading the work-loop signs of life failed "
+                                   f"({type(e).__name__}: {e})")
+                try:
+                    with urllib.request.urlopen(url, timeout=frist_s) as r:
+                        status, rumpf = r.status, r.read(64)
+                    if status != 200 or json.loads(rumpf) != {"lebt": True}:
+                        raise ValueError("unexpected sign-of-life answer")
                     if not scharf:
-                        self.log.info("self-watch armed (own /health answers)")
+                        self.log.info("self-watch armed (own sign-of-life route answers)")
                     scharf, fehler = True, 0
+                    gemeldet.clear()
                 except Exception as e:
                     if not scharf:
                         continue               # Anlauf: nie scharf vor der ersten Antwort
                     fehler += 1
-                    self.log.warning(f"self-watch: own /health not answering "
-                             f"({fehler}/4, {type(e).__name__})")
-                    if fehler >= 4:
-                        self.log.error("SELF-WATCH: web server dead for ~3 min — "
-                                 "exiting hard so the supervisor restarts the "
-                                 "service (restart policy required)")
+                    self.log.warning(f"self-watch: own sign-of-life route not answering "
+                             f"({fehler}/{fehlversuche}, {type(e).__name__})")
+                    # Entscheid 2 (praezisiert 07.11. 12:06:03): die Arbeit lebt, wenn ihre juengste Marke hoechstens
+                    # `lebens_fenster_s` alt ist, geprueft beim N-ten und jedem weiteren Fehlversuch (LZ2b Fix-Stelle 5).
+                    grund = (kein_abgang_grund(time.monotonic() - fenster_s) if fehler >= fehlversuche
+                             else None)
+                    if grund is not None:
+                        if grund[0] not in gemeldet:           # je Folge eine Zeile und eine Meldung
+                            gemeldet.add(grund[0])
+                            stoerung(grund[1])
+                        # Entscheid 12: Webserver tot, Arbeit lebt -> nur den Webserver-Faden neu starten,
+                        # hoechstens einmal je Pause (LZ2b Fix-Stelle 3).
+                        if grund[0] == "arbeit" and (neustart_zuletzt is None
+                                                     or time.monotonic() - neustart_zuletzt >= pause_s):
+                            neustart_zuletzt = time.monotonic()
+                            try:
+                                self.webserver_neu_starten(f"{fehler} failed checks in a row")
+                            except Exception as e:      # noqa: BLE001  laut; die Wache selbst lebt weiter
+                                self.log.error(f"self-watch: restarting the web server thread failed "
+                                               f"({type(e).__name__}: {e})")
+                        continue
+                    if fehler >= fehlversuche:
+                        self.log.error(f"SELF-WATCH: web server dead ({fehlversuche} failed checks "
+                                 f"in a row, every {takt_s} s) — exiting hard so the "
+                                 "supervisor restarts the service (restart policy required)")
                         try:
                             sys.stdout.flush(); sys.stderr.flush()
                         except Exception:
@@ -11877,7 +12562,7 @@ class Service:
         "stapel_stimmen": (int, 1, 10, "votes until recognized: how many valid faces of an event have to vote for the same person before the analysis worker names that person. A face votes for its best person when its recognition score reaches the vote bar of the analysis worker; faces that fail the size, quality, head-pose or feature-norm bars do not vote. The votes may come from anywhere in the clip, and two faces in the same picture give two votes. There is no margin rule on this path. FACTORY VALUE 3"),
         "katalog_guete_kante_min": (int, _KANTE_LO, _KANTE_HI, "catalogue bar (face size): the smallest face, in pixels of its shorter box side, a learning run keeps. FACTORY VALUE 25, the same number the recognition side has used as its vote floor since 0.1.0.400 (measured on field data: correct votes live at 30-49 px on overview cameras, the nonsense cases at 11-19 px; 70 would kill correct ones, 25 costs none). Raise it if your learning material is full of faces that are simply too small to learn anything from; 0 switches the axis off. Per-camera values on the calibration page win over this one"),
         "pruef_guete_t_min": (float, 0.0, 1.0, "catalogue check bar (recognisability): below this, the catalogue check flags a stored picture — together with a feature norm below the learning-stock floor it becomes a removal suggestion. It only looks at pictures you already have and never removes anything by itself; per-camera values on the calibration page win over this one, and pictures without a quality score are never flagged"),
-        "selbstwache": (bool, None, None, "watchdog thread probes this service's own /health every 15 s; after 4 consecutive failures it exits hard so the container restart policy brings the service back (covers full web-server hangs that even the remote restart endpoint cannot reach)"),
+        "selbstwache": (bool, None, None, "watchdog thread checks at a fixed interval that this service's web server still answers its own simple sign-of-life route (not /health); after several consecutive failures it exits hard so the container restart policy brings the service back (covers full web-server hangs that even the remote restart endpoint cannot reach)"),
         "urteil_marge": (float, 0.0, 0.5, "when several names pass the recognition rule in one event, none is confirmed unless the best cosine leads the runner-up by at least this margin (measured on field data: wrong names won by 0.001-0.047, a clean case led by 0.112); 0 disables the rule"),
         "blick_fenster_s": (float, 0.0, 600.0, "judgement: width of the sliding view window in seconds — anchor and support votes must fall inside ONE window (calibrated on four test clips: 45 s is the smallest width that judges all four correctly); 0 = legacy fixed 3-second window"),
         "urteil_anker": (float, 0.0, 1.0, "judgement: anchor — at least one vote inside the view window must reach this cosine before the window counts; support votes only need win_thresh; 0 disables the anchor. The factory value moved from 0.50 down to 0.45 on 2026-09-07: all 173 field cases sitting in the 0.45-0.50 band were re-read case by case (a second opinion read 149 of them as the right person; the 24 it disputed were then looked at by hand and read as right as well). That is a review of 173 cases, not a proof — raise the value again if your cameras start putting the wrong name on an event. Installations that had 0.50 stored were lifted to 0.45 once, with an audit line; a value you set yourself is never touched"),
@@ -14571,8 +15256,10 @@ class Service:
                                "Analyseplaetze slot since .505")
         return self.worker_dienst()
 
-    def _worker_warm(self):
+    def _worker_warm(self, worker=None):
         """Steht ueberhaupt ein WARMER Modell-Prozess bereit? (J1, .508)
+        `worker` (Bauplan Lebenszeichen LZ5): der schon geholte Zustand des
+        Worker-Prozesses (`worker_health()`); ohne Angabe fragt sie selbst.
 
         Anlass: der erste Pass-Check nach einem Dienst-Neustart schaetzte 4,5 s
         und brauchte ~24 s — die Ernte-Rate misst warme Ereignisse, der Worker
@@ -14592,7 +15279,7 @@ class Service:
         if w is None:
             return False
         try:
-            return bool(w.zustand()["laeuft"])
+            return bool((worker if worker is not None else w.zustand())["laeuft"])
         except Exception:                     # ein Leser darf nie den Klick werfen
             _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
             return False
@@ -17200,12 +17887,17 @@ class Service:
                      f"starting the worker with one compute thread")
             return 1
 
-    def worker_straenge_zustand(self):
+    def worker_straenge_zustand(self, worker=None):
         """Der Stand fuer /health — LESEND. Er nimmt, was beim letzten
         Dienst-Start gerechnet wurde, und rechnet nur, wenn es das noch nicht
         gibt (frischer Prozess vor dem ersten Worker-Start). Grund: /health wird
         getaktet abgefragt; eine Seite darf nicht bei jedem Abruf die Karte
-        ausmessen und Logzeilen erzeugen."""
+        ausmessen und Logzeilen erzeugen.
+
+        `worker` (Bauplan Lebenszeichen LZ5): der schon geholte Zustand des
+        Worker-Prozesses (`worker_health()`); er geht an `_ram_zustand` und
+        `_vram_zustand`, damit ein Aufbau von /health nur einmal plant. Ohne
+        Angabe fragen beide selbst wie bisher."""
         st = getattr(self, "_straenge_stand", None)
         if st is None:
             try:
@@ -17225,13 +17917,13 @@ class Service:
                 # .531: auf Karten-Backends ist die Nutzer-Zahl eine OBERGRENZE;
                 # wurde sie nicht voll gebaut, steht hier, warum.
                 "unter_formel": st.get("unter_formel"),
-                "vram": self._vram_zustand(st),
+                "vram": self._vram_zustand(st, **({} if worker is None else {"worker": worker})),
                 # .534 (B3): der CONTAINER-Speicher des laufenden Prozesses —
                 # gemessenes Jetzt, gemessenes Maximum, der Posten, der nicht ihm
                 # gehoert, und was daraus je Rechenstrang uebrig bleibt. NUR
                 # ZAHLEN: aus ihnen entscheidet der Betreiber ueber
                 # `worker_rss_max_mb`, sie entscheiden nichts selbst.
-                "ram": self._ram_zustand(st),
+                "ram": self._ram_zustand(st, **({} if worker is None else {"worker": worker})),
                 "backend": st.get("kind"), "mass": st.get("mass"),
                 "quelle": st.get("quelle"), "gesamt_mb": st.get("gesamt_mb"),
                 "reserve_mb": st.get("reserve_mb"), "dienst_mb": st.get("dienst_mb"),
@@ -17320,9 +18012,12 @@ class Service:
                                          "wechsel_n", 0) or 0),
                 "klemme": st.get("klemme"), "hinweis": st.get("hinweis")}
 
-    def _ram_zustand(self, st):
+    def _ram_zustand(self, st, worker=None):
         """Der CONTAINER-Speicher des laufenden Worker-Prozesses fuer /health
         (.534 B3). -> dict
+
+        `worker` (Bauplan Lebenszeichen LZ5): der schon geholte Zustand des
+        Worker-Prozesses; ohne Angabe fragt die Funktion `zustand()` selbst.
 
         Er kommt aus der Antwort des Prozesses (dort gemessen, hier nur gelesen) —
         keine zweite Messung, und schon gar keine im Web-Thread. Fehlt eine
@@ -17337,7 +18032,7 @@ class Service:
         d = getattr(self, "_dienst_obj", None)
         stand = {}
         try:
-            stand = (d.zustand() or {}).get("ram") or {} if d else {}
+            stand = ((worker if worker is not None else d.zustand()) or {}).get("ram") or {} if d else {}
         except Exception:                                 # noqa: BLE001
             stand = {}
         return {"own_mb": stand.get("own_mb"),
@@ -17358,9 +18053,11 @@ class Service:
     # Herkunft in `preis_quelle_stufen` — eine zweite Sicht auf dieselbe
     # Frage gibt es nicht mehr.
 
-    def _vram_zustand(self, st):
+    def _vram_zustand(self, st, worker=None):
         """Der Kartenhaushalt fuer /health (.531). None auf allen Wegen, die gar
-        keine Karte planen — das ist eine Aussage und kein Loch.
+        keine Karte planen — das ist eine Aussage und kein Loch. `worker`
+        (Bauplan Lebenszeichen LZ5): der schon geholte Zustand des Worker-
+        Prozesses; ohne Angabe fragt die Funktion `zustand()` selbst.
 
         WARUM DAS SO AUSFUEHRLICH IST: der Feldvorfall vom 15.09. war von aussen
         nicht nachvollziehbar. Sichtbar war „3 Straenge", unsichtbar blieb, gegen
@@ -17374,7 +18071,7 @@ class Service:
         d = getattr(self, "_dienst_obj", None)
         zaehler = {}
         try:
-            zaehler = (d.zustand() or {}).get("vram") or {} if d else {}
+            zaehler = ((worker if worker is not None else d.zustand()) or {}).get("vram") or {} if d else {}
         except Exception:                                 # noqa: BLE001
             zaehler = {}
         aus = {"zustand": st.get("zustand"), "grund": st.get("grund"),
@@ -23183,7 +23880,7 @@ class Service:
                 "probe_letztes_ergebnis": getattr(self, "_sofortprobe_ergebnis",
                                                   None)}
 
-    def health_ok(self, serie=None):
+    def health_ok(self, serie=None, worker=None, umzug=None):
         """DIE EINE Bedingung fuer /health `ok` und `PRUEF health ok=` (Feldbefunde G3): kein
         Start-Fehler, keine aktive Fehlerserie, kein aktiver Stillstand, seit einem
         Haenger-Schuss laeuft wieder ein frischer Worker (GPU-Wartefrist F2, ED008), der
@@ -23202,14 +23899,18 @@ class Service:
         (Bauplan analysen/bauplan_lesen_drei_dateien.md E5, D2 Punkt 7, ED008: Schreibfehler, kaputte Zeile, gescheiterter
         Nachtrag; der planmaessige Nachtrag ist nicht rot; Block `lesekopie`), und der Seitenspeicher von /heute und
         /anwesenheit ist nicht rot (Bauplan analysen/bauplan_render_cache.md RC1 Punkt 5, ED008: rot nach einem Fehler in
-        Nachsehen oder Ablegen bis zum naechsten gelungenen Aufruf; Block `render_cache`). -> bool"""
+        Nachsehen oder Ablegen bis zum naechsten gelungenen Aufruf; Block `render_cache`). -> bool
+        Bauplan Lebenszeichen LZ5: `worker` ist der schon geholte Zustand des Worker-Prozesses (geht an
+        `_kompilat_stopp_grund`), `umzug` der schon gelesene Umzugsstand (`migration_state`) aus dem Dateiblock des
+        Sammlers; ohne Angabe fragt und liest die Funktion selbst wie bisher."""
         serie = serie if serie is not None else self.analyse_serie_stand()
         # `getattr` wie in `_worker_warm`: die Proben stellen den Dienst ohne Worker auf.
         haenger_offen = getattr(getattr(self, "_dienst_obj", None), "haenger_offen", None)
         # E4-3: nur mit Datenordner (die Proben stellen den Dienst auch ohne Config auf).
         _cfg = getattr(self, "cfg", None) or {}
         from core import refquelle as _rq_um
-        _um = _rq_um.migration_state(_cfg) if _cfg.get("data_dir") else None
+        _um = ((umzug if umzug is not None else _rq_um.migration_state(_cfg)) if _cfg.get("data_dir")
+               else None)
         umzug_rot = _um is not None and (_um["phase"] == _rq_um.umzug.RED
                                          or _um["rechnung"]["phase"] == _rq_um.basis.COMPUTE_RED)
         kopie_rot = bool(_cfg.get("data_dir")) and _rq_um.copies_state(_cfg)["rot"]
@@ -23223,7 +23924,7 @@ class Service:
                 and self.aufraeum_stand()["faden_lebt"] is not False
                 and not umzug_rot
                 and not kopie_rot
-                and not self._kompilat_stopp_grund()
+                and not self._kompilat_stopp_grund(**({} if worker is None else {"worker": worker}))
                 and not self._unbekannt_rot()
                 and not self._frigate_mqtt_rot()
                 and not _aeh_ok.SPEICHER.rot()
@@ -23390,13 +24091,14 @@ class Service:
                  f"{grund} — {geschossen} process(es) shot")
         return True
 
-    def _kompilat_stopp_grund(self):
+    def _kompilat_stopp_grund(self, worker=None):
         """Hat der LAUFENDE Worker-Prozess wegen wiederholter Kompilat-Abweichung LAUT gestoppt?
         -> sein Grund (str) oder None. Quelle ist allein der bestehende Kompilat-Bericht des
         Prozesses (`WorkerDienst.kompilat_probe`); ein toter Prozess zaehlt nicht, sein letzter
-        Bericht ist dann nur noch Geschichte (`getattr` wie bei `_worker_warm`)."""
+        Bericht ist dann nur noch Geschichte (`getattr` wie bei `_worker_warm`). `worker` (Bauplan
+        Lebenszeichen LZ5) geht an `_worker_warm`; ohne Angabe fragt diese selbst."""
         w = getattr(self, "_dienst_obj", None)
-        if w is None or not self._worker_warm():
+        if w is None or not self._worker_warm(**({} if worker is None else {"worker": worker})):
             return None
         bericht = getattr(w, "kompilat_probe", None) or {}
         if bericht.get("stand") != KOMPILAT_STAND_GESTOPPT:
@@ -25951,8 +26653,9 @@ class Service:
 
     def unbekannt_stand(self):
         """Der Stand des Verbrauchers fuer /health `unbekannt`: Faden, Lesestand, offene Zeilen der Schlange, letzte
-        Verarbeitung, letzter Fehler. -> dict; ohne Faden faden_lebt None"""
-        from core import unbekannt_verbraucher as _uv
+        Verarbeitung, letzter Fehler. -> dict; ohne Faden faden_lebt None. Bauplan Lebenszeichen LZ5 (Gegenpruefung H1):
+        zwei Anteile; die Felder aus dem Speicher je Aufruf, der Dateianteil ueber `_unbekannt_dateianteil`, das nur
+        nach geaenderter Aenderungszeit oder Groesse der Dateien neu liest."""
         t = getattr(self, "_unb_faden", None)
         st = dict(getattr(self, "_unb_stand", None) or {})
         aus = {"faden_lebt": t.is_alive() if t is not None else None, "lesestand": None, "offene_zeilen": None,
@@ -25960,13 +26663,50 @@ class Service:
                "verarbeitet_n": st.get("verarbeitet_n"), "gemeldet_n": st.get("gemeldet_n"),
                "zurueckgestellt": st.get("zurueckgestellt"), "letzter_fehler": st.get("letzter_fehler"),
                "faellig_n": None, "lesefehler": None}
+        aus.update(self._unbekannt_dateianteil())
+        return aus
+
+    def _unbekannt_dateianteil(self):
+        """Der Dateianteil von `unbekannt_stand` (Lesestand, offene Zeilen, faellige Durchgaenge oder Lesefehler); neu
+        gelesen nur, wenn sich Aenderungszeit oder Groesse der Zustandsdatei oder des Schlangen-Stuecks von heute
+        geaendert hat (Bauplan Lebenszeichen LZ5); ein Lesefehler wird nicht gemerkt. -> dict"""
+        try:
+            zeichen = self._unbekannt_zeichen()
+        except Exception:                                         # noqa: BLE001  dann ohne Vorrat lesen, wie vor LZ5
+            _logbuch.swallowed(_log, _logbuch.WARNING, "reading the unknown-consumer files without the change check")
+            zeichen = None
+        alt = getattr(self, "_unbekannt_datei", None)
+        if zeichen is not None and alt is not None and alt[0] == zeichen:
+            return alt[1]
+        teil = self.unbekannt_dateien_lesen()
+        if zeichen is not None and "lesefehler" not in teil:
+            self._unbekannt_datei = (zeichen, teil)
+        return teil
+
+    def unbekannt_dateien_lesen(self):
+        """Liest den Dateianteil des Verbrauchers: Zustandsdatei und die noch offenen Zeilen der Schlangen-Stuecke.
+        -> dict lesestand, offene_zeilen, faellig_n; bei einem Fehler nur lesefehler (/health antwortet immer)."""
+        from core import unbekannt_verbraucher as _uv
         try:
             z = _uv.zustand_lesen(self.cfg)
-            aus.update(lesestand=z["lesestand"], offene_zeilen=len(_uv.offene_zeilen(self.cfg, z)),
-                       faellig_n=len(z["faellig"]))
+            return {"lesestand": z["lesestand"], "offene_zeilen": len(_uv.offene_zeilen(self.cfg, z)),
+                    "faellig_n": len(z["faellig"])}
         except Exception as e:                                    # noqa: BLE001  /health antwortet immer
-            aus["lesefehler"] = f"{type(e).__name__}: {e}"
-        return aus
+            return {"lesefehler": f"{type(e).__name__}: {e}"}
+
+    def _unbekannt_zeichen(self):
+        """Woran `_unbekannt_dateianteil` erkennt, ob sich die Dateien geaendert haben koennen: Aenderungszeit und
+        Groesse der Zustandsdatei und des Schlangen-Stuecks von heute (je ein stat). -> tuple, None je fehlende Datei"""
+        from core import unbekannt_verbraucher as _uv
+        dateien = []
+        for pfad in (os.path.join(self.cfg["data_dir"], _uv.ZUSTAND_DATEI),
+                     _uv.stueck_pfad(self.cfg, _uv.tag_von(time.time()))):
+            try:
+                st = os.stat(pfad)
+                dateien.append((st.st_mtime_ns, st.st_size))
+            except OSError:
+                dateien.append(None)
+        return tuple(dateien)
 
     def _unbekannt_rot(self):
         """Der Teil des Verbrauchers an `health_ok` (ED008, W24): rot, wenn der gestartete Faden tot ist oder die
@@ -27234,8 +27974,10 @@ class Service:
             self.log.info("catch-up run off (nachhol_versuche=0 or no frigate_url)")
             return
         def lauf():
+            from core import lebenszeichen as _lz   # Stufe LZ2: Fortschrittsmarke je Runde
             time.sleep(max(60, int(self.cfg["nachhol_start_s"])))
             while True:
+                _lz.setzen("nachholen")
                 try:
                     self._nachhol_runde()
                 except Exception as e:
@@ -27303,10 +28045,12 @@ class Service:
         threading.Thread(target=lauf, name="anwesenheit-takt", daemon=True).start()
 
     def poll_loop(self):
+        from core import lebenszeichen as _lz       # Stufe LZ2: Fortschrittsmarke je Runde
         cfg = self.cfg
         self.log.info(f"poll mode: every {cfg['poll_interval']}s, lookback {cfg['lookback_h']}h, "
                  f"clip_delay {cfg['clip_delay']}s, backend {cfg.get('backend') or cfg['ov_device']}")
         while True:
+            _lz.setzen("abholen")
             self.sweep()
             time.sleep(cfg["poll_interval"])
 
@@ -27410,8 +28154,10 @@ class Service:
     def _abgleich_schleife(self):
         """Der Faden: alle `abgleich_s` Sekunden eine Runde, bis zum Stopp-Zeichen.
         -> None"""
+        from core import lebenszeichen as _lz       # Stufe LZ2: Fortschrittsmarke `abholen` im MQTT-Betrieb
         takt = float(_reg.MQTT_STUMMWACHE["abgleich_s"])
         while not self._abgleich_stopp.wait(takt):
+            _lz.setzen("abholen")
             self.abgleich_runde()
 
     def abgleich_runde(self):
@@ -27567,18 +28313,8 @@ def make_handler(svc):
                 if not isinstance(self.wfile, _rt.CountingWriter):
                     self.wfile = _rt.CountingWriter(self.wfile)
                 self.raw_requestline = b""
-                # Sprach-Stufe 1 (konzept_sprache.md B1, Eintrittspunkt a): DIE
-                # eine Stelle je Request fuer GET UND POST — die contextvar wird
-                # aus dem Store gesetzt, bevor irgendein t() laeuft. HEUTE gibt
-                # es kein keep-alive (protocol_version-Default HTTP/1.0, _send
-                # ohne Content-Length -> close_connection bleibt True), ein
-                # Setzen je Verbindung waere also gleichwertig — je REQUEST ist
-                # trotzdem der richtige Vertrag: bei einer spaeteren Umstellung
-                # auf HTTP/1.1 wuerde eine geparkte Verbindung sonst die Sprache
-                # des Vor-Requests behalten (Widerleger P7). Achtung: aktivieren()
-                # laeuft VOR dem blockierenden readline() in super(); der
-                # Store-Reader ist mtime-gecacht (B2), im Normalfall eine stat().
-                _sprache.aktivieren()
+                # Die Sprachwahl je Anfrage steht seit Stufe LZ1 (Bauplan analysen/bauplan_lebenszeichen.md) in
+                # parse_request, nach dem gelungenen Parsen; Fehlantworten der Basisklasse davor laufen ohne sie.
                 # K4 (01.09., Tester-Log): ein Reverse-Proxy davor resettet Verbindungen
                 # (Health-Checks, abgebrochene Clients) VOR oder MITTEN im Request —
                 # der Reset schlaegt dann im readline()/Parsen von super() auf, wo
@@ -27620,9 +28356,19 @@ def make_handler(svc):
             # Parsen scheitert oder wirft (vorher gelten OTHER und other). getattr, weil die Basisklasse
             # path erst nach der ersten Zeile setzt; die Werte laufen nur durch die festen Listen.
             try:
-                return super().parse_request()
+                ok = super().parse_request()
             finally:
                 _rt.set_request(getattr(self, "command", None), getattr(self, "path", None))
+            # Sprach-Stufe 1 (konzept_sprache.md B1, Eintrittspunkt a): DIE eine Stelle je Request fuer GET UND
+            # POST — die contextvar wird aus dem Store gesetzt, bevor irgendein t() laeuft; je REQUEST, damit eine
+            # spaetere geparkte HTTP/1.1-Verbindung nicht die Sprache des Vor-Requests behaelt (Widerleger P7).
+            # Stufe LZ1 (Bauplan analysen/bauplan_lebenszeichen.md): erst nach dem gelungenen Parsen statt vor dem
+            # Lesen der Anfragezeile, und nicht fuer die Routen in WEB_ROUTEN_OHNE_SPRACHE (der Lebenszeichen-Weg
+            # liest keine Datei). Fehlantworten vor dem Parsen (etwa die 400 der Basisklasse) laufen ohne
+            # Sprachwahl, mit der Vorgabe von t().
+            if ok and _rt.route_of(self.path) not in _reg.WEB_ROUTEN_OHNE_SPRACHE:
+                _sprache.aktivieren()
+            return ok
 
         def send_response(self, code, message=None):
             # SZ1 Punkt 2: der Status der Zeile kommt von hier, nie geschaetzt (auch fuer send_error).
@@ -31195,6 +31941,21 @@ def make_handler(svc):
         def do_GET(self):
             roh = urllib.parse.urlparse(self.path)
             path = urllib.parse.unquote(roh.path)    # Crop-Namen enthalten Personennamen mit Leerzeichen (%20)
+            if path == _reg.LEBENSZEICHEN_WEG:
+                # Bauplan analysen/bauplan_lebenszeichen.md, Stufe LZ1: der Weg der Selbstwache, aus dem Speicher
+                # beantwortet. Kein Banner, kein t(), keine Datei, keine Sperre des Dienstes; kein Feld `ok`, das
+                # Urteil bleibt bei /health (ED008). Mit Laengenangabe, damit der Aufrufer nicht auf das Schliessen
+                # der Verbindung wartet (das kommt erst nach der Zeile je Aufruf).
+                body = json.dumps({"lebt": True}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass                              # Client weg — nichts mehr zuzustellen (wie in _send)
+                return None
             qs = urllib.parse.parse_qs(roh.query)
             if path.startswith("/static/"):            # UI-Statik aus webui/ (AP3)
                 fn = os.path.basename(path)
@@ -33884,265 +34645,24 @@ def make_handler(svc):
                                                     refresh=(_systemstat.LIVE_TAKT_S if _lv_an
                                                              else _systemstat.TAKT_S)))
             if path == "/health":
-                # Bauplan Feldstau Stufe 5.3: /health misst seine eigene Antwort-Dauer und
-                # getrennt den Log-Block (Tee-Zaehler unter der Sperre, unter der jede
-                # Logzeile auf das Datenverzeichnis geht, Widerleger-Fund 16).
-                _t_health = time.monotonic()
-                # version zuerst (Task #12, User 28.07.): eingesandte Log-AUSSCHNITTE tragen
-                # die Startup-Banner-Zeile oft nicht, und "latest-gpu" im Issue-Formular ist
-                # mehrdeutig — /health ist die eine Zeile, die Support-Faelle eindeutig macht.
-                _sf = getattr(svc, "startup_fails", 0)   # SD1: B8-Fang — Selbstcheck-FAIL
-                # .543 DIE AMPEL LERNT DIE LAUFZEIT (K1, dritter Beleg). Bis .542
-                # war `ok` ausschliesslich eine START-Aussage: `startup_fails == 0`.
-                # Genau deshalb blieb /health am 18. und 20.09. GRUEN, waehrend der
-                # Dienst nach einem i915-GPU-Hang des Wirts rund 80 Minuten lang
-                # jede Analyse mit CL_OUT_OF_RESOURCES verlor — der Start war ja
-                # tadellos gewesen. Eine Diagnose, die in genau der Lage gruen
-                # meldet, fuer die sie da ist, ist eine luegende Diagnose.
-                # Seitdem zaehlt auch die LAUFENDE Fehlerserie: drei gescheiterte
-                # Live-Analysen in Folge (SERIE_STRUKTURSIGNAL_N) schalten rot, und
-                # rot bleibt es, bis die erste Live-Analyse wieder gelingt oder die
-                # Serie verjaehrt (SERIE_FENSTER_S). Der Grund steht darunter in
-                # `analyse_serie` — wer rot sieht, soll nicht raten muessen.
-                _serie = svc.analyse_serie_stand()
-                # Bauplan Feldstau Stufe 3: Cache-Groesse aus dem gepflegten Stand, nie
-                # gezaehlt und nie gewartet (die Selbstwache fragt /health mit Frist);
-                # fehlt der Stand noch, stehen Wert und Alter auf null. Die Ampel liest
-                # beides nicht.
-                _cache_b, _cache_alter = svc.clip_cache_bytes()
-                _t_log = time.monotonic()
-                _log_block = _logbuch.health_block(_LOGDATEI, (_STDOUT_SIEB, _STDERR_SIEB),
-                                                   svc.log_startnummern())
-                _log_block_s = time.monotonic() - _t_log
-                # Feldbefunde G3: `ok` steht an EINER Stelle (Service.health_ok), die
-                # Pruef-Zeile `PRUEF health` liest dieselbe; dazu zaehlt seitdem der
-                # Grund `stillstand` des Stoerungswaechters (Punkt 2).
-                from core import refquelle as _rq_health
-                from core import aehnlich as _aeh_health
-                from core import render_cache as _render_cache_health
-                h = {"ok": svc.health_ok(_serie),
-                     "startup_fails": _sf,
-                     "analyse_serie": _serie,
-                     # Bauauftrag E4-3 (Bauplan Referenz-Quelle einbauen, Stufe E4 Punkt 2, V2): der
-                     # Umzug der Referenz-Quelle — Phase (gruen, laeuft, rot, ausstehend,
-                     # kein_altbestand), Schritt und Stand der laufenden Standdatei, das Ergebnis
-                     # gekuerzt ohne Namen, Archiv, Zeit. Rot macht `ok` rot (health_ok, ED008).
-                     "umzug": _rq_health.migration_state(cfg),
-                     # Bauplan analysen/bauplan_lesen_drei_dateien.md E5, D2 Punkt 7: die Lese-Kopie der
-                     # Referenz-Quelle in diesem Prozess, nur aus dem Speicher — Zeilen, fehlende Saetze nach dem
-                     # letzten Nachtrag, Phase des Nachtrags, Rueckfaelle auf die Saetze, letzter Fehler; `rot`
-                     # nur bei einem Fehler (Schreibfehler, kaputte Zeile, gescheiterter Nachtrag), nicht
-                     # waehrend des planmaessigen Nachtrags; `rot` macht `ok` rot (Service.health_ok).
-                     "lesekopie": _rq_health.copies_state(cfg),
-                     # Bauplan analysen/bauplan_render_cache.md, Stufe RC1 Punkt 5: der Seitenspeicher dieses Prozesses,
-                     # nur aus dem Speicher — Schalter, Eintraege, Deckel, Lebensdauer, Treffer, Fehltreffer je Grund,
-                     # Verdraengte, Fehler, letzter Fehler; `red` macht `ok` rot (Service.health_ok, ED008).
-                     "render_cache": _render_cache_health.state(cfg),
-                     "version": os.environ.get("SUSLIK_VERSION", "dev"),
-                     "processed": len(svc.processed),
-                     # E0: die Platz-Vergabe sichtbar machen. Ohne diese Zeile waere ein
-                     # zweiter Analyse-Platz nirgends beobachtbar — /health zeigt sonst
-                     # nur `_worker_obj`, also Worker 1 (Widerleger-Befund B8: Zustand,
-                     # Tode-Zahl und Rueckfall-Statistik des zweiten Prozesses blind).
-                     "analyse_plaetze": svc._plaetze.zustand(),
-                     # E3.2 (14.09.): die Strang-Formel sichtbar machen — WIE VIELE
-                     # Rechenstraenge der Worker-Dienst hat, WORAUS die Zahl kommt
-                     # (Rechenweg in Klartext) und ob die Migrations-Klemme
-                     # gegriffen hat. Ohne diese Zeile waere die wichtigste
-                     # Speicher-Entscheidung der Anlage nur im Startlog zu finden,
-                     # und Supportfaelle schicken /health, nicht 400 Logzeilen.
-                     "worker_straenge": svc.worker_straenge_zustand(),
-                     # .541: der wirksame K-Deckel UND seine HERKUNFT. Seit die
-                     # Werkswerte je Image-Variante verschieden sind (cpu 120,
-                     # gpu-legacy 180, sonst 240), beantwortet die Zahl allein die
-                     # Frage nicht mehr: wer auf einem cpu-Image 120 sieht, muss
-                     # erfahren koennen, dass das die Variante war und nicht ein
-                     # Wert, den er selbst gesetzt und vergessen hat. Quelle ist
-                     # `core.registry.SAMPLE_DECKEL_WERK`, aufgeloest in
-                     # load_config und vom Config-Store ueberlagert.
-                     "sample_deckel": {"wert": int(cfg.get("sample_deckel") or 0),
-                                       "quelle": cfg.get("sample_deckel_quelle"),
-                                       "variante": os.environ.get("SUSLIK_VARIANT") or None},
-                     # .534 (B7): laeuft gerade eine Feinmessung, seit wann, bis
-                     # wann und wie viele Zeilen. Sie ist von aussen schaltbar
-                     # (/support/feinmessung) — dann muss von aussen auch sichtbar
-                     # sein, dass sie laeuft.
-                     "feinmessung": svc.feinmessung().zustand(),
-                     # .534 (B5): wo die Platzzeit je Ereignis wirklich
-                     # hingeht — Median und Summe der letzten 100.
-                     "zeiten": svc.zeiten_zustand(),
-                     # .534 (B6c): der Vorrat fertiger Clips vor der
-                     # Vergabestelle, mit beiden Marken und dem Pausen-Zustand.
-                     "vorlauf": svc.vorlauf().zustand(),
-                     # E3.3/E3.4 (14.09.): DER WORKER-PROZESS SELBST. Bis hier stand
-                     # sein Zustand nur auf der Systemseite (systemstat_dienst) —
-                     # Support-Faelle schicken aber /health. Und seit dem Umbau haengt
-                     # an diesem einen Prozess alles: Haenger-Schuesse, fremdverschuldet
-                     # gebuchte Jobs, der Selbstbeweis. `svc.worker_health()` ist DIE
-                     # Quelle, dieselbe, die auch die Systemseite liest.
-                     "worker": svc.worker_health(),
-                     # E3.4: die Anomalie-Wache. Sie ist die einzige Wache, die die
-                     # STILLE Ausfall-Klasse sieht — sie gehoert dorthin, wo jemand
-                     # nachsieht, wenn „eigentlich laeuft alles".
-                     "null_gesichter": svc.null_serie_stand(),
-                     # Bauplan K3, Stufe KP3: wie oft ein Ereignis seit dem Start ohne fruehes Ende
-                     # lief (Personenzahl unbrauchbar oder Fehler der eigenen Logik), je Grund.
-                     "personenzahl": _personenzahl.stand(),
-                     "namenszuordnung": __import__("core.namenszuordnung", fromlist=["stand"]).stand(),  # NZ3 Punkt 4
-                     # Stufe V1b (Bauplan analysen/bauplan_verbraucher_unbekannt.md, W24): der
-                     # Verbraucher der Unbekannt-Stapel — Faden, Lesestand, offene Zeilen der
-                     # Schlange, letzte Runde, letzter Fehler. Das Feld `sammeln` ist mit dem
-                     # Szenario-Sammeln entfallen.
-                     "unbekannt": svc.unbekannt_stand(),
-                     # Bauplan analysen/bauplan_aehnlich.md Entscheide 9 und 17 (ED008, W3 V6): der Zustand des letzten
-                     # Aufraeum-Schritts „ähnlich zu P“ im Verbraucher-Faden — rot nach einem Fehler mit dem letzten
-                     # Fehler und seiner Zeit, sonst Zeit, Dauer, Zahlen und Grenzen des letzten Laufs. Rot macht `ok` rot
-                     # (health_ok).
-                     "aehnlich": _aeh_health.SPEICHER.stand(),
-                     # .544 Teil 5b: wie oft der Nachhol-Lauf eine Luecke im
-                     # Live-Betrieb genutzt hat (leere Warteschlange, freier
-                     # Platz). Auf einer ruhigen Anlage bleibt die Zahl 0 — dort
-                     # kommt das Ruhefenster von selbst zustande. Steht sie auf
-                     # einer BELEBTEN Anlage still, faehrt der Nachhol-Lauf
-                     # wieder gar nicht, und genau das war der Feldbefund.
-                     "nachhol_unter_last_n": int(
-                         getattr(svc, "_nachhol_unter_last_n", 0) or 0),
-                     # Feldbefunde Punkt 3 (O296): endgueltig aufgegebene Ereignisse
-                     # des Nachhol-Laufs seit Dienststart, je Grund.
-                     "nachhol": svc.nachhol_verluste_stand(),
-                     # Bauplan MQTT-Stummwache, Entscheid 2 (Vorfall O632): spricht Frigate ueber MQTT,
-                     # seit wann nicht, und was der Abgleich nachgereicht hat. null im Poll-Betrieb;
-                     # stumm macht `ok` rot (health_ok, ED008).
-                     "frigate_mqtt": svc.frigate_mqtt_stand(),
-                     # .340: Start-Nachholen — Schalter UND Fortschritt aus DERSELBEN
-                     # Quelle wie der Banner (K1: die Anzeige kann dem Verhalten nicht
-                     # widersprechen). Supportfaelle schicken /health, nicht 400 Logzeilen.
-                     # .371: "an" bleibt fuer Bestandsleser erhalten (true, solange
-                     # nicht ausdruecklich "off"), daneben der ausgelegte Modus und
-                     # der zurueckgehaltene Stapel — die EINE Quelle fuer den Knopf
-                     # in der Kopfleiste.
-                     "start_catchup": {"an": catchup_modus(cfg) != "off",
-                                       "modus": catchup_modus(cfg),
-                                       "wartet": len(getattr(svc, "_catchup_zurueck", ()) or ()),
-                                       "wartet_seit": round(getattr(svc, "_catchup_seit", 0.0) or 0.0, 1),
-                                       # Die Spanne des Dialogs kommt aus der Whitelist,
-                                       # nicht als zweites Literal ins JS (Deckungs-Vertrag
-                                       # qs_ebenen.md: fachliche Werte haben EINE Quelle).
-                                       "grenzen": {
-                                           "stunden": [svc.CONFIG_WHITELIST["lookback_h"][1],
-                                                       svc.CONFIG_WHITELIST["lookback_h"][2]],
-                                           "limit": [svc.CONFIG_WHITELIST["sweep_limit"][1],
-                                                     svc.CONFIG_WHITELIST["sweep_limit"][2]]},
-                                       # Widerleger-Fund: hier stand cfg["lookback_h"].
-                                       # Damit war der Dialog auf ein Fenster
-                                       # vorbelegt, in dem der wartende Stapel oft
-                                       # gar nicht mehr liegt.
-                                       "vorgabe": {"stunden": svc.catchup_vorgabe_stunden(),
-                                                   "limit": cfg.get("sweep_limit") or 200},
-                                       # .371 (User 29.08.: "den Knopf einfach
-                                       # ausgrauen, dass er nicht geklickt werden
-                                       # kann"): ohne angelernte Person steigt der
-                                       # Sweep vor der Analyse aus — ein Klick koennte
-                                       # dort nichts ausrichten. Die Oberflaeche sagt
-                                       # das jetzt VOR dem Klick, statt ihn ins Leere
-                                       # laufen zu lassen.
-                                       "bereit": bool(master_persons(cfg)),
-                                       **(getattr(svc, "_sweep_stand", None) or {}),
-                                       # B2 (05.09.2026, Widerleger-Befund B1 B-1):
-                                       # `aktiv` ist der EINZIGE Grund, aus dem
-                                       # `_cuAnzeigen` (webui/app.js) den „Holen"-
-                                       # Knopf waehrend eines Laufs versteckt. B1
-                                       # strich das Feld aus `_sweep_stand` — zu
-                                       # Recht, es war ein Zaehlwerk des rechnenden
-                                       # Sweeps — und damit war `c.aktiv` im JS
-                                       # dauerhaft undefined: der Knopf stand auch
-                                       # mitten im Nachholen da, also genau die
-                                       # Doppelstart-Einladung, die der Widerleger
-                                       # am 29.08. geschlossen hatte.
-                                       #
-                                       # Deshalb LIVE aus derselben Quelle wie der
-                                       # 409-Riegel (`rueckstau_aktiv_nutzerlauf`):
-                                       # der Knopf ist genau dann sichtbar, wenn ein
-                                       # Klick auch etwas ausloesen wuerde. NACH dem
-                                       # Spread, damit ein Alt-Feld gleichen Namens
-                                       # im Steckbrief ihn nie ueberschreiben kann.
-                                       "aktiv": svc.rueckstau_aktiv_nutzerlauf()},
-                     "backend": cfg.get("backend") or "",
-                     # N8b: Cache-Groesse SICHTBAR (Feldbericht: 74-GB-Steady-State erst am
-                     # 97 % vollen Host bemerkt) + der wirksame Deckel daneben.
-                     "clip_cache_gb": (round(_cache_b / 1024**3, 2)
-                                       if _cache_b is not None else None),
-                     "clip_cache_alter_s": (round(_cache_alter, 1)
-                                            if _cache_alter is not None else None),
-                     "clip_cache_max_gb": round(svc.speichergrenzen()[0], 1),   # .32x: WIRKSAM, nicht roh (0 = abgeleitet)
-                     # Bauplan Feldstau Stufe 1.4: der Aufraeum-Faden — lebt er, laeuft
-                     # gerade ein Lauf und seit wann, wann endete der letzte, wie lange
-                     # dauerte er. Ein langer Lauf ist sichtbar und wird NICHT
-                     # abgeschossen; ein toter Faden macht `ok` rot (health_ok).
-                     "cleanup": svc.aufraeum_stand(),
-                     # Ketten-Schalter (Issue #21, K1): konfigurierte Stufe UND
-                     # tatsaechliche Scharf-Lage je Erkennungs-Weg — aus DENSELBEN
-                     # Praedikaten wie die Quell-Hooks (kette_lage), die Anzeige
-                     # kann dem Verhalten nicht widersprechen.
-                     "erkennungskette": svc.kette_lage(),
-                     # Wanduhr-Lage (K1, Issue #21): sagt WARUM (k)eine Selbst-
-                     # messung vorliegt (uebersprungen auf kleinen Maschinen /
-                     # letzter Fehlversuch), statt still zu fehlen.
-                     "wanduhr": svc.wanduhr_status(),
-                     # Rechenprobe (Lieferung C): rechnet jedes Modell auf seinem
-                     # Betriebs-Geraet das, was die CPU rechnet? Muster wanduhr —
-                     # das Feld sagt, WOHER die Zahlen stammen (measured/cached/
-                     # failed/given up), statt still zu fehlen (K1). Der Hauptweg
-                     # bleibt das Docker-Log; dieses Feld macht die Zeilen
-                     # maschinenlesbar (Tester schicken /health, nicht 400 Logzeilen).
-                     "rechenprobe": getattr(svc, "rechenprobe", None)
-                                    or {"quelle": "not run yet"},
-                     # Live-Reiter (Phase 2): Engine-Herzschlag + Waechter-
-                     # Zustaende aus DERSELBEN Ableitung wie die Kacheln
-                     # (livewache.ui_zustand + registry.LIVE_ZUSTAENDE — die
-                     # Anzeige kann den Kacheln nicht widersprechen, K3/K1).
-                     "live": svc.live_health(),
-                     # .341 Systemseite: DIESELBE Momentaufnahme, die der
-                     # 60-s-Sammler in den Ringpuffer schreibt — bewusst die
-                     # zuletzt geschriebene und keine frische. Wuerde /health
-                     # nebenher messen, klaute jeder Abruf den Delta-Zaehlern
-                     # (CPU, NPU, i915) ihre Bezugsgroesse. Ein Tester ohne
-                     # Browser sieht so exakt die Zahlen der Seite.
-                     "system": _systemstat.letzte() or {"grund": "erster_lauf"},
-                     # Log-Systematik E6 (V4): Zaehler des Tees je Prozess, Zustand
-                     # von Tee und Sieben, Debug- und Pruef-Schalter, Startnummern.
-                     # Bauplan Debug-Zeitfenster Stufe 1 Punkt 5: `debug_bis` ist das
-                     # Fensterende (Sekunden seit 1970 wie `seit`), leer bei debug aus.
-                     "log": {**_log_block,
-                             "debug_bis": (debug_fenster_ende(cfg) if cfg.get("debug")
-                                           else None)}}
-                pi = cfg.get("placement_info")
-                if pi:                                     # P4: aufgeloestes Auto-Placement ausweisen
-                    h["placement"] = {"backend": pi.get("backend"), "quelle": pi.get("quelle"),
-                                      "ts": pi.get("ts")}
-                # Z8 Mitnahme A: Verteiler-Rueckfall sichtbar (konzept_frames.md §3.2 —
-                # "geloggt und in /health sichtbar"). Rueckfall = die Abnehmer eines Events
-                # wollten verschiedene steps, also lief der Decode GETRENNT statt einmal;
-                # ein Download bleibt, das Urteil auch. NUR ANZEIGE, nichts wird gesteuert.
-                # Zwei Toepfe, weil der Zaehler prozessweit ist: 'dienst' ist der des
-                # Dienstprozesses (heute faehrt hier kein Lauf, also normal 0), 'worker' die
-                # aufsummierten Meldungen des Analyse-Workers, wo die Laeufe wirklich wohnen.
-                _wk = getattr(svc._worker_obj, "rueckfaelle", None) or {}
-                from core import frames as _frames_health
-                _dn = int(_frames_health.RUECKFAELLE.get("n") or 0)
-                h["frame_rueckfaelle"] = {"n": _dn + int(_wk.get("summe") or 0),
-                                          "dienst": _dn,
-                                          "worker": int(_wk.get("summe") or 0)}
-                _zl = _frames_health.RUECKFAELLE.get("zuletzt")
-                if _zl and _zl.get("steps"):               # nur die steps, nie der Clip-Name
-                    h["frame_rueckfaelle"]["zuletzt_steps"] = _zl["steps"]
-                # Bauplan Seiten-Zeitprotokoll SZ1 Punkt 7: laufende Seitenaufrufe (Zahl, Route und Alter des
-                # aeltesten, ohne /health selbst) und Antworten mit Sendefehler seit dem Start. Nur lesend,
-                # `ok` bleibt davon unberuehrt (ED008).
-                h["web"] = _rt.health_block()
-                _antwort = self._send(200, json.dumps(h), "application/json")
-                svc.health_dauer_melden(time.monotonic() - _t_health, _log_block_s)
-                return _antwort
+                # Bauplan Lebenszeichen Stufe LZ5: den Inhalt baut der Sammler-Faden (Service.start_health_sammler,
+                # Baufunktionen und Schrittmessung aus LZ4); hier nur der gespeicherte Stand mit `momentaufnahme`, live
+                # dazu `web` und `lebenszeichen` (Service.health_antwort). Keine Datei, keine Hardware, keine Sperre
+                # des Dienstes, keine Sprachwahl (/health steht in WEB_ROUTEN_OHNE_SPRACHE). `ok` ist falsch, sobald
+                # der Stand aelter als die Grenze des Sammlers ist (ED008); vor dem ersten Stand 503. Mit
+                # Laengenangabe wie der Lebenszeichen-Weg.
+                _code, _h = svc.health_antwort()
+                body = json.dumps(_h).encode()
+                self.send_response(_code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass                              # Client weg — nichts mehr zuzustellen (wie in _send)
+                return None
             if path == "/sync_diagnose":                   # .132: Diagnose-Paket BEIDE Seiten (carlsmith-Lehre)
                 # Ein Klick fuer Tester und uns: suslik-Bericht + Sync-Status +
                 # Sync-Logzeilen des Dienstes + Frigate-Log-Tail per API
@@ -36080,8 +36600,11 @@ def main():
     # `start_event_queue` (nach dem Selbsttest) — sonst lief es am Timer-Rueckweg
     # vorbei, rechnete parallel zum Start und bekam keinen zweiten Versuch.
     svc.event_queue_anlegen()
-    web = ThreadingHTTPServer(("0.0.0.0", int(cfg["web_port"])), make_handler(svc))
-    threading.Thread(target=web.serve_forever, daemon=True).start()
+    # Stufe LZ2b Fix-Stelle 1: Erzeugung und Start des Webservers stehen in Service.webserver_starten (Faden `webserver`,
+    # der Dienst merkt sich Server und Faden), damit die Selbstwache ihn allein neu starten kann (Entscheid 12).
+    svc.webserver_starten()
+    # Bauplan Lebenszeichen LZ5: der Sammler von /health direkt nach dem Webserver (erster Lauf sofort).
+    svc.start_health_sammler()
     # E14 D3: die Zeile „Webview: port …" entfaellt, der Startblock sagt es (web UI … ready).
     startup_selfcheck(svc)                    # strukturierter Selbstcheck nach stdout (Roadmap 4/10)
     prewarm_views(svc)                        # Bauplan Katalog-Fortschreibung PK2: Sichten im Hintergrund vorwaermen
