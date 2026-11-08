@@ -12,9 +12,10 @@ Namen ein Ereignis traegt. Der Dienst rechnet nicht nach, er uebernimmt die Name
   - gueltig ist ein Gesicht mit Erkennungswert, ohne Fehldetektion, ueber der Kante, mit Guete ueber
     den Stimm-Latten (nicht messbar = ungueltig, core.guete.stimme_ok) und mit Kopfhaltung;
   - jedes gueltige Gesicht gibt eine Stimme fuer seinen besten Namen, wenn dessen Wert die
-    Stimm-Grenze erreicht;
+    Stimm-Grenze erreicht und den zweitbesten Namen um mindestens den Abstand `stapel_abstand`
+    uebertrifft (`zu_knapp`); liegen beide naeher beieinander, stimmt das Gesicht fuer niemanden;
   - ein Name ist erkannt, sobald er im Ereignis so viele Stimmen hat wie verlangt, egal wann (kein
-    Zeitfenster, keine Marge);
+    Zeitfenster);
   - hoechstens so viele Namen wie die Personenzahl, gereiht nach Stimmen, dann nach Name.
 
 EHRLICHE GRENZEN (wie im Labor, gezaehlt in `diagnose`):
@@ -22,8 +23,12 @@ EHRLICHE GRENZEN (wie im Labor, gezaehlt in `diagnose`):
     (gleichstand_stimme).
   - Gleichstand an der Personenzahl-Grenze: Reihung nach Stimmen, dann Name (gleichstand_obergrenze).
   - Zwei Gesichter im selben Bild fuer denselben Namen geben zwei Stimmen (doppelt_im_frame).
-  - Der Abstand zum Zweitbesten war im Labor aus (0). Er entfaellt hier, weil ohne ihn dieselbe
-    Rechnung herauskommt: bei verschiedenen Werten fuehrt der beste Name immer mit Abstand > 0.
+  - Der Abstand zum Zweitbesten (Bauplan analysen/bauplan_stapel_abstand.md, Stufe SA1): im Labor war
+    er aus (0). Seit SA1 kommt er aus der Config (`stapel_abstand`, Werkswert in verifyd.load_config,
+    gemessen am Waechterfehler vom 07.11. und an der Feldmessung vom 08.11.; 0 schaltet ihn ab). Die Regel steht
+    nur in `zu_knapp`; sie gilt fuer Worker, Tuer und Waechter, fuer die Akte (worker_kern.zusammenfassen)
+    und fuer den vorlaeufigen Namen der ersten Waechter-Meldung (core.livewache). Einen eigenen Zaehler
+    in `diagnose` gibt es dafuer nicht.
   - Die Personenzahl kommt seit Stufe KP3 (core.personenzahl); der Worker gibt sie dem Stapel im Urteil
     des Ereignisses (worker_dienst) und in der Tuer-Quelle (core.tuer) mit. Ist sie unbrauchbar oder
     fehlt sie, rechnet der Stapel ohne Obergrenze.
@@ -49,9 +54,15 @@ def gueltig(f, lat):
     return lat["pose"] <= 0 or (f["p"] is not None and f["p"] >= lat["pose"])
 
 
-def stimme(sc):
+def zu_knapp(beste, zweite, abstand):
+    """Ob der beste Name eines Gesichts den zweitbesten um weniger als den Abstand uebertrifft.
+    -> bool; falsch bei Abstand <= 0 (Regel aus) oder ohne zweiten Wert (zweite None)"""
+    return abstand > 0 and zweite is not None and beste - zweite < abstand
+
+
+def stimme(sc, abstand):
     """Der Name, fuer den ein gueltiges Gesicht stimmt, und ob sein bester Wert ein Gleichstand ist.
-    -> (Name oder None, Gleichstand an der Stimm-Grenze als bool)"""
+    -> (Name oder None, Gleichstand an der Stimm-Grenze als bool); `abstand` ist Pflicht (zu_knapp)"""
     werte = sorted(sc.items(), key=lambda x: x[1], reverse=True)
     if not werte:
         # Anlage ohne eine einzige Person: kein Name, keine Stimme. Im Labor kam der Fall nicht vor
@@ -61,6 +72,8 @@ def stimme(sc):
         return None, werte[0][1] >= STIMM_GRENZE
     name, w = werte[0]
     if w < STIMM_GRENZE:
+        return None, False
+    if zu_knapp(w, werte[1][1] if len(werte) > 1 else None, abstand):
         return None, False
     return name, False
 
@@ -83,7 +96,7 @@ def entscheiden(gesichter, lat, x, personenzahl=None):
             if not gueltig(f, lat):
                 continue
             diag["gueltig"] += 1
-            name, gleich = stimme(f["sc"])
+            name, gleich = stimme(f["sc"], lat["stapel_abstand"])
             diag["gleichstand_stimme"] += int(gleich)
             if name is not None:
                 im_frame.append((name, f["zeit_s"]))

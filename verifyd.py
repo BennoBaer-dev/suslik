@@ -1989,6 +1989,13 @@ def load_config(path):
                          # Stapels (core.stapel), Werkswert 3 wie im Labor L16.
                          # PAAR-Bauart: Default hier, Whitelist-Eintrag dort.
         ("stapel_stimmen", 3),
+                         # Bauplan Stapel-Abstand (analysen/bauplan_stapel_abstand.md), Stufe SA1
+                         # Punkt 5a (Eigentuemer 08.11.2026 07:53:55, befehle/2026-11-08.md: „Wir
+                         # nehmen die 0,075, aber als Wert, den wir in der Config wählen können."):
+                         # Mindestabstand des besten zum zweitbesten Namen je Gesicht
+                         # (core.stapel.zu_knapp), gemessen am Waechterfehler vom 07.11. und an der
+                         # Feldmessung vom 08.11. 0 = aus. PAAR-Bauart: Default hier, Whitelist dort.
+        ("stapel_abstand", 0.075),
                          # Bauplan K3, Stufe KP2 Punkt 7 (Eigentuemer 03.10., Befehlsbuch :2121,
                          # „die anzahl für die offene tür (aktuell 20) möchte ich über die config
                          # steuerbar haben"): Tuer-Fenster in Bildern (core.tuer), Werkswert 20 wie
@@ -3251,6 +3258,9 @@ def _verwurf_melden(info, code):
 # stapel_stimmen:
 #   Punkt 5: Stimmen bis erkannt des Stapels (core.stapel). `or 0` traegt die
 #   Haus-Konvention wie beim sample_deckel: fehlender Wert = kein Stapel.
+# stapel_abstand:
+#   Bauplan analysen/bauplan_stapel_abstand.md Stufe SA1: Mindestabstand des besten zum zweitbesten Namen je
+#   Gesicht (core.stapel.zu_knapp); `or 0` traegt die Haus-Konvention (fehlender Wert = 0 = aus).
 # tuer_fenster:
 #   Stufe KP2 Punkt 7 und 3: die Tuer. Das Fenster aus der Config (`or 0` = keine Tuer, Haus-
 #   Konvention), der Deckel der Tuer-Bilder als Werkswert der Image-Variante aus der Registry
@@ -3280,6 +3290,7 @@ def job_latten(cfg, camera):
         "urteil_pose": _reg["pose_min"] if _reg.get("pose_min") is not None else _pb,
         "urteil_norm_min": _kk_ernte.erk_latten(cfg, _reg or None)["n"],
         "stapel_stimmen": int(cfg.get("stapel_stimmen") or 0),
+        "stapel_abstand": float(cfg.get("stapel_abstand") or 0),
         "tuer_fenster": int(cfg.get("tuer_fenster") or 0),
         "tuer_deckel": _registry.tuer_deckel_werk(os.environ.get("SUSLIK_VARIANT"))[0],
         "unbekannt_latte": float(cfg.get("unbekannt_latte") or 0),
@@ -12559,7 +12570,8 @@ class Service:
         # KP2: Obergrenze = der groesste Werks-Deckel der Tuer-Bilder (core.registry.tuer_deckel_werk, dieselbe
         # Tabelle wie der Bild-Deckel); ein laengeres Fenster koennte der Deckel nie zu Ende fuehren.
         "tuer_fenster": (int, 0, max(_registry.SAMPLE_DECKEL_WERK.values()), "door window in frames: when a face reaches the door bar of the analysis worker for a person it has not recognised yet in this event, the worker looks at every following frame instead of only the sampled ones, for this many frames; a new such face inside the window extends it. Afterwards it continues on the normal sampling grid. FACTORY VALUE 20, measured on real events. How many door frames one event may use at most is fixed per image and equals the factory value of the frame cap (sample_deckel). 0 switches the door off"),
-        "stapel_stimmen": (int, 1, 10, "votes until recognized: how many valid faces of an event have to vote for the same person before the analysis worker names that person. A face votes for its best person when its recognition score reaches the vote bar of the analysis worker; faces that fail the size, quality, head-pose or feature-norm bars do not vote. The votes may come from anywhere in the clip, and two faces in the same picture give two votes. There is no margin rule on this path. FACTORY VALUE 3"),
+        "stapel_stimmen": (int, 1, 10, "votes until recognized: how many valid faces of an event have to vote for the same person before the analysis worker names that person. A face votes for its best person when its recognition score reaches the vote bar of the analysis worker; faces that fail the size, quality, head-pose or feature-norm bars do not vote. The votes may come from anywhere in the clip, and two faces in the same picture give two votes. A face whose best and second-best person lie too close together gives no vote, see stapel_abstand. FACTORY VALUE 3"),
+        "stapel_abstand": (float, 0.0, 0.5, "minimum lead per face: a face only votes when its best person beats the second-best person by at least this value; if the two lie closer together, the face votes for nobody. Applies to the analysis worker and to the live watcher, including the preliminary name of the watcher's first notification. FACTORY VALUE 0.075, measured on real events. 0 switches the rule off"),
         "katalog_guete_kante_min": (int, _KANTE_LO, _KANTE_HI, "catalogue bar (face size): the smallest face, in pixels of its shorter box side, a learning run keeps. FACTORY VALUE 25, the same number the recognition side has used as its vote floor since 0.1.0.400 (measured on field data: correct votes live at 30-49 px on overview cameras, the nonsense cases at 11-19 px; 70 would kill correct ones, 25 costs none). Raise it if your learning material is full of faces that are simply too small to learn anything from; 0 switches the axis off. Per-camera values on the calibration page win over this one"),
         "pruef_guete_t_min": (float, 0.0, 1.0, "catalogue check bar (recognisability): below this, the catalogue check flags a stored picture — together with a feature norm below the learning-stock floor it becomes a removal suggestion. It only looks at pictures you already have and never removes anything by itself; per-camera values on the calibration page win over this one, and pictures without a quality score are never flagged"),
         "selbstwache": (bool, None, None, "watchdog thread checks at a fixed interval that this service's web server still answers its own simple sign-of-life route (not /health); after several consecutive failures it exits hard so the container restart policy brings the service back (covers full web-server hangs that even the remote restart endpoint cannot reach)"),

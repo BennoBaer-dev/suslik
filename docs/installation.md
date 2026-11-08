@@ -79,11 +79,11 @@ docker pull ghcr.io/bennobaer-dev/suslik:latest-gpu-legacy  # Intel Gen8/9/11 (t
 docker pull ghcr.io/bennobaer-dev/suslik:latest-rocm        # AMD (testing)
 
 # the same release, pinned so it never moves under you:
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.056-gpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.056-cuda
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.055-cpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.055-gpu-legacy
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.055-rocm
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.057-gpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.057-cuda
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.057-cpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.057-gpu-legacy
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.057-rocm
 ```
 
 > **Testing variants:** `gpu-legacy` and `rocm` follow every release under `latest-*` like
@@ -406,7 +406,7 @@ A `latest-*` tag only moves once a release has been deployed and verified on rea
 when to move, pin the version explicitly:
 
 ```yaml
-    image: ghcr.io/bennobaer-dev/suslik:0.1.1.055-cpu
+    image: ghcr.io/bennobaer-dev/suslik:0.1.1.057-cpu
 ```
 
 To move, change the tag and run `docker compose up -d`. Recent versions stay pullable, but a

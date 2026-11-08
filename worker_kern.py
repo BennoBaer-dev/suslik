@@ -136,6 +136,7 @@ import decode                                           # noqa: E402  _probe: EI
 import face_audit                                       # noqa: E402  ar_det_size, MODELLE, fd-Regel
 import pose_wache                                       # noqa: E402  RTMPose-Vorverarbeitung
 from core import guete                                  # noqa: E402  e/t-Modelle + Normierung
+from core import stapel                                 # noqa: E402  Abstand-Regel (zu_knapp)
 from core import tuer as _tuer                          # noqa: E402  KP2: Tuer-Quelle
 from core.livewache import person_region                # noqa: E402  Personenregion aus Gesichtsbox
 from core.messkarte import QUELLE_ANALYSE as MK_QUELLE  # noqa: E402  Herkunft der Messkarte
@@ -1073,7 +1074,9 @@ def urteils_latten(plan):
     Seit Stufe KP2: `tuer_fenster` (Bilder je Oeffnung der Tuer, core.tuer) und `tuer_deckel` (hoechstens
     so viele Tuer-Bilder je Ereignis); fehlen sie, sind sie 0: keine Tuer bzw. kein Deckel.
     Seit Fix 0.1.1.013 Stufe F4: `unbekannt_latte`, `unbekannt_bilder_je_gruppe` und `unbekannt_rahmen_max`, die drei
-    Werte des Unbekannt-Stapels im Bildvorrat; fehlen sie, sind sie 0: kein Stapel (Verhalten wie vor F4)."""
+    Werte des Unbekannt-Stapels im Bildvorrat; fehlen sie, sind sie 0: kein Stapel (Verhalten wie vor F4).
+    Seit Bauplan Stapel-Abstand Stufe SA1: `stapel_abstand`, der Mindestabstand des besten zum zweitbesten
+    Namen je Gesicht (core.stapel.zu_knapp); fehlt er, ist er 0 = aus."""
     fest = plan["argv_fest"]
 
     def latte(schluessel, mass):
@@ -1087,6 +1090,7 @@ def urteils_latten(plan):
            "guete_e": latte("urteil_guete_e", "empfinden"), "guete_t": latte("urteil_guete_t", "t"),
            "urteil_norm_min": float(fest.get("urteil_norm_min") or 0),
            "stapel_stimmen": int(float(fest.get("stapel_stimmen") or 0)),
+           "stapel_abstand": float(fest.get("stapel_abstand") or 0),
            "tuer_fenster": int(float(fest.get("tuer_fenster") or 0)),
            "tuer_deckel": int(float(fest.get("tuer_deckel") or 0)),
            "unbekannt_latte": float(fest.get("unbekannt_latte") or 0),
@@ -1799,12 +1803,21 @@ def zusammenfassen(zeilen, personen, lat):
     Kaskade (event_rechnen, gpu_stufen); diese Menge sind damit die Gesichter, die
     alle Siebe bestanden haben. Die Stimm-Filter in `stimme` bleiben wortgleich
     stehen. Die Namen des Ereignisses entscheidet auf dem Worker-Weg der Stapel
-    (core.stapel), nicht diese Kennwerte; sie tragen Akte, Bilder und Log-Zeilen."""
+    (core.stapel), nicht diese Kennwerte; sie tragen Akte, Bilder und Log-Zeilen.
+
+    ABSTAND (Bauplan Stapel-Abstand, Stufe SA1 Punkt 4): ein Gesicht, an dem bester und zweitbester Name
+    zu nah beieinanderliegen (core.stapel.zu_knapp mit `stapel_abstand`), kommt in kein `stimm_idx`, denn
+    daraus zaehlt die Namenszuordnung den sub_label. Alle uebrigen Kennwerte bleiben unberuehrt."""
     zeilen = [f for f in zeilen if f["sc"] is not None]
     if not zeilen:
         return {}
     uk, wt = lat["urteil_kante"], lat["win_thresh"]
     bw_s, ank = lat["blick_fenster_s"], lat["urteil_anker"]
+    knapp = set()
+    for fi, f in enumerate(zeilen):
+        werte = sorted(f["sc"].values(), reverse=True)
+        if werte and stapel.zu_knapp(werte[0], werte[1] if len(werte) > 1 else None, lat["stapel_abstand"]):
+            knapp.add(fi)
 
     def stimme(f):
         return (guete.stimme_ok(lat["guete_e"], lat["guete_t"], f["e"], f["t"])
@@ -1818,7 +1831,7 @@ def zusammenfassen(zeilen, personen, lat):
                     if (uk <= 0 or min(f["bw"], f["bh"]) >= uk) and stimme(f))
         win = max((sum(1 for (t, s, _i) in ts if t0 <= t <= t0 + 3.0 and s >= wt)
                    for t0, _s0, _i0 in ts), default=0)
-        stimm_idx = sorted(fi for (_t, s, fi) in ts if s >= wt)
+        stimm_idx = sorted(fi for (_t, s, fi) in ts if s >= wt and fi not in knapp)
         blick_n, blick_max, blick_t0 = 0, 0.0, None
         if bw_s > 0:
             st = [(t, s) for (t, s, _i) in ts if s >= wt]

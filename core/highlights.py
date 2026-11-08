@@ -12,7 +12,7 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.056"   # 0.1.1.056: EIN neuer Box-Eintrag (Kette Lebenszeichen, Bauplan analysen/bauplan_lebenszeichen.md, Stufen LZ1, LZ2, LZ4, LZ5, LZ2b, LZ6); CHANGELOG-Satz vom Eigentuemer 07.11.2026 17:41:46 abgenommen ("Ja, so"), Box-Zeile 17:42:32 ("ok"); 0.1.1.055: EIN neuer Box-Eintrag, Inhalt vom Eigentuemer 05.11.2026 20:4x ("text für waths new: weniger deuteifunktion, speziell für große installationen und cache für die beiden seiten"), Kurzfassung abgenommen 20:5x ("Ja, passt"); 0.1.1.054: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 15:5x "Wir lassen uns mit Small", CHANGELOG nur "Small fixes."); 0.1.1.053: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 07:2x "What's new packen wir nichts rein"); 0.1.1.052: kein neuer Box-Eintrag (Eigentuemer 04.11.2026 17:32:17 "Changelog wuerde ich jetzt nicht
+STAND = "0.1.1.057"   # 0.1.1.057: EIN neuer Box-Eintrag (Bauplan analysen/bauplan_stapel_abstand.md, Stufe SA1); CHANGELOG-Satz und Box-Zeile vom Eigentuemer 08.11.2026 09:26:05 abgenommen ("Changelog und What's New passen."); 0.1.1.056: EIN neuer Box-Eintrag (Kette Lebenszeichen, Bauplan analysen/bauplan_lebenszeichen.md, Stufen LZ1, LZ2, LZ4, LZ5, LZ2b, LZ6); CHANGELOG-Satz vom Eigentuemer 07.11.2026 17:41:46 abgenommen ("Ja, so"), Box-Zeile 17:42:32 ("ok"); 0.1.1.055: EIN neuer Box-Eintrag, Inhalt vom Eigentuemer 05.11.2026 20:4x ("text für waths new: weniger deuteifunktion, speziell für große installationen und cache für die beiden seiten"), Kurzfassung abgenommen 20:5x ("Ja, passt"); 0.1.1.054: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 15:5x "Wir lassen uns mit Small", CHANGELOG nur "Small fixes."); 0.1.1.053: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 07:2x "What's new packen wir nichts rein"); 0.1.1.052: kein neuer Box-Eintrag (Eigentuemer 04.11.2026 17:32:17 "Changelog wuerde ich jetzt nicht
                       # gross was reinpacken. What's new? Auch nichts. Weil das sind ja nur Fixes von Dingen, die wir schon
                       # gedacht haetten, haetten wir schon lange gefixt."). Box unveraendert: nur STAND geht hoch; Stufen D1
                       # bis D4 des Bauplans analysen/bauplan_lesen_drei_dateien.md, der CHANGELOG-Abschnitt hat einen Satz.
@@ -878,6 +878,24 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.1.057 — EIN Punkt, INHALT VOM EIGENTUEMER 08.11.2026 09:2x (kurz und knapp: Abstandsregel eingebaut,
+    # wie das Feld heisst, welcher Wert, ueber die Config aenderbar); Box-Zeile EN und DE von der Hauptsession
+    # vorgeschlagen, abgenommen 09:26:05 („Changelog und What's New passen.“). ES, IT, FR und FI nach EN uebersetzt.
+    # Was dahinter steht: Stufe SA1 des Bauplans analysen/bauplan_stapel_abstand.md (core.stapel.zu_knapp).
+    ("0.1.1.057", (
+        {"de": "Neue Abstandsregel stapel_abstand (0,075, in der Config änderbar): ein Gesicht zählt nur, wenn sein "
+               "bester Name den zweitbesten um mindestens diesen Wert übertrifft.",
+         "en": "New margin rule stapel_abstand (0.075, adjustable in the config): a face only counts if its best name "
+               "leads the second best by at least this value.",
+         "es": "Nueva regla de margen stapel_abstand (0,075, ajustable en la configuración): una cara solo cuenta si "
+               "su mejor nombre supera al segundo en al menos este valor.",
+         "it": "Nuova regola di margine stapel_abstand (0,075, modificabile nella configurazione): un volto conta "
+               "solo se il suo nome migliore supera il secondo di almeno questo valore.",
+         "fr": "Nouvelle règle d'écart stapel_abstand (0,075, réglable dans la configuration) : un visage ne compte "
+               "que si son meilleur nom dépasse le deuxième d'au moins cette valeur.",
+         "fi": "Uusi erotussääntö stapel_abstand (0,075, muutettavissa asetuksissa): kasvot lasketaan vain, jos "
+               "paras nimi ylittää toiseksi parhaan vähintään tällä arvolla."},
+    )),
     # 0.1.1.056 — EIN Punkt, INHALT ABGESTIMMT: CHANGELOG-Satz und Box-Zeile (EN) von der Hauptsession vorgeschlagen,
     # Eigentuemer 07.11.2026 17:41:46 („Ja, so“) und 17:42:32 („ok“). DE, ES, IT, FR und FI nach EN uebersetzt; „health“
     # bleibt in jeder Sprache das Wort der Abfrage /health. Was dahinter steht: Stufen LZ1, LZ2, LZ4, LZ5, LZ2b und LZ6

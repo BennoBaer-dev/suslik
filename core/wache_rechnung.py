@@ -314,7 +314,7 @@ class CameraStack:
         for row in result.rows:
             if not stapel.gueltig(row, result.limits):
                 continue
-            name, _tie = stapel.stimme(row["sc"])
+            name, _tie = stapel.stimme(row["sc"], result.limits["stapel_abstand"])
             if name is not None:
                 score = row["sc"][name]
                 if name not in self.best or score > self.best[name][0]:

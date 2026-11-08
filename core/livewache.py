@@ -4755,7 +4755,7 @@ class Engine:
         self._kalib_kandidat(k, frame, echte[0])
         self._namens_feuer_liste(k, feuern, anw=anw)
         if trigger is not None:
-            self._trigger(k, trigger, frame, mono, names_allowed)
+            self._trigger(k, trigger, frame, mono, names_allowed, result.limits["stapel_abstand"])
 
 
     def _namens_feuer_liste(self, k, feuern, anw=None):
@@ -4912,7 +4912,7 @@ class Engine:
                                       person=person, bild=self._bild_rel(bild))
         self._thread_starten(f"live-name-{k.name}", job)
 
-    def _trigger(self, k, face, buffer, mono, names_allowed):
+    def _trigger(self, k, face, buffer, mono, names_allowed, abstand):
         """Meldet das erste Gesicht des Auftritts, das die Worker-Kaskade bestanden hat.
         -> None; Versand, Karenz und MQTT-Vertrag bleiben erhalten.
         """
@@ -4936,9 +4936,13 @@ class Engine:
         u_text, u_person, u_urteil = None, None, None
         if names_allowed and face["sc"]:
             from core import vertrauen as _vt
-            person, cos = max(face["sc"].items(), key=lambda pair: pair[1])
+            werte = sorted(face["sc"].items(), key=lambda pair: pair[1], reverse=True)
+            person, cos = werte[0]
             wort = _vt.wort(cos, self.win_thresh)
-            treffer = cos >= self.win_thresh
+            # Bauplan Stapel-Abstand SA1 Punkt 3: liegen bester und zweitbester Name zu nah beieinander
+            # (core.stapel.zu_knapp), traegt die erste Meldung keinen vorlaeufigen Namen, wie unter der Latte.
+            treffer = cos >= self.win_thresh and not _stapel.zu_knapp(
+                cos, werte[1][1] if len(werte) > 1 else None, abstand)
             u_person = person if treffer else None
             u_urteil = {"person": person, "cos": cos, "wort": wort, "treffer": treffer}
             u_text = (TEXT_URTEIL_TREFFER if treffer else TEXT_URTEIL_UNSICHER).format(name=person, wort=wort)

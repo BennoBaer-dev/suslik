@@ -498,6 +498,10 @@ ARGV_VORGABE = {
     # setzt der Config-Store (verifyd.load_config), nicht diese Fuellung.
     "urteil_norm_min": 0.0,
     "stapel_stimmen": 0,
+    # Bauplan Stapel-Abstand, Stufe SA1: Mindestabstand des besten zum zweitbesten Namen je Gesicht
+    # (core.stapel.zu_knapp). 0 = aus, als Fuellwert richtig wie oben; den Werkswert setzt der
+    # Config-Store (verifyd.load_config), nicht diese Fuellung.
+    "stapel_abstand": 0.0,
     # Bauplan K3, Stufe KP2: die Tuer (core.tuer). Fenster 0 = keine Tuer, Deckel 0 = ohne Deckel; wer
     # die Felder nicht schickt, rechnet wie vor KP2. Den Werkswert des Fensters (20) setzt der
     # Config-Store, den Deckel je Variante core.registry (tuer_deckel_werk), nicht diese Fuellung.
