@@ -48,6 +48,7 @@ import threading
 import time
 
 from core import registry as _reg
+from core.cuda_compat import cuda_status, nvidia_nodes
 from core import logbuch as _logbuch
 _log = _logbuch.logger(__name__)
 
@@ -125,7 +126,7 @@ def _pflicht_knoten(kind):
 
 def geraete_lage():
     """-> {kind: (device-name, ...)} fuer jedes Backend-kind der Registry, dessen
-    Geraeteknoten hier WIRKLICH liegt.
+    Geraeteknoten hier WIRKLICH liegt (CUDA: auch Treiber-Nachweis ohne Knoten).
 
     Quelle ist ausschliesslich core/registry (BACKENDS/DEVICES) — die
     Projektregel verlangt fuer fachliche Aufzaehlungen die zentrale Quelle, nie
@@ -135,7 +136,8 @@ def geraete_lage():
     for kind in _reg.BACKENDS:
         namen = []
         for dev in _reg.DEVICES.get(kind, ()):
-            if _knoten_da(dev.get("knoten")):
+            if ((bool(nvidia_nodes()) or cuda_status(dev["name"])[0])
+                    if kind == "cuda" else _knoten_da(dev.get("knoten"))):
                 namen.append(dev["name"])
         aus[kind] = tuple(namen)
     return aus
@@ -523,8 +525,7 @@ def _sonde_cuda(zeitgrenze_s=SONDE_CUDA_ZEITGRENZE_S):
     """NVIDIA: nvidia-smi. Die Auslastung ist dort GESAMT (je Prozess liefert
     nvidia-smi nur Speicher, keine Rechenzeit — Bauplan §0).
     `zeitgrenze_s`: Frist fuer nvidia-smi in Sekunden; ohne Angabe SONDE_CUDA_ZEITGRENZE_S."""
-    if not _knoten_da(_pflicht_knoten("cuda")):
-        return _fehlt("kein_geraet")
+    # Query NVML via nvidia-smi directly: WSL2 has /dev/dxg, not /dev/nvidia*.
     try:
         # .536 B1a: stdin=DEVNULL. Diese Sonde ist IM WORKER erreichbar (die
         # Speicher-Wache fragt sie im Takt), und ein Kind, das den fd 0 des
@@ -553,10 +554,16 @@ def _sonde_cuda(zeitgrenze_s=SONDE_CUDA_ZEITGRENZE_S):
         return dict(_fehlt("nicht_lesbar"), messgrund="empty output")
     teile = [x.strip() for x in zeile[0].split(",")]
     try:
-        return {"prozent": float(teile[0]), "grund": None,
+        def optional(value):
+            try:
+                return float(value)
+            except ValueError:
+                return None
+        usage, temperature = optional(teile[0]), optional(teile[3])
+        return {"prozent": usage, "grund": None,
                 "speicher_mb": int(float(teile[1])),
                 "speicher_max_mb": int(float(teile[2])),
-                "temperatur_c": int(float(teile[3])),
+                "temperatur_c": int(temperature) if temperature is not None else None,
                 "speicher_frei_mb": int(float(teile[4]))}
     except Exception:                                        # noqa: BLE001
         _logbuch.swallowed(_log, _logbuch.WARNING, "returning _fehlt('nicht_lesbar')")
@@ -584,8 +591,7 @@ def prozesse_karte_mb(pids=None):
     `liste_leer` (der Treiber nennt ueberhaupt keinen Prozess), `kein_eintrag`
     (er nennt welche, aber keine der gefragten) und „gemessen" (grund None).
     Wortgleich mit `prozess_karte_mb` — EIN Vokabular fuer dieselbe Auskunft."""
-    if not _knoten_da(_pflicht_knoten("cuda")):
-        return {}, "kein_geraet"
+    # Process accounting may be unavailable under WSL2; preserve unknown values.
     try:
         # .536 B1a: stdin=DEVNULL, gleiche Begruendung wie bei der Karten-Sonde
         # oben — dieser Aufruf haengt am Ende JEDES Analyse-Jobs im Worker.
@@ -730,6 +736,11 @@ def gpu_messen():
         d = dict(d, kind=kind)
         if d.get("prozent") is not None:
             return d
+        # A valid memory probe need not have utilization (WSL2: N/A).
+        # Preserve the existing tile diagnostic without invalidating the raw
+        # SONDEN result used by the memory planner.
+        if d.get("grund") is None:
+            d["grund"] = "nicht_lesbar"
         if erster is None:
             erster = d
     return erster or _fehlt("kein_geraet", kind=None)

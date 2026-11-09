@@ -44,6 +44,41 @@ NVIDIA NVDEC) and fall back to software loudly, with identical pixels either way
 **display** transcodes (browser copies, Telegram clips) run on the media engine, where
 no judgment is made.
 
+## NVIDIA on Docker Desktop / WSL2
+
+Windows Docker Desktop with the WSL2 backend may expose the NVIDIA GPU through
+`/dev/dxg` instead of `/dev/nvidia*`. Use the CUDA image with GPU passthrough
+enabled (`gpus: all` in Compose). A missing `/dev/nvidia0` does not by itself
+mean that CUDA is unavailable.
+
+Suslik checks the CUDA driver (`cuInit` and `cuDeviceGetCount`) before trying the
+requested device, then checks whether the real ONNX session binds the CUDA
+provider. The driver check does not allocate a model or prove that every model
+fits in VRAM. Listing `CUDAExecutionProvider` or reporting `ort.get_device() ==
+"GPU"` alone is not proof of execution. Failed session initialization and an
+ORT fallback to CPU are reported explicitly.
+
+VRAM telemetry queries `nvidia-smi` directly, without a device-node gate. WSL2
+may report unavailable utilization, temperature, or per-process accounting;
+unknown process memory is not credited as free memory. Keep memory guards
+enabled, especially when sharing the GPU with another application.
+
+CUDA access also does not prove NVENC/NVDEC support. Video encoder selection
+still requires the existing FFmpeg encode/decode probes, and decode paths
+retain their runtime failure handling.
+
+Regression tests run without a GPU or ONNX dependencies:
+
+```sh
+python -m unittest discover -s tests -v
+```
+
+For an optional GPU check, run `tests/smoke_cuda.py` inside the CUDA image with
+this checkout mounted read-only at `/patch` and `PYTHONPATH=/app`. It profiles a
+small `MatMul` through the patched session factory, verifies CUDA execution and
+the numeric result, then checks a session with CPU fallback disabled. It does
+not validate the memory requirements or throughput of the full face pipeline.
+
 ## Measured performance (author's machines, 2026-07-27)
 
 The same defined workload — 11 real events (3 fixed points + 8 stranger events), full

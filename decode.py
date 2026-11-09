@@ -431,9 +431,13 @@ def va_da():
 
 
 def nv_da():
-    """NVIDIA-Runtime im Container: /dev/nvidiactl (Kriterium unveraendert
-    aus der _hwdec-Historie; NVDEC-Byte-Beweis am NB 05.08.)."""
-    return os.path.exists("/dev/nvidiactl")
+    """NVIDIA decode candidate on native Linux or WSL2.
+
+    Driver access alone does not prove NVDEC support. The actual FFmpeg
+    decode and existing runtime fallback still decide whether it works.
+    """
+    from core.cuda_compat import cuda_status
+    return cuda_status()[0]
 
 
 # ---------------------------------------------------------------------------
@@ -587,9 +591,9 @@ def hw_geraet():
         return "vaapi", (f"{node}, VA drivers: "
                          + (", ".join(treiber) if treiber else "none found"))
     if nv_da():
-        return "nvdec", "/dev/nvidiactl (NVIDIA runtime)"
+        return "nvdec", "CUDA driver device available (native NVIDIA or WSL2)"
     return None, (f"no usable hardware decode device "
-                  f"(neither {node} nor /dev/nvidiactl)")
+                  f"({node} absent and CUDA driver/device unavailable)")
 
 
 def byte_probe(vid, fps_sample=2.0, deckel_s=180.0):

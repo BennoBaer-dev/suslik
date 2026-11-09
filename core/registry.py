@@ -57,6 +57,10 @@ OV_DEVS = ("GPU", "NPU", "MIXED", "AUTO")
 # ep_optionen = zusaetzliche Provider-Optionen, die zu DIESEM Geraet gehoeren und die
 #   jeder Session-Bau mitgeben MUSS (face_audit._ort_session merged sie). Fehlt der
 #   Schluessel, gibt es keine.
+# Native Linux and Docker Desktop / WSL2 transport nodes. These are hints,
+# not proof of CUDA or video execution. Keep the legacy single-pattern API.
+NVIDIA_KNOTEN = ("/dev/nvidia*", "/dev/dxg")
+
 DEVICES = {
     "cpu": (),
     "openvino": (
