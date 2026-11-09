@@ -1127,7 +1127,8 @@ def _placement_hw_key():
     # ein altes Placement bliebe kleben (Inventur-Fund 31.07.). Key-Aenderung invalidiert
     # gespeicherte Placements einmalig — gewollt, naechster Boot misst neu.
     devs = sorted(_glob.glob("/dev/dri/renderD*")) + sorted(_glob.glob("/dev/accel/accel*")) \
-         + sorted(_glob.glob("/dev/kfd")) + sorted(_glob.glob("/dev/nvidia[0-9]*"))
+         + sorted(_glob.glob("/dev/kfd")) + sorted(_glob.glob("/dev/nvidia[0-9]*")) \
+         + sorted(_glob.glob("/dev/dxg"))
     return f"{cpu}|{','.join(devs)}|ort{ov}|{os.environ.get('SUSLIK_VERSION', '')}"
 
 
@@ -5955,13 +5956,10 @@ def video_encoder():
         if art != "cpu" or time.monotonic() - ts < 600:
             return art, node
     quelle = ["-f", "lavfi", "-i", "testsrc=size=256x256:duration=0.1"]
-    # NVIDIA zuerst: dort gibt es kein VAAPI, und /dev/nvidia* existiert nur, wenn die Geraete
-    # wirklich in den Container gereicht wurden (--gpus). Trotzdem proben, nicht annehmen.
-    # -nostdin wie in jedem produktiven ffmpeg-Aufruf (die Probe erbt sonst stdin des Dienstes).
-    try:
-        nvidia = any(n.startswith("nvidia") for n in os.listdir("/dev"))
-    except OSError:
-        nvidia = False
+    # CUDA access only makes NVENC a candidate. Real encode/decode probes below
+    # remain mandatory, including under WSL2 (/dev/dxg).
+    from core.cuda_compat import cuda_status, nvidia_nodes
+    nvidia = bool(nvidia_nodes()) or cuda_status()[0]
     if nvidia and _encode_probe(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
                                  *quelle, "-vf", "format=yuv420p", "-c:v", "h264_nvenc",
                                  "-f", "null", "-"]):
@@ -6005,7 +6003,7 @@ def video_encoder():
     # Diagnose als "Geraet da, Probe gescheitert" (Review-Fund: der falsche Grund schickt den
     # Fern-Support in die falsche Richtung).
     _VIDEO_PROBE_GRUND = ("hw encode probes failed" if (nvidia or knoten)
-                          else "no hw video device passed through (/dev/nvidia*, /dev/dri)")
+                          else "no hw video device passed through (/dev/nvidia*, /dev/dxg, /dev/dri)")
     _VIDEO_ENCODER = ("cpu", None, time.monotonic())
     return "cpu", None
 
@@ -35581,7 +35579,10 @@ def varianten_hinweis(variante, probe):
         if name.strip().lower().startswith("igpu"):
             igpu_da = not detail.startswith("not found")
             igpu_kaputt = "did NOT bind" in detail
-    nvidia_da = os.path.exists("/dev/nvidiactl") or os.path.exists("/dev/nvidia0")
+    from core.cuda_compat import cuda_status, nvidia_nodes
+    cuda_da, nvidia_grund = cuda_status()
+    # Hardware hints are sufficient for image recommendations, not inference.
+    nvidia_da = bool(nvidia_nodes()) or cuda_da
     if variante == "cpu" and igpu_da:
         return ("Found an Intel GPU that this CPU-only image cannot use — the gpu image "
                 "(or gpu-legacy for Intel 6th–10th gen / UHD 6xx) would use it for recognition.")
@@ -35599,13 +35600,13 @@ def varianten_hinweis(variante, probe):
     # Umkehr-Faelle (User-Fund 05.08.): cuda/rocm-Image auf fremder Hardware
     # lief bisher ohne jeden Hinweis still auf CPU.
     render_da = os.path.exists("/dev/dri/renderD128")
-    if variante == "cuda" and not nvidia_da:
+    if variante == "cuda" and not cuda_da:
         if render_da:
-            return ("No NVIDIA GPU found, but a /dev/dri render device is present. "
+            return ("CUDA driver/device unavailable, but a /dev/dri render device is present. "
                     "If that is an Intel iGPU, the gpu image would use it — this "
                     "cuda image runs recognition on the CPU here.")
-        return ("No NVIDIA GPU found — this cuda image runs recognition on the "
-                "CPU here; the cpu image does the same with a much smaller download.")
+        return (f"CUDA driver/device unavailable ({nvidia_grund}) — check GPU passthrough "
+                "and driver access; recognition may fall back to CPU.")
     if variante == "rocm" and nvidia_da:
         return "Found an NVIDIA GPU — the cuda image would use it for recognition."
     return None
@@ -36139,7 +36140,12 @@ def startup_selfcheck(svc):
                             _kdev, _kn = knoten_familie(kind)
                         else:
                             _kdev, _kn = dev, _gkm(dev)
-                        if _kn and not _sglob.glob(_kn):
+                        if kind == "cuda":
+                            from core.cuda_compat import cuda_status
+                            _, _reason = cuda_status(dev or 0)
+                            erg("warn", f"requested {spec}: CUDA session did not bind; "
+                                        f"driver probe: {_reason} — running on CPU")
+                        elif _kn and not _sglob.glob(_kn):
                             erg("warn", f"requested {spec} but this host has no {_kdev} device "
                                         f"({_kn}) — running on CPU")
                         else:

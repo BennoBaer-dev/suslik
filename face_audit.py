@@ -755,12 +755,10 @@ def _ort_session(kind, dev, model_file, cache=None):
                               f"CPU (GPU/NPU runtime vs. host driver version mismatch?)")
         return s
     if kind == "cuda" and "CUDAExecutionProvider" in avail:
-        # Task-#15-Muster, cuda nachgezogen (Widerleger 31.07.): ohne /dev/nvidia* ist der
-        # Session-Versuch chancenlos und produzierte nur ORT-[E]-Spam + die irrefuehrende
-        # "mismatch?"-Warnung — dabei HAT der Host schlicht keine NVIDIA-Karte (Gen9-Klasse).
-        if not _glob.glob(geraete_knoten_muster("NVIDIA") or "/dev/nvidia*"):
-            _log.error("note: no NVIDIA device node (/dev/nvidia*) "
-                              "on this host -> CPU")
+        from core.cuda_compat import cuda_status
+        _cuda_ok, _cuda_reason = cuda_status(dev or 0)
+        if not _cuda_ok:
+            _log.error(f"CUDA driver unavailable ({_cuda_reason}); native NVIDIA/WSL2 -> CPU")
             return ort.InferenceSession(model_file, providers=["CPUExecutionProvider"],
                                         sess_options=_ort_thread_opts())
         try:                                      # 'cuda:GPU' o.ae. -> int() wirft; dokumentiert ist ein
@@ -768,9 +766,14 @@ def _ort_session(kind, dev, model_file, cache=None):
         except (TypeError, ValueError):
             _log.warning(f"WARN: invalid CUDA device number '{dev}' -> device_id=0")
             _did = 0
-        s = ort.InferenceSession(
-            model_file, providers=[("CUDAExecutionProvider", {"device_id": _did}),
-                                   "CPUExecutionProvider"], sess_options=_ort_thread_opts())
+        try:
+            s = ort.InferenceSession(
+                model_file, providers=[("CUDAExecutionProvider", {"device_id": _did}),
+                                       "CPUExecutionProvider"], sess_options=_ort_thread_opts())
+        except Exception as exc:
+            _log.error(f"CUDA session initialization failed ({exc}) -> CPU")
+            return ort.InferenceSession(model_file, providers=["CPUExecutionProvider"],
+                                        sess_options=_ort_thread_opts())
         # Wie im OpenVINO-Zweig: der EP kann gelistet sein und trotzdem nicht binden (Treiber-/
         # cuDNN-Mismatch, GPU belegt) -> onnxruntime nimmt still CPUExecutionProvider. Ungeprueft
         # meldete der Startup-Check "cuda engaged", waehrend real die CPU rechnete.
