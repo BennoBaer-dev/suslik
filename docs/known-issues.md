@@ -28,10 +28,12 @@ _Last updated: 2026-10-11 (reference source: backup before the update, restore o
 - **A failed accelerator can fall back to CPU too quietly.** If the compute backend
   dies mid-run, analysis may continue on CPU without making the failure loud. Hard
   failure handling is planned.
-- **Single false detections still enter the unknown pool.** The static-object
-  quarantine catches *clusters* of non-faces (wheel arches, light patterns) reliably,
-  but an individual misdetection can sit in the pool as a one-image identity until
-  enough similar ones accumulate.
+- **A false detection can still enter the unknown pool.** The static-object
+  quarantine catches *clusters* of non-faces (wheel arches, light patterns), and the
+  second look makes the detector find an unknown face a second time on a cut-out before
+  it counts (see [live-watchers.md](live-watchers.md), step 4). Something the detector
+  takes for a face both times still gets through and can sit in the pool as a one-image
+  identity until enough similar ones accumulate.
 
 ## Limitations (by design, for now)
 

@@ -758,7 +758,10 @@ def _ort_session(kind, dev, model_file, cache=None):
         # Task-#15-Muster, cuda nachgezogen (Widerleger 31.07.): ohne /dev/nvidia* ist der
         # Session-Versuch chancenlos und produzierte nur ORT-[E]-Spam + die irrefuehrende
         # "mismatch?"-Warnung — dabei HAT der Host schlicht keine NVIDIA-Karte (Gen9-Klasse).
-        if not _glob.glob(geraete_knoten_muster("NVIDIA") or "/dev/nvidia*"):
+        # Bauplan nvidia_wsl2 NW1: ob eine Karte da ist, entscheidet core/nvidia_lage (Knoten unter
+        # Linux wie bisher, unter WSL2 der Treiber); ohne Karte bleibt der Weg wie er war.
+        from core.nvidia_lage import nvidia_da as _nvidia_da   # noqa: PLC0415
+        if not _nvidia_da()[0]:
             _log.error("note: no NVIDIA device node (/dev/nvidia*) "
                               "on this host -> CPU")
             return ort.InferenceSession(model_file, providers=["CPUExecutionProvider"],
@@ -1087,15 +1090,6 @@ class Embedder:
         crops = [face_align.norm_crop(img, landmark=f.kps, image_size=112)
                  for f in faces]
         return faces, crops
-
-    def embeddings_batch(self, crops_bgr):
-        """norm_crop-112-Crops -> L2-normierte Embeddings, EIN Lauf.
-        Duenne Huelle um _rec_infer, damit Aufrufer ausserhalb dieses Moduls
-        keine Unterstrich-Methode anfassen muessen."""
-        if self._rec is None:
-            raise RuntimeError("embeddings_batch() braucht den eigenen "
-                               "Recognition-Kopf")
-        return self._rec_infer(list(crops_bgr))
 
     def faces_mit_vorschranke(self, img, vorschranke, max_num=0):
         """Der EINE Eintritt fuer Aufrufer, die eine Auswahl mitgeben wollen (Ernte).

@@ -218,7 +218,10 @@ def push(cfg, title, message, attachment=None, herkunft=None, log=None,
     Nutzerwunsch; suslik ist nicht aus dem Internet erreichbar).
     .411: `log` fuer die eine Pause-Zeile (sonst stdout); `pause_ignorieren`
     nur fuer den Kanal-Test (er darf die Pause durchbrechen und hebt sie bei
-    Erfolg auf). Rueckgabe False auch bei AUS/pausiert — ohne Netzversuch."""
+    Erfolg auf). Rueckgabe False auch bei AUS/pausiert — ohne Netzversuch.
+    `attachment` (PW1, Bauplan push_melden): ein Pfad wie bisher oder die
+    JPEG-bytes selbst; der Live-Waechter sendet sein kleines Bild aus dem
+    Speicher, der Weg des Dienstes (Pfad) bleibt gleich."""
     po = cfg.get("pushover") or {}                 # fehlender Block darf keinen KeyError werfen
     token, user = po.get("token"), po.get("user")  # (telegram_video() faengt das laengst ab)
     if not (token and user):
@@ -232,8 +235,12 @@ def push(cfg, title, message, attachment=None, herkunft=None, log=None,
     parts = []
     for k, v in [("token", token), ("user", user), ("title", title), ("message", message)]:
         parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode())
-    if attachment and os.path.exists(attachment):
+    img = None
+    if isinstance(attachment, (bytes, bytearray)):
+        img = bytes(attachment) or None
+    elif attachment and os.path.exists(attachment):
         img = open(attachment, "rb").read()
+    if img:
         parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"attachment\"; "
                      f"filename=\"crop.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".encode() + img + b"\r\n")
     body = b"".join(parts) + f"--{boundary}--\r\n".encode()
@@ -296,18 +303,40 @@ def stoerung_melden(cfg, text, herkunft=None, bericht=None):
     return fehler
 
 
-def telegram_video(cfg, video_path, caption, crop=None, herkunft=None):
+TELEGRAM_VIDEO_MAX = 49 * 1024 * 1024   # PW3 (Bauplan push_melden, PV8): technische Grenze fuer sendVideo, Wert
+#                                         wie bisher; der Live-Waechter prueft sein Video vor dem Versand dagegen
+TELEGRAM_CPU_CRF = 28                    # PW3 (E5): Qualitaet von libx264 fuer Telegram-Videos, Clip und Waechter
+
+
+def telegram_height(cfg):
+    """Hoehe der Telegram-Videos aus telegram_hoehe (720 oder 480, sonst 720), fuer den Clip des Dienstes und seit PW3
+    (Bauplan push_melden, E6) fuer das Video des Live-Waechters. -> int"""
+    hoehe = int(cfg.get("telegram_hoehe", 720))
+    return hoehe if hoehe in (720, 480) else 720
+
+
+def telegram_video(cfg, video_path, caption, crop=None, herkunft=None, nur_video=False):
     """Direktversand an die Telegram-Bot-API (Weg B): Video, sonst Foto, sonst reiner Text.
     Multipart wie push(); Secrets aus cfg['telegram'] (per ${VAR} aus der .env expandiert).
-    `herkunft` (.163) wie bei push(): Nicht-Live-Meldungen tragen ihre Marke."""
+    `herkunft` (.163) wie bei push(): Nicht-Live-Meldungen tragen ihre Marke.
+    `crop` (PW1, Bauplan push_melden): ein Pfad wie bisher oder die JPEG-bytes
+    selbst (kleines Bild des Live-Waechters aus dem Speicher).
+    `nur_video` (PW3, Codex Runde 1 B3): True heisst nur das Video; ohne sendbares
+    Video (fehlt oder groesser als TELEGRAM_VIDEO_MAX) kein Rueckfall auf Foto oder
+    Text, Rueckgabe False. Ohne den Parameter bleibt der Weg des Dienstes gleich."""
     tg = cfg.get("telegram") or {}
     token, chat = tg.get("bot_token"), tg.get("chat_id")
     if not token or not chat:
         return False
     caption = _reg.melde_text(caption, herkunft)
-    if video_path and os.path.exists(video_path) and os.path.getsize(video_path) <= 49 * 1024 * 1024:
+    if video_path and os.path.exists(video_path) and os.path.getsize(video_path) <= TELEGRAM_VIDEO_MAX:
         method, field, fname, ctype = "sendVideo", "video", "clip.mp4", "video/mp4"
         payload = open(video_path, "rb").read()
+    elif nur_video:
+        return False
+    elif isinstance(crop, (bytes, bytearray)) and crop:
+        method, field, fname, ctype = "sendPhoto", "photo", "crop.jpg", "image/jpeg"
+        payload = bytes(crop)
     elif crop and os.path.exists(crop):
         method, field, fname, ctype = "sendPhoto", "photo", "crop.jpg", "image/jpeg"
         payload = open(crop, "rb").read()
@@ -636,9 +665,7 @@ def telegram_clip(cfg, log, transcode, kommandos, encoder, eid):
     # Aufloesung waehlbar 720/480 (User 04.08.), gilt fuer Face UND
     # Person (gemeinsamer Weg); Cache-Name traegt die Hoehe, sonst
     # wuerde nach einem Umstellen die alte Datei ausgeliefert.
-    hoehe = int(cfg.get("telegram_hoehe", 720))
-    if hoehe not in (720, 480):
-        hoehe = 720
+    hoehe = telegram_height(cfg)
     src, dst = base + ".mp4", base + f"_tg{hoehe}.mp4"
     if os.path.exists(dst):
         return dst
@@ -658,7 +685,7 @@ def telegram_clip(cfg, log, transcode, kommandos, encoder, eid):
     # N8a (RTX 2060 an 2 eigenen Clips + Feld-Sweep aus Issue #4): am FULL-HW-Pfad ist cq 34
     # nicht mehr size-matched (scale_cuda-Shift, s. transcode_kommandos-Docstring); Paritaets-
     # cq content-abhaengig 34-37 -> 36 als konservativer Mittelweg NUR fuer nvenc-voll.
-    hw, cpu = kommandos(src, part, hoehe, 34, 28, dauer_s=60,
+    hw, cpu = kommandos(src, part, hoehe, 34, TELEGRAM_CPU_CRF, dauer_s=60,
                         q_vaapi=28, q_hw_voll=36)
     try:
         r = transcode(hw, 300) if hw else None

@@ -59,6 +59,8 @@ KAPITEL = (
     ("neu", "readme.neu"),
     ("generell", "readme.generell"),
     ("lernen", "readme.lernen"),
+    # Bauplan analysen/bauplan_mqtt_melden.md, Stufe MM4: welche MQTT-Meldungen der Live-Waechter wann sendet.
+    ("mqtt", "readme.mqtt"),
     ("aktuell", "readme.aktuell"),
     ("persoenlich", "readme.persoenlich"),
 )

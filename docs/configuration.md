@@ -46,7 +46,7 @@ Everything persistent is under the `/data` volume you mounted:
 | `faces/` | a derived copy of the profile pictures, one folder per person, rebuilt by suslik for display and export; not a source any more |
 | `learn/` | enrollment data and the persistent unknown pool |
 | `state/` | judgments, ground-truth labels, write-back log; `state/anwesenheit/` holds the presence marks (one file per day: who was confirmed where, per quarter hour — personal data); `state/archiv/` holds removed reference sets, the copy of the old stock from the one-time migration (`vor_refquelle_<date>/`) and the parts replaced by a restore — nothing in it is deleted |
-| `live/` | live watchers: per-camera evidence pictures of triggers and name messages, the recap videos of the live day view, and the alert log |
+| `live/` | live watchers: per-camera evidence pictures of triggers and name messages, the appearance videos sent over Telegram and shown in the live day view, and the alert log |
 | `personlern/` | the person-recognition path: harvest runs with crops and your review verdicts, confirmed stranger images (`fremd/`), the trained model (`modell/`), judged live crops (`treffer/`, 30-day trim) and the fire-window state |
 | `clips/`, `events/` | cached recorded clips (auto-pruned) and per-event crops/logs |
 | `backups/` | tar backups written by versions before the reference source; suslik writes none any more and leaves the old ones in place — the full backup below replaces them |
@@ -168,8 +168,10 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   detections (86% of false detections caught at a 1.2% cost of real faces, none of them
   load-bearing). Recognition itself is deliberately **not** filtered — judgments never change,
   and the Today page shows a footnote with what was filtered so nothing disappears silently.
-- **`det_thresh`** — the face detector's own threshold (upstream default 0.5), made visible and
-  configurable. Raising it is *not* recommended: 0.60 already costs ~16% of real faces.
+- **`det_thresh`** — the face detector's own threshold (factory value 0.40, the same value the
+  live watchers use; allowed 0.3 to 0.7), made visible and configurable. Raising it is *not*
+  recommended: 0.60 already costs ~16% of real faces. It is also the bar of the second look for
+  unknown faces (see [live-watchers.md](live-watchers.md), step 4).
 - **Frigate connection** — the Frigate base URL. Can be pre-filled via the `FRIGATE_URL`
   environment variable for convenience, but the wizard value in the store wins.
 - **Zone filter** — per camera, an optional list of required zones. Events that never entered one

@@ -18,7 +18,10 @@ EIGENE Darstellung: 24 Stundenzellen als <span> in einer flex-Reihe, kein Pitch
 der grossen Leiste (--anw-pitch bleibt in style.css bei der Leiste).
 """
 import html
+import time
+import urllib.parse
 
+from core import kleinbild as _kleinbild
 from core import sprache as _sp
 from routes import anwesenheit as _r_anw
 
@@ -142,6 +145,31 @@ def anker_ts(alle_auftritte, kamera, ts):
         if float(a.get("ts") or 0) <= ts <= float(a.get("ts_letzte") or a.get("ts") or 0):
             return int(float(a.get("ts") or 0))
     return int(ts)
+
+
+def waechter_kachel(u, tag_s):
+    """Die Kachel eines Auftritts, den ein Waechter als unbekannte Person gewertet hat (Bauplan
+    analysen/bauplan_today_seite.md, Stufe TY4 Punkt 3), im Aufbau wie verifyd._unbekannt_karte mit der Klasse pk-waechter:
+    Name mit Vermerk live, „gesehen HH:MM“ (mehrere gewertete Auftritte in einer Karte: die Spanne) und Kamera, das Bild
+    des ersten Gesichts klein oder der leere Bildplatz, die Handlung „Ansehen“ im selben Verweis. u ist ein Eintrag aus
+    core.livewache.unbekannt_auftritte. -> HTML der Kachel; der Verweis fuehrt auf die Karte unter /live_alerts"""
+    def hhmm(t):
+        return time.strftime("%H:%M", time.localtime(t))
+    von, bis, kamera = float(u["von"]), float(u["bis"]), str(u.get("kamera") or "")
+    gesehen = (_sp.t("heute.unbek.gesehen_einmal", zeit=hhmm(von)) if bis - von < 60
+               else _sp.t("heute.unbek.gesehen", von=hhmm(von), bis=hhmm(bis)))
+    meta = " · ".join(x for x in (gesehen, kamera) if x)
+    bild = (f'<img src="{_kleinbild.adresse("/live_alarmbild?p=" + urllib.parse.quote(u["bild"]))}" loading="lazy" '
+            'alt="">' if u.get("bild") else "")
+    titel = _sp.t("heute.person.live_link", zeit=hhmm(von), kamera=kamera)
+    vermerk = (f'<span class="badge hk-live" title="{html.escape(_sp.t("heute.waechter.live_title"), quote=True)}">'
+               f'{html.escape(_sp.t("heute.person.live"))}</span>')
+    return (f'<div class="pkwrap"><a class="pk pk-unbek pk-waechter" title="{html.escape(titel, quote=True)}" '
+            f'href="/live_alerts?tag={html.escape(tag_s, quote=True)}#a{int(u["anker"])}">'
+            f'<div class="pk-av pk-av-unbek">{bild}</div>'
+            f'<div class="pk-txt"><div class="pk-name">{html.escape(_sp.t("heute.waechter.name"))} {vermerk}</div>'
+            f'<div class="pk-meta">{html.escape(meta)}</div>'
+            f'<span class="pk-akt">{html.escape(_sp.t("heute.akt.ansehen"))}</span></div></a></div>')
 
 
 def live_im_pass(auftritte, start, ende):

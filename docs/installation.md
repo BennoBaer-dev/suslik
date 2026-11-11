@@ -47,6 +47,9 @@ for real performance.
   sudo nvidia-ctk runtime configure --runtime=docker
   sudo systemctl restart docker
   ```
+- **On Windows with Docker Desktop:** the `-cuda` image can use an NVIDIA card through the WSL 2
+  backend; what that needs and what differs from Linux is in
+  [hardware-acceleration.md](hardware-acceleration.md#windows-with-docker-desktop-wsl-2).
 - **Running under Proxmox?** The compose blocks below are unchanged, but the device has to reach
   your LXC container before Docker can pass it on. That is a step in front of everything here, and
   it is described in [proxmox.md](proxmox.md).
@@ -79,11 +82,11 @@ docker pull ghcr.io/bennobaer-dev/suslik:latest-gpu-legacy  # Intel Gen8/9/11 (t
 docker pull ghcr.io/bennobaer-dev/suslik:latest-rocm        # AMD (testing)
 
 # the same release, pinned so it never moves under you:
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.057-gpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.057-cuda
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.057-cpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.057-gpu-legacy
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.057-rocm
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.101-gpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.101-cuda
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.101-cpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.101-gpu-legacy
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.101-rocm
 ```
 
 > **Testing variants:** `gpu-legacy` and `rocm` follow every release under `latest-*` like
@@ -406,7 +409,7 @@ A `latest-*` tag only moves once a release has been deployed and verified on rea
 when to move, pin the version explicitly:
 
 ```yaml
-    image: ghcr.io/bennobaer-dev/suslik:0.1.1.057-cpu
+    image: ghcr.io/bennobaer-dev/suslik:0.1.1.101-cpu
 ```
 
 To move, change the tag and run `docker compose up -d`. Recent versions stay pullable, but a

@@ -40,9 +40,11 @@ pixels (md5-verified on H.264 4K, HEVC 4K and HEVC 1080p clips) — the drift ca
 using a different YUV→BGR *conversion*. Since then every judgment frame goes through one
 pinned path: ffmpeg decode (software **or** hardware, provably identical) → raw YUV →
 one fixed conversion. Live watchers use hardware decode where available (Intel VAAPI,
-NVIDIA NVDEC) and fall back to software loudly, with identical pixels either way; all
-**display** transcodes (browser copies, Telegram clips) run on the media engine, where
-no judgment is made.
+NVIDIA NVDEC) and fall back to software loudly, with identical pixels either way; the
+**display** transcodes of the service (browser copies, Telegram clips) run on the media
+engine, where no judgment is made. The one exception is the live watcher's Telegram video:
+it is encoded with libx264 on the CPU at the lowest priority (`nice 19`), the same way on
+every image variant, and it is never judged either.
 
 ## Measured performance (author's machines, 2026-07-27)
 
@@ -91,7 +93,38 @@ broad compatibility:
 - **GPU range:** CUDA 12.8 covers compute capabilities from **Maxwell (5.0)** through
   **Blackwell / RTX 50 series** — the widest still-relevant span. (CUDA 13 dropped
   Maxwell/Pascal/Volta.)
-- **Requirement:** host driver **R525 or newer** and the NVIDIA Container Toolkit.
+- **Requirement (Linux):** host driver **R525 or newer** and the NVIDIA Container Toolkit.
+
+### Windows with Docker Desktop (WSL 2)
+
+The `-cuda` image also runs on Windows under Docker Desktop with the WSL 2 backend. The container
+has no `/dev/nvidia*` device nodes there. The card comes in through `/dev/dxg`, and CUDA is
+provided by the NVIDIA driver installed in Windows. When the nodes are missing and `/dev/dxg` is
+present, suslik asks that driver whether it sees an NVIDIA card. If it does, recognition, video
+decoding for the analysis and the display transcodes use the card, as on Linux. Each of them is
+probed at start. If the CUDA provider does not bind, recognition runs on the CPU and the log says
+so; an error while the CUDA session is built is reported, not hidden. Hardware decoding falls back
+to software only when it delivered no frame at all, and the display encoder falls back to the CPU
+when its probe fails. The startup self-check shows the outcome: `cuda:0 — device engaged` for recognition, and the `video` line for
+the encoder.
+
+Docker documents the setup on its side in
+[GPU support in Docker Desktop for Windows](https://docs.docker.com/desktop/features/gpu/): the
+WSL 2 backend turned on, an up-to-date WSL 2 kernel (`wsl --update`), a current NVIDIA driver for
+Windows with WSL 2 support, and the card passed to the container with `--gpus all`. If the banner
+or the startup log still says `No NVIDIA GPU found`, suslik found no NVIDIA card in the container;
+check those steps first.
+
+Two things differ from Linux. The Windows driver doesn't report card memory per process, so suslik
+can't show how much of the card it holds itself and plans the worker against the free memory the
+card reports. And if the driver gives the load and temperature as `[N/A]`, the GPU tiles show the
+card memory with its numbers and say why the load figure is missing.
+
+Intel and AMD cards under WSL 2 are not supported. `/dev/dxg` exists for them too, and suslik does
+not count it as an NVIDIA card on its own.
+
+This support is new. We have no Windows machine, so it has not been tested on our own hardware
+yet; reports from Windows users are welcome.
 
 ### Consumer-GPU note (important)
 
@@ -142,7 +175,8 @@ and the build now aborts if any bundled library fails to resolve.
 
 Everything above is per-event work. A live watcher adds *continuous* load: it decodes
 one camera stream (hardware decode where available) and runs the detector on every Nth
-frame, around the clock. That is why watchers are GPU-only for now, capped at five, and
+frame, around the clock. That is why watchers are built for a GPU (the cpu image runs them in a slower CPU mode), capped at
+five by default, and
 why each has a selectable processing resolution (default 1080p) — the main lever for
 their cost. Under load the engine thins its own sampling and shows the throttle level;
 the **Measure load** button reports the real per-watcher cost (frames/s, detector time,

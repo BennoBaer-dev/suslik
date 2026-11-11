@@ -87,6 +87,8 @@ T = {
     "readme.aktuell.text": 'Reconnaissance quand plusieurs personnes figurent dans un événement. Le système doit déterminer où se trouve chaque personne dans l’image et lancer la reconnaissance faciale séparément pour la zone de chacune — ainsi deux personnes proches ne se fondent plus en un seul verdict.',
     "readme.lernen.titel": "Comment j'apprends de nouveaux visages ?",
     "readme.lernen.text": "Voici comment j'apprends avec mon système :\n\nApprentissage du visage. La première chose sur un nouveau système. Selon le matériel, les 500 derniers événements, 1000 avec de la marge. Le programme récupère les événements personne, les regroupe et réunit les images. Les connus, il les attribue lui-même. Les inconnus, il les rassemble en groupe, et je donne un nom au groupe. Cela donne la base. Ne s'applique qu'aux visages qui ont été correctement reconnus.\n\nAujourd'hui. Une fois la base en place, ce qui s'ajoute vient d'ici : cliquer sur un événement ou une personne, intégrer le visage.\n\nConnus. Choisir la personne, laisser le programme trouver les visages correspondants. C'est aussi là que je renomme une personne quand le nom contient une faute de frappe. Le programme reporte le nouveau nom dans les données enregistrées, y compris dans les anciens événements. Les journaux et les sauvegardes gardent l'ancien nom.\n\nApprentissage de la personne. Il existe en parallèle, pour les personnes dont le visage n'est pas lisible. J'écrirai plus tard à ce sujet.\n\nQualité. Cet onglet, je l'utilise régulièrement. Il montre à quel point les images d'une personne sont vraiment bonnes, lesquelles sont trop faibles et lesquelles se recoupent avec une autre personne. Celles qui se ressemblent trop, je les enlève.\n\nL'onglet Inconnus est encore là, il vient d'une version antérieure. Je ne l'utilise pas.",
+    "readme.mqtt.titel": "Messages MQTT",
+    "readme.mqtt.text": "Depuis 0.1.1.058, chaque message de la surveillance en direct a le champ event. Les automatisations filtrent dessus. faces_recognized et appearance_ended sont nouveaux, les anciens champs restent.\n\nTopic [préfixe]/live/[caméra], QoS 0, sans retain. Ce que le broker manque n'est pas renvoyé.\n\nPar apparition, ils arrivent dans cet ordre :\n\nface_found : premier visage valide. Avec score et, s'il y en a déjà un, un nom provisoire dans schnell_urteil.\n\nface_recognized : un nom a assez de votes. Une fois par nom, avec stufe dans schnell_urteil.\n\nfaces_recognized : juste après. faces contient tous les noms de l'apparition jusqu'ici, chacun avec name et stufe.\n\nappearance_ended : l'apparition est terminée. reason vaut no_face quand le temps de « La visite finit après » est écoulé, ou stopped quand la surveillance ou le moteur s'arrête. En plus faces et duration_s du premier au dernier visage.\n\ndisturbance : surveillance perturbée avec state disturbed, retour à la normale avec state recovered. Au plus un par surveillance et par 10 minutes, le dernier état suit ensuite.\n\nstufe : clear nettement au-dessus de la barre, narrow juste au-dessus, below juste en dessous, none loin en dessous ou non mesurable.\n\n« Pause push » freine Pushover et Telegram, jamais MQTT.",
     "readme.persoenlich.titel": 'Personnel',
     "readme.persoenlich.text": "C'est purement un loisir. En tant qu'architecte informatique senior, j'ai plaisir à développer quelque chose avec l'IA. Le tout est développé avec Claude Code, principalement avec Fable 5, et avec Opus 5 pour les agents.\n\nCe que je souhaite, ce sont des retours, et cela me fait plaisir quand quelqu'un utilise le système. C'est ma paie.",
     "kameras.titel": "Caméras",
@@ -725,9 +727,6 @@ T = {
     "syncauswahl.ergebnis.uebersprungen": "{n} désélectionnées (ignorées)",
     "syncauswahl.ergebnis.dauer": "a duré {n} s",
     # ---------------------------------------------------- routes/live ---
-    "live.hinweis_gpu":
-        "Fonctionne pour l'instant uniquement avec un GPU — nous "
-        "travaillons sur une option CPU sans pouvoir la promettre.",
     "live.hinweis_cpu":
         "Mode CPU&nbsp;: les surveillances coûtent cher ici — la "
         "vérification rapide prend typiquement 1–2 s (une version GPU "
@@ -755,19 +754,14 @@ T = {
         "mesurez à nouveau",
     "live.messung.fehlgeschlagen":
         "dernière mesure de charge ÉCHOUÉE ({wann})&nbsp;: {fehler}",
-    "live.zaehler.auftritte": "{n} apparitions",
-    "live.zaehler.funde": "{n} visages trouvés",
+    "live.zaehler.auftritte": "{n} visites",
+    "live.zaehler.funde": "{n} visages",
     "live.zaehler.trigger": "{n} déclenchements",
-    "live.zaehler.alerts": "{n} alertes",
-    "live.zaehler.letzter": "dernier déclenchement {zeit}",
-    "live.zaehler.kopf": "depuis le démarrage du moteur&nbsp;:",
+    "live.zaehler.alerts": "{n} signalés",
+    "live.zaehler.letzter": "dernier {zeit}",
+    "live.zaehler.kopf": "Depuis le démarrage\u00a0:",
     "live.engine.titel_aus": "Moteur de surveillance&nbsp;: à l'arrêt",
-    "live.engine.satz_aus":
-        "Aucun signal de vie du processus moteur. Les tuiles montrent la "
-        "configuration enregistrée&nbsp;; activer, tester sur une "
-        "surveillance en cours et mesurer la charge nécessitent le "
-        "moteur — le service le démarre automatiquement dès qu'au moins "
-        "une surveillance est activée.",
+    "live.engine.satz_aus": "Aucun signal de vie du processus moteur. Les emplacements montrent la configuration enregistrée&nbsp;; activer, tester sur une surveillance en cours et mesurer la charge nécessitent le moteur — le service le démarre automatiquement dès qu'au moins une surveillance est activée.",
     "live.engine.cpu_mit_limit":
         "CPU suslik à l'instant&nbsp;: {kerne} sur {limit} cœurs "
         "autorisés (conteneur entier&nbsp;: surveillances, analyse, "
@@ -797,30 +791,15 @@ T = {
     "live.engine.titel_standalone":
         "Moteur de surveillance&nbsp;: actif (moteur autonome détecté)",
     "live.engine.titel_an": "Moteur de surveillance&nbsp;: actif",
-    "live.gruppe.laufend": "En cours",
-    "live.gruppe.bereit": "Prêtes",
-    "live.gruppe.rest": "Non configurées",
-    "live.gruppe.versteckt": "Masquées",
-    "live.gruppe.ohne_area": "Sans secteur",
     "live.kachel.attr_fremd":
         "configurée ici, mais cette caméra n'est pas dans Frigate en ce "
         "moment",
     "live.kachel.pill_fremd": "absente de Frigate",
-    "live.kachel.attr_detect":
-        "flux detect de Frigate — la vraie résolution du flux apparaît "
-        "après que le service a sondé le flux ou qu'un test de source a "
-        "tourné",
-    "live.knopf_konfigurieren": "Configurer",
     "live.knopf_test": "Lancer le test de source",
-    "live.knopf_messung": "Mesurer la charge",
     "live.knopf_enable": "Activer",
     "live.knopf_disable": "Désactiver",
-    "live.knopf_zeigen": "Afficher",
-    "live.knopf_verstecken": "Masquer",
     "live.banner.kameraliste":
         "Impossible de lire la liste des caméras Frigate&nbsp;: {fehler}",
-    "live.schalter.ungruppiert": "vue non groupée",
-    "live.schalter.area": "regrouper par secteur",
     "live.sperre.cpu_titel": "Mode CPU",
     "live.sperre.titel": "Indisponible sur cette version",
     "live.sperre.satz":
@@ -830,39 +809,36 @@ T = {
         "toutes.",
     "live.sperre.cpu_only":
         "Elle n'est pas disponible sur l'image CPU seule.",
-    "live.erklaer.titel":
-        "Surveillance en direct — réaction immédiate sur le flux caméra",
-    "live.erklaer.satz1":
-        "Une surveillance en direct se connecte directement à un flux "
-        "caméra et réagit pendant que la personne est encore à "
-        "l'image&nbsp;: le premier visage lance une vérification, et "
-        "après le nombre configuré de détections cohérentes, un signal "
-        "vérifié part — l'objectif est sous la seconde (199–801 ms "
-        "mesurés sur l'installation de référence). Utilisez-la pour "
-        "déclencher vos automatisations domotiques, p. ex. via MQTT.",
-    "live.erklaer.link":
-        "En savoir plus&nbsp;: comment fonctionne la surveillance en "
-        "direct",
     "live.titel": "Surveillance en direct",
+    "live.intro": "Une surveillance regarde une caméra en direct et signale un visage pendant que la personne est encore dans l’image.",
+    "live.intro_link": "Comment fonctionne la surveillance",
+    "live.marke.aktiv": "{n} actives",
+    "live.platz.name": "Live {n}",
+    "live.platz.frei": "libre",
+    "live.frei.titel": "Live {n} est libre",
+    "live.frei.satz": "Attribuez une caméra à cet emplacement. Ensuite, réglez ici ce qu’elle signale et activez-la.",
+    "live.frei.keine": "Chaque caméra a déjà un emplacement.",
+    "live.knopf_zuweisen": "Attribuer la caméra",
+    "live.knopf_leeren": "Vider l’emplacement",
+    "live.kopf.kamera": "Caméra",
+    "live.ungespeichert": "modifications non enregistrées",
+    "live.warnung.satz": "Live {n} a des modifications non enregistrées.",
+    "live.warnung.speichern": "Enregistrer et changer",
+    "live.warnung.verwerfen": "Abandonner",
+    "live.warnung.bleiben": "Rester ici",
+    "live.kein_platz": "{kamera} n’a pas d’emplacement et tous les emplacements sont occupés. Videz d’abord un emplacement.",
+    "live.abschnitt.engine": "Moteur et charge",
     "live.leer.titel": "Aucune caméra trouvée.",
-    "live.leer.hinweis":
-        "Configurez d'abord la connexion Frigate — les tuiles "
-        "apparaissent par caméra.",
+    "live.leer.hinweis": "Configurez d’abord la connexion Frigate.",
     "live.knopf_speichern": "Enregistrer",
-    "live.detail.titel": "Surveillance en direct — {name}",
-    "live.abschnitt.quelle": "Source",
+    "live.abschnitt.quelle": "Connexion",
     "live.quelle.proxy":
         "restream go2rtc via Frigate (par défaut, recommandé)",
     "live.quelle.direct": "URL producer de la caméra, découverte via go2rtc",
     "live.quelle.url": "une URL de flux que vous saisissez vous-même",
-    "live.detail.url_label": "URL du flux (source 'url' uniquement)&nbsp;:",
-    "live.detail.url_hinweis":
-        "les identifiants dans l'URL sont masqués partout où ils "
-        "s'affichent — laissez le champ tel quel pour conserver l'URL "
-        "enregistrée, ou collez-en une nouvelle",
-    "live.detail.quelle_hinweis":
-        "Changer la source invalide le test de source — relancez-le "
-        "avant d'activer.",
+    "live.detail.url_label": "URL du flux",
+    "live.detail.url_hinweis": "Seulement pour url ; les identifiants enregistrés restent masqués.",
+    "live.detail.quelle_hinweis": "Changer de source demande un nouveau test de source.",
     "live.abschnitt.aufloesung": "Résolution de traitement",
     "live.hoehe.default": "par défaut (1080p)",
     "live.hoehe.h360":
@@ -877,23 +853,14 @@ T = {
         "gain par rapport au {jetzt}p) — cette surveillance tourne en "
         "{jetzt}p. La valeur enregistrée et le test de source restent "
         "valables ; choisis un palier ci-dessus pour changer.",
-    "live.abschnitt.alarm": "Chaîne d'alerte",
-    "live.detail.ende_label": "Fin après absence de visage (s)&nbsp;:",
-    "live.detail.ende_hinweis":
-        "une apparition se termine après ce nombre de secondes sans "
-        "visage (3–120)",
-    "live.detail.scharf_label": "Réarmé après (s)&nbsp;:",
-    "live.detail.scharf_hinweis":
-        "secondes minimales entre alertes — si quelqu'un est présent, une "
-        "nouvelle alerte part après ce délai&nbsp;; 0 = chaque "
-        "déclenchement alerte (0–3600)",
-    "live.abschnitt.kanaele": "Canaux de notification",
-    "live.detail.namensschaetzung":
-        "Les alertes incluent une estimation préliminaire du nom "
-        "(\"probablement X\") quand le visage correspond à une personne "
-        "connue — jamais enregistrée, jamais utilisée pour "
-        "l'apprentissage.",
-    "live.abschnitt.test": "Tester &amp; mesurer",
+    "live.detail.ende_label": "La visite finit après",
+    "live.detail.ende_hinweis": "Secondes sans visage.",
+    "live.detail.scharf_label": "Pause push",
+    "live.pause.kopf": "À partir du premier visage d’une visite signalée, c’est le calme pendant ce délai\u00a0:",
+    "live.pause.besuche": "Les visites qui commencent pendant ce délai n’ont ni vidéo ni «\u00a0Personne inconnue\u00a0».",
+    "live.pause.name": "Le même nom ne revient qu’après le même nombre de secondes.",
+    "live.detail.scharf_hinweis": "Home Assistant (MQTT) ne fait jamais de pause.",
+    "live.abschnitt.test": "Test de source",
     "live.detail.gesperrt_hinweis":
         "tester et mesurer sont indisponibles tant que la surveillance "
         "en direct est verrouillée sur cette machine — la note en haut "
@@ -902,41 +869,22 @@ T = {
     "live.detail.messung_hinweis":
         "la mesure de charge met en pause les autres surveillances "
         "pendant son exécution",
-    "live.detail.link_zurueck": "retour à la vue d'ensemble",
     # --- Live-Umbau 31.08. (s. en.py)
     "live.detail.kein_bild": "Pas d\u2019image en direct — cette surveillance ne tourne pas.",
     "live.detail.kein_bild_test":
         "Le dernier test de source a vu {aufloesung}, traité en {skala}.",
-    "live.detail.kein_bild_ohne_test":
-        "Aucun test de source n\u2019a encore tourné, on ne sait donc rien de "
-        "ce flux.",
-    "live.abschnitt.erkennung": "Reconnaissance",
-    "live.abschnitt.melden": "Alertes",
-    "live.abschnitt.frigate": "Événements Frigate",
-    "live.abschnitt.erweitert": "Réglages avancés",
-    "live.abschnitt.abtastung": "Échantillonnage",
-    "live.abtastung.schalter": "Regarder de près seulement quand ça bouge",
-    "live.abtastung.erklaerung":
-        "La détection de visages est la partie coûteuse — un contrôle de "
-        "mouvement bon marché sur le plan de luminance décide si une image en "
-        "vaut la peine. Tant qu\u2019une personne est suivie, la surveillance "
-        "tourne toujours à plein régime ; seule une scène calme est "
-        "échantillonnée moins souvent.",
+    "live.detail.kein_bild_ohne_test": "Aucun test de source n’a encore réussi, on ne sait donc rien de ce flux.",
+    "live.abschnitt.frigate": "Frigate (facultatif)",
+    "live.abschnitt.erweitert": "Avancé",
+    "live.abschnitt.abtastung": "Mode économie",
+    "live.abtastung.schalter": "Regarder seulement quand ça bouge",
+    "live.abtastung.erklaerung": "Les scènes calmes sont vérifiées moins souvent, une personne suivie toujours à plein rythme.",
     "live.abtastung.ruhe_label": "Regarder quand même toutes les",
-    "live.abtastung.ruhe_einheit": "s",
-    "live.abtastung.ruhe_hinweis":
-        "Laisse vide pour reprendre le délai de fin d\u2019apparition de cette "
-        "caméra — quelqu\u2019un d\u2019immobile ne crée aucun mouvement, la "
-        "surveillance jette donc un œil de temps en temps (1–600 s).",
-    "live.abtastung.schwelle_label": "Sensibilité (variation de gris)\u00a0:",
-    "live.abtastung.flaeche_label": "surface minimale\u00a0:",
-    "live.abtastung.eich_hinweis":
-        "Laisse les deux vides pour les valeurs d\u2019origine de Frigate. Des "
-        "chiffres plus bas font regarder la surveillance plus souvent\u00a0; "
-        "plus haut, elle reste calme devant une haie dans le vent. Chaque "
-        "site est différent — ces valeurs appartiennent à CETTE caméra, pas "
-        "au système entier.",
-    "live.abschnitt.guete": "Seuils de qualité d\u2019image",
+    "live.abtastung.ruhe_hinweis": "Vide signifie le délai de « La visite finit après ».",
+    "live.abtastung.schwelle_label": "Sensibilité au mouvement",
+    "live.abtastung.flaeche_label": "Plus petite zone en mouvement",
+    "live.abtastung.eich_hinweis": "Vide signifie la valeur de Frigate ; des nombres plus petits regardent plus souvent.",
+    "live.abschnitt.guete": "Valeurs de calibrage",
     "live.abschnitt.last": "Mesure de charge",
     "live.erkennung.det_zeile":
         "À partir d\u2019un score de détection de {wert}, une trouvaille "
@@ -956,48 +904,75 @@ T = {
     "live.erkennung.vorrat_zeile":
         "Échantillons de calibrage : {n} sur {deckel} \u2014 une image par "
         "passage, les plus anciennes disparaissent.",
-    "live.erkennung.vorrat_aus":
-        "La collecte est désactivée, la page de calibrage n\u2019a donc rien "
-        "à montrer (page Système, \"live_kalib_max\").",
+    "live.erkennung.vorrat_aus": "La collecte est désactivée (page Système, \"live_kalib_max\").",
     "live.erkennung.latte_e": "impression d\u2019image à partir de {wert}",
     "live.erkennung.latte_t": "lisibilité du visage à partir de {wert}",
     "live.erkennung.latte_aus": "non défini",
-    "live.erkennung.latte_hinweis":
-        "Ces deux-là ne décident jamais QUI est reconnu, cela coûterait des "
-        "confirmations. Ils décident quelle image part dans l\u2019alerte et "
-        "quels visages sont gardés comme échantillons. On les règle sur la "
-        "page de calibrage, où l\u2019on voit les images.",
+    "live.erkennung.latte_hinweis": "Un visage sous l’une de ces deux valeurs ne donne pas de vote pour un nom et n’est pas gardé comme échantillon de calibrage. On les règle sur la page de calibrage, où l’on voit les images.",
     "live.knopf_kalibrieren": "Calibrer",
     "live.knopf_vorrat_leeren": "Effacer les échantillons",
-    "live.workeraus.schalter":
-        "Ce veilleur remplace l’analyse des événements de cette caméra",
-    "live.eigenepruefen.schalter":
-        "Revérifier aussi les événements Frigate créés par ce veilleur dans l’analyse des événements",
-    "live.eigenepruefen.erklaerung":
-        "Désactivé par défaut. Les événements que ce veilleur crée dans Frigate (option « Créer un événement "
-        "Frigate quand quelqu’un est reconnu ») ne sont alors pas analysés une deuxième fois. Activez "
-        "cette option pour que l’analyse des événements vérifie les noms du veilleur. N’agit que lorsque "
-        "le veilleur remplace l’analyse des événements.",
-    "live.workeraus.erklaerung":
-        "Désactivé par défaut. Activé, les événements Frigate de cette caméra "
-        "ne sont plus analysés une deuxième fois : le veilleur regarde de "
-        "toute façon le même flux, le travail serait fait deux fois. Cela ne "
-        "vaut que tant que le veilleur est activé ET tourne vraiment ; si le "
-        "moteur s’arrête ou que le veilleur tombe, les événements sont à "
-        "nouveau analysés normalement. Un nom que Frigate affirme elle-même "
-        "est toujours vérifié, quoi que dise ce réglage.",
-    "live.frigate.schalter": "Créer un événement Frigate quand quelqu\u2019un est reconnu",
-    "live.frigate.erklaerung":
-        "Désactivé par défaut. Activé, ce veilleur écrit son propre événement "
-        "dans Frigate, le nom dans le sous-libellé \u2014 un enregistrement "
-        "à lui, indépendant de la détection de Frigate. L\u2019écriture se "
-        "fait en arrière-plan : le veilleur n\u2019attend jamais Frigate. En "
-        "mode lecture seule, rien n\u2019est écrit.",
-    "live.frigate.abstand_label": "Au plus un événement par personne toutes les (s) :",
-    "live.frigate.abstand_hinweis":
-        "Vide signifie : le même écart que ci-dessus pour les alertes. La "
-        "limite compte par personne, deux personnes différentes peuvent donc "
-        "être écrites en même temps.",
+    "live.workeraus.schalter": "Remplace l’analyse des événements",
+    "live.eigenepruefen.schalter": "Revérifier ses événements Frigate",
+    "live.eigenepruefen.erklaerung": "Analyser aussi les événements que cette surveillance crée dans Frigate.",
+    "live.workeraus.erklaerung": "Tant que la surveillance tourne, l’analyse des événements ignore ceux de cette caméra, sauf quand Frigate nomme lui-même une personne.",
+    "live.frigate.schalter": "Créer un événement dans Frigate",
+    "live.frigate.erklaerung": "Pour un nom reconnu, un événement propre portant ce nom.",
+    "live.frigate.abstand_label": "Écart par personne",
+    "live.frigate.abstand_hinweis": "Vide signifie la pause push.",
+    # --- WS2 (Bauplan analysen/bauplan_waechterseite.md): die Einstellseite eines Waechters nach der
+    # Vorlage vom 07.11.2026 — Zustaende, Kopf, Abschnitte und Kopfzeilen der eingeklappten Teile.
+    "live.zustand.unconfigured": "non configurée",
+    "live.zustand.untested": "test requis",
+    "live.zustand.checking": "vérification de la source",
+    "live.zustand.tested": "prête à activer",
+    "live.zustand.active": "active",
+    "live.zustand.disturbed": "perturbée",
+    "live.zustand.unsupported": "indisponible ici",
+    "live.kopf.zustand_fps": "{zustand}, {fps} images/s",
+    "live.kopf.test": "Test de source {wann}",
+    "live.kopf.kein_test": "Pas encore de test de source réussi",
+    "live.kopf.erneut": "vérifier à nouveau",
+    "live.kopf.jetzt": "tester maintenant",
+    "live.kopf.test_fehler": "dernier test échoué",
+    "live.alter.heute": "aujourd’hui",
+    "live.alter.tage.eins": "il y a {n} jour",
+    "live.alter.tage.viele": "il y a {n} jours",
+    "live.einheit.s": "s",
+    "live.abschnitt.mqtt": "Home Assistant (MQTT)",
+    "live.mqtt.zweck": "Pour les automatisations de la maison. Part avant tous les autres canaux, toujours en anglais, sans pause push.",
+    "live.mqtt.topic": "Topic",
+    "live.mqtt.nutzen": "Envoyer à Home Assistant",
+    "live.mqtt.broker": "Broker et accès sont sur la page",
+    "live.mqtt.meldungen": "Les {n} messages",
+    "live.abschnitt.push": "Messages push",
+    "live.push.zweck": "Ce que Pushover et Telegram reçoivent de cette caméra.",
+    "live.push.zugang": "Identifiants",
+    "live.push.bekannte": "Personne reconnue",
+    "live.push.bekannte_hinweis": "Tout de suite avec le nom, dès qu’un visage est reconnu.",
+    "live.push.unbekannte": "Personne inconnue",
+    "live.push.unbekannte_hinweis": "À la fin de la visite, si personne n’a été reconnu.",
+    "live.push.bild": "Joindre l’image",
+    "live.push.bild_hinweis": "L’image de la caméra avec le visage encadré.",
+    "live.push.video": "Joindre la vidéo",
+    "live.push.video_hinweis": "Une vidéo par visite signalée, à partir du premier visage.",
+    "live.push.nur_telegram": "Telegram seulement",
+    "live.push.videolaenge": "Durée de la vidéo",
+    "live.push.neben": "Signaler aussi les inconnus à côté des personnes reconnues",
+    "live.push.neben_hinweis": "«\u00a0Personne inconnue\u00a0» arrive alors aussi quand quelqu’un a été reconnu dans la même visite, sans image.",
+    "live.abschnitt.besuch": "Visite",
+    "live.besuch.zweck": "Une visite commence au premier visage et se termine quand aucun n’a été vu pendant ce délai. Ensuite, la même personne peut être reconnue de nouveau.",
+    "live.besuch.global": "Identique pour toutes les caméras\u00a0: {fps} images par seconde, {stimmen} votes minimum.",
+    "live.wert.an": "activé",
+    "live.wert.aus": "désactivé",
+    "live.erweitert.kopf": "Source {quelle} · économie {spar} · remplace l’analyse des événements {ersetzt}",
+    "live.abschnitt.zusatz": "Analyse supplémentaire",
+    "live.abschnitt.diagnose": "Diagnostic",
+    "live.diagnose.kopf": "Mesure de charge {messung} · échantillons de calibrage {vorrat}",
+    "live.diagnose.messung_fehlt": "manquante",
+    "live.diagnose.messung_fehler": "échouée",
+    "live.diagnose.messung_entwertet": "invalidée par un changement de source",
+    "live.diagnose.vorrat": "{n} sur {deckel}",
+    "live.abschnitt.vorrat": "Échantillons de calibrage",
     "livekalib.titel": "Calibrage de la caméra — {name}",
     "livekalib.erklaerung":
         "Ce sont de vrais visages que cette caméra a collectés \u2014 une "
@@ -1642,6 +1617,7 @@ T = {
     "nav.bereich.erkennungstest": "Test de reconnaissance",
     "nav.bereich.system": "Système",
     "nav.heute": "Aujourd'hui",
+    "nav.durchgaenge": "Passages",
     "nav.ereignisse": "Événements",
     "nav.faces": "Visages",
     "nav.gesichter": "Connus",
@@ -3455,9 +3431,12 @@ T = {
     # §8.21: echtes U+00A0 vor : ; ! ? und in « » — auch in t_html.
     "hilfe.live.titel": "La surveillance en direct, expliquée",
     "hilfe.live.satz1": """<p>La surveillance en direct regarde vos caméras dès que quelque chose
-bouge. Quand une personne entre sur la propriété, vous recevez une alerte
-en quelques secondes, et si le système connaît déjà le visage, l'alerte
-porte un nom.</p>""",
+bouge. Quand une personne entre sur la propriété et que le système connaît
+déjà le visage, vous recevez en quelques secondes une alerte avec le nom.
+Une personne qu'il ne reconnaît pas est signalée comme
+«&nbsp;Personne inconnue&nbsp;» dès qu'aucun visage n'a été vu pendant
+quelques secondes. MQTT signale le premier visage tout de suite dans les
+deux cas.</p>""",
     "hilfe.live.satz2": """<p>À ce stade, le nom est une première estimation. La vérification
 approfondie s'exécute juste après, sur l'enregistrement, et c'est elle qui
 a le dernier mot.</p>""",
@@ -3885,16 +3864,86 @@ connues.</p>""",
     "meldung.vision.kein_urteil": "vision : aucun verdict — {grund}",
     # {wache} = englische Waechter-Kennung, sie fuehrt den Titel wie ein
     # Eigenname. "incident" == system.live.stoerungen ("Avis d'incident").
-    "meldung.wache.titel_person": "{wache} {kamera} : personne détectée",
+    "meldung.wache.titel_unbekannt": "Personne inconnue sur {kamera}",
     "meldung.wache.titel_stoerung": "{wache} {kamera} : incident",
     "meldung.wache.caption": "{wache} {kamera} : {text}",
-    # .412: Kongruenz mit "personne" aus dem Trigger-Titel (feminin).
-    "meldung.wache.titel_erkannt": "{wache} {kamera} : personne reconnue",
+    # PW2 (Bauplan push_melden, E13): Zeilen fuer Pushover-Titel und Telegram-Beschriftung des Waechters.
+    "meldung.wache.titel_erkannt": "Visage de {name} reconnu sur {kamera}",
+    "meldung.wache.titel_namen": "Visages de {erste} et {letzter} reconnus sur {kamera}",
     "meldung.wache.nicht_erkannt": "non reconnue",
     # ---- Today .412 (T1) ----
-    "heute.block.personen": "Personnes",
-    "heute.block.personen_cnt.eins": "{n} reconnue · triées par dernière observation",
-    "heute.block.personen_cnt.viele": "{n} reconnues · triées par dernière observation",
+    "heute.nav.gestern": "hier",
+    "heute.nav.zurueck": "jour précédent",
+    "heute.nav.vor": "jour suivant",
+    "heute.nav.keine_zukunft": "pas de jours futurs",
+    "heute.nav.heute": "retour à aujourd'hui",
+    "heute.laeuft": "en cours",
+    "heute.block.laeuft": "passage en cours — les événements sont analysés à leur fin et apparaissent ici",
+    "heute.unbek.titel": "Inconnus",
+    "heute.unbek.vorher": "vue {n}× auparavant",
+    "heute.unbek.erstmals": "première fois ici",
+    "heute.unbek.fremder": "étranger confirmé",
+    "heute.unbek.link_title": "Ouvrir ce passage",
+    "heute.akt.aendern": "Modifier",
+    "heute.akt.pruefen": "Vérifier",
+    "heute.akt.benennen": "Nommer",
+    "heute.akt.ansehen": "Voir",
+    "heute.kanal.satz": "Aucun canal d'alerte configuré — les reconnaissances apparaissent ici, mais rien ne vous préviendra.",
+    "heute.kanal.link": "En configurer un dans Notifications.",
+    "heute.fuss.passes.eins": "{n} passage ce jour.",
+    "heute.fuss.passes.viele": "{n} passages ce jour.",
+    "heute.fuss.link": "Voir les passages et les chiffres",
+    "heute.neben.area": "Vue de zone {area} : passages ayant touché cette zone (chacun affiché en entier) ; les comptes d'événements ne couvrent que ses caméras",
+    "heute.neben.unbek.eins": "{n} personne inconnue",
+    "heute.neben.unbek.viele": "{n} personnes inconnues",
+    "heute.neben.aehnlich.eins": "{n} personne probablement reconnue",
+    "heute.neben.aehnlich.viele": "{n} personnes probablement reconnues",
+    "heute.neben.ohne.eins": "{n} passage sans personne reconnue",
+    "heute.neben.ohne.viele": "{n} passages sans personne reconnue",
+    "heute.neben.keine": "aucun inconnu",
+    "heute.neben.archiv.eins": "{n} de plus dans un groupe archivé",
+    "heute.neben.archiv.viele": "{n} de plus dans des groupes archivés",
+    "heute.neben.nebenbei.eins": "{n} événement sans correspondance dans des passages reconnus",
+    "heute.neben.nebenbei.viele": "{n} événements sans correspondance dans des passages reconnus",
+    "heute.liste.cnt": "les plus récents d'abord · un clic ouvre les caméras",
+    "heute.liste.cnt_laeuft": "les plus récents d'abord · un passage en cours se met à jour seul",
+    "heute.pass.seit": "depuis {zeit}",
+    "heute.pass.bisher.eins": "{n} événement jusqu'ici",
+    "heute.pass.bisher.viele": "{n} événements jusqu'ici",
+    "heute.pass.events.eins": "{n} événement",
+    "heute.pass.events.viele": "{n} événements",
+    "heute.pass.dauer": "{m} min · {ev}",
+    "heute.pass.erkennt": "identification…",
+    "heute.pass.kein_gesicht.eins": "aucun visage exploitable dans ce passage ({n} événement)",
+    "heute.pass.kein_gesicht.viele": "aucun visage exploitable dans ce passage ({n} événements)",
+    "heute.pass.niemand": "aucune personne connue",
+    "heute.pass.ohne.eins": "{n} sans correspondance",
+    "heute.pass.ohne.viele": "{n} sans correspondance",
+    "heute.pass.plus_ohne": "+{n} sans correspondance",
+    "heute.pass.alle": "tous reconnus",
+    "heute.pass.via_koerper_vision": "par personne + vision, sans visage",
+    "heute.pass.via_koerper": "par reconnaissance de personne, sans visage",
+    "heute.pass.via_beides": "par visage + personne",
+    "heute.pass.via_gesicht": "par visage",
+    "heute.pass.hinweis_koerper": "indice de la reconnaissance de personne (sous la règle d'appuis)",
+    "heute.pass.vision": "vision : {person}",
+    "heute.pass.vision_kein": "vision : pas de verdict — {grund}",
+    "heute.pass.vision_details": "détails",
+    "heute.pass.vision_title": "comment vision est arrivée au résultat : tours, galeries comparées, durées",
+    "heute.pass.kameras.eins": "{n} caméra",
+    "heute.pass.kameras.viele": "{n} caméras",
+    "heute.pass.nur_bewegung": "mouvement seul, pas de visage",
+    "heute.pass.video": "vidéo",
+    "heute.pass.video_title": "meilleur clip de cette caméra",
+    "heute.notiz.bewegung.eins": "{n} passage de simple mouvement sans visage est masqué ; tous figurent sous Événements.",
+    "heute.notiz.bewegung.viele": "{n} passages de simple mouvement sans visage sont masqués ; tous figurent sous Événements.",
+    "heute.notiz.fehldetektion.eins": "{n} détection filtrée comme non-visage (signature d'objet statique) — verdicts inchangés.",
+    "heute.notiz.fehldetektion.viele": "{n} détections filtrées comme non-visages (signature d'objet statique) — verdicts inchangés.",
+    "heute.notiz.fehltrigger.eins": "{n} événement classé comme probable fausse alerte (aucune personne trouvée) : {je}.",
+    "heute.notiz.fehltrigger.viele": "{n} événements classés comme probables fausses alertes (aucune personne trouvée) : {je}.",
+    "heute.block.personen": "Reconnus",
+    "heute.block.personen_cnt.eins": "{n} personne · par dernière observation",
+    "heute.block.personen_cnt.viele": "{n} personnes · par dernière observation",
     "heute.person.bestaetigt": "première–dernière confirmation {von}–{bis}",
     "heute.person.bestaetigt_einmal": "confirmée {zeit}",
     "heute.person.seit": "confirmée depuis {zeit}",
@@ -3907,17 +3956,22 @@ connues.</p>""",
     "heute.person.live_title": "nommée uniquement par un veilleur en direct (alerte de nom après plusieurs correspondances) — aucun passage confirmé",
     "heute.person.live_link": "aller à l'alerte en direct {zeit} · {kamera}",
     "heute.person.mehr": "toutes les {n} personnes ({m} de plus)",
-    "heute.unbek.cnt.eins": "{n} personne inconnue · triée par dernière apparition",
-    "heute.unbek.cnt.viele": "{n} personnes inconnues · triées par dernière apparition",
+    "heute.unbek.cnt.eins": "{n} personne · par dernière observation",
+    "heute.unbek.cnt.viele": "{n} personnes · par dernière observation",
     "heute.unbek.gesehen": "vue {von}–{bis}",
     "heute.unbek.gesehen_einmal": "vue {zeit}",
+    "heute.waechter.name": "Personne inconnue",
+    "heute.waechter.live_title": "signalée par un veilleur en direct comme personne inconnue — sans identité, impossible de la nommer ici",
+    "heute.waechter.cnt.eins": "{n} alerte du veilleur en direct",
+    "heute.waechter.cnt.viele": "{n} alertes du veilleur en direct",
+    "heute.waechter.mehr": "toutes les {n} alertes ({m} de plus)",
     "heute.anw.dauer": "présente environ {h} h",
     "heute.anw.title": "présence par heure, toutes caméras — rouge : présence confirmée, vert : système actif, personne vue",
     "heute.anw.title_gesamt": "présence par heure — toutes caméras, sans filtre de la vue par zone",
     "heute.pass.mehr_kameras": "toutes les {n} caméras ({m} de plus)",
     "heute.pass.live": "en direct",
     "heute.pass.live_title": "un veilleur en direct a signalé un nom pendant ce passage",
-    "heute.rand.personen": "Personnes",
+    "heute.rand.personen": "Personnes reconnues",
     "heute.rand.personen_title": "personnes avec au moins une confirmation ce jour — verdicts du worker et noms du veilleur en direct",
     "heute.rand.passes": "Passages",
     "heute.rand.passes_title": "passages : événements regroupés par temps et lieu ; les passages de simple mouvement ne comptent pas",
@@ -3927,12 +3981,10 @@ connues.</p>""",
     "heute.rand.gesicht_title": "{n} sur {m} événements analysés avec au moins un visage vérifié (fausses détections filtrées), caméras de la vue actuelle",
     "heute.rand.unbek_title": "identités inconnues du pool avec appui ce jour ; sans données du pool : passages sans aucune reconnaissance",
     "heute.aehnlich.titel": "Probablement reconnus",
-    "heute.aehnlich.cnt.eins": "{n} personne connue, non confirmée · triée par dernière apparition",
-    "heute.aehnlich.cnt.viele": "{n} personnes connues, non confirmées · triées par dernière apparition",
+    "heute.aehnlich.cnt.eins": "{n} personne",
+    "heute.aehnlich.cnt.viele": "{n} personnes",
     "heute.aehnlich.zu": "probablement {person}",
     "heute.aehnlich.ident": "{uid} · médiane {median} · écart {abstand}",
-    "heute.aehnlich.rand.eins": "{n} personne probablement reconnue — voir Probablement reconnus",
-    "heute.aehnlich.rand.viele": "{n} personnes probablement reconnues — voir Probablement reconnus",
     "heute.aehnlich.fehler": "La dernière vérification des personnes probablement reconnues a échoué (erreur) — les groupes affichés ici peuvent être périmés. Détails dans le journal et dans /health.",
     "heute.aehnlich.nein": "pas {person}",
     "heute.aehnlich.nein_zurueck": "annuler",

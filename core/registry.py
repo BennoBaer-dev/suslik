@@ -106,6 +106,10 @@ KNOTEN_BASIS = {
     "NPU": "/dev/accel/accel*",
     "KFD": "/dev/kfd",
     "NVIDIA": "/dev/nvidia*",
+    # WSL2 (Windows mit Docker Desktop): ueber diesen Knoten kommt JEDE Karte des Windows-Wirts in den
+    # Container, auch Intel und AMD. KEIN NVIDIA-Zeichen: ob dahinter NVIDIA steckt, entscheidet allein
+    # die Treiberfrage in core/nvidia_lage.py (Bauplan analysen/bauplan_nvidia_wsl2.md, NV1).
+    "WSL2": "/dev/dxg",
 }
 
 # ---------------------------------------------------------------- Image-Varianten
@@ -828,10 +832,13 @@ MELDE_HERKUNFT = {
     # Live-Waechter-Engine (live_reiter_bauplan.md §6, K3-Loch-Fix: der Wert
     # fiel vorher still auf "live" zurueck und markierte nichts). Ein Trigger
     # der Engine ist ein ECHTES Live-Ereignis — der TEXT traegt deshalb keine
-    # Marke; die Waechter-Kennung sitzt im Meldungs-TITEL (EIN Literal,
-    # core/livewache.WATCHER_TITEL: "Live watcher <kamera>: ..."), und das
-    # MQTT-Payload-Feld `herkunft` traegt diesen Wert, damit Home Assistant
-    # Waechter-Meldungen filtern kann, ohne Meldetexte zu zerlegen.
+    # Marke; Waechter-Meldungen erkennt man am eigenen TITEL (seit PW2 und PW5,
+    # Bauplan push_melden E13 und E17: „Gesicht … auf <kamera> erkannt“,
+    # „Gesichter … auf <kamera> erkannt“ oder „Unbekannte Person auf <kamera>“;
+    # Stoerungen einer Kachel mit der Kennung core/livewache.WATCHER_TITEL,
+    # engineweite Stoerungen mit `suslik-Stoerung`), und das MQTT-Payload-Feld
+    # `herkunft` traegt diesen Wert, damit Home Assistant Waechter-Meldungen
+    # filtern kann, ohne Meldetexte zu zerlegen.
     "live_wache": "",
 }
 MELDE_HERKUNFT_STD = "live"
@@ -939,6 +946,17 @@ PAPIERKORB_TAGE_WERK = 7
 EIGENE_EREIGNISSE_TAGE = 7
 
 
+# --- Kleine Kachelbilder der Seite Today (Bauplan analysen/bauplan_today_seite.md, Stufe TY1 Punkt 1) -----------------
+# Werkswerte, keine Config-Schluessel; gelesen von core/kleinbild.py. Breite: dreimal die Kachelbreite von 54 px
+# (webui/style.css), damit das Bild auf dichten Bildschirmen scharf bleibt (Bauplan). Deckel: so viele Bytes verkleinerter
+# Bilder haelt der Speicher im Prozess hoechstens, der aelteste Eintrag faellt zuerst; eine Vorgabe, keine Messung.
+# Zum Einordnen, gemessen am 10.11.2026: ein erzeugtes Testbild (Farbverlauf mit Rauschen) von 640 x 360 px und
+# 205.762 Bytes (Probe tools/proben/e3_128_kleinbild.py) wird auf 160 x 90 px 7.789 Bytes gross; der Deckel fasst rund
+# tausend solcher Bilder.
+KACHELBILD_BREITE = 160
+KACHELBILD_SPEICHER_BYTES = 8 * 1024 * 1024
+
+
 # --- Erste Abfrage der Kartengroesse beim Start (Bauplan analysen/bauplan_kartenabfrage_start.md, Stufe KS1) -----------
 # Werkswert, kein Config-Schluessel, nicht in der Oberflaeche; gelesen von verifyd.Service._maschine_speicher_mb, nur
 # fuer dessen erste Abfrage der CUDA-Sonde je Prozess (sonst gelten die 2 s in core/systemstat.py). Entscheid E1 (a),
@@ -963,7 +981,7 @@ WEB_ROUTES = (
     "/anwesenheit", "/areas", "/areas_speichern", "/auftritt_lernen", "/auftritt_lernen_undo", "/auftritte",
     "/backup_voll", "/backup_voll_wiederherstellen", "/benachrichtigung_speichern", "/benachrichtigungen",
     "/benennen_zuweisen", "/cache_aufraeumen", "/catchup_start", "/config_sichern", "/config_wiederherstellen",
-    "/doc", "/enroll",
+    "/doc", "/durchgaenge", "/enroll",
     "/ereignisse", "/erkennung", "/erkennung_live", "/erkennungstest", "/faces", "/fremde", "/frigate",
     "/gesichter", "/gpu", "/gpu_speichern", "/gt", "/health", "/heute", "/kalibrierung",
     "/kalibrierung_fuellen", "/kalibrierung_fuellstand", "/kameras", "/kameras/steckbriefe_neu",
@@ -972,7 +990,7 @@ WEB_ROUTES = (
     "/lernlauf/lauf_loeschen", "/lernlauf/sichtung", "/lernlauf/uebernehmen", "/lernlauf/verwerfen",
     "/lernlauf_abbruch", "/lernlauf_fortsetzen", "/lernlauf_start", "/lernlauf_status", "/live",
     "/live_alarmbild", "/live_alerts", "/live_kalib_bild", "/live_kalib_leeren", "/live_messung",
-    "/live_schalter", "/live_speichern", "/live_status", "/live_test", "/live_verstecken", "/log",
+    "/live_platz", "/live_schalter", "/live_speichern", "/live_status", "/live_test", "/log",
     "/log/suslik-logs.tar.gz", "/neustart", "/offen", "/person", "/person/einstellungen",
     "/person/kontrolle", "/person/modell", "/person/schalter", "/person_loeschen", "/person_umbenennen",
     "/person_umbenennen/status", "/personlauf", "/personlauf/abnahme", "/personlauf/abnahme_fertig",
@@ -1771,7 +1789,9 @@ MODELL_VERTRAG = {
                     "mean": 127.5, "std": 128.0},
         "eingang_notiz": ("H/W sind dynamisch und werden im Betrieb gesetzt: 320x320 beim "
                           "Embedder-Aufbau (Embedder.__init__), fuer Clips ar_det_size mit "
-                          "Basis 1280 und der /32-Regel (Embedder.ar_det_size)"),
+                          "Basis 1280 und der /32-Regel (Embedder.ar_det_size), im zweiten "
+                          "Blick das feste Feld worker_kern.ZB_FELD x ZB_FELD (Bauplan "
+                          "zweiter_blick, Stufe ZB1)"),
         "ausgang": {"namen": ("448", "471", "494", "451", "474", "497", "454", "477", "500"),
                     "form": "3x (N,1) score · 3x (N,4) bbox · 3x (N,10) kps",
                     "skala": ("score 0..1; bbox/kps sind Distanzen in STRIDE-Einheiten 8/16/32 "

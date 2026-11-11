@@ -14,6 +14,7 @@ This matrix is about **suslik's own face pipeline**. Frigate's object-detection 
 | **Intel Arc dGPU** | ✅ (OpenVINO, same path as iGPU) | ✅ VAAPI | tester-confirmed: Arc A380 |
 | **Intel iGPU Gen8/9/11** (HD 5xxx/UHD 6xx, 5th–10th gen Core) | 🧪 `-gpu-legacy` image (testing): Intel serves these generations only via its legacy1 runtime, which this variant ships — the regular `-gpu` image cannot bind them | ✅ VAAPI (Gen8: H.264 only, no HEVC) | confirmed on a UHD 630 (Gen9); Gen8/Broadwell is covered by Intel's legacy1 docs (OpenCL 3.0) but has no field report yet |
 | **NVIDIA GPU** (CUDA ≥ Maxwell, driver ≥ R525) | ✅ (`-cuda` image) | ✅ NVENC full-HW | verified: RTX 2060 mobile (author), RTX 3060 (tester) |
+| **NVIDIA GPU on Windows** (Docker Desktop, WSL 2 backend) | 🧪 `-cuda` image, new | NVENC, probed at start | not tested on our own hardware yet (no Windows machine); reports welcome |
 | **CPU x86-64** | ✅ universal fallback (~25 s/event measured on a Ryzen 9 4900H) | ✅ libx264 | verified (it's our own reference box) |
 | **AMD GPU / ROCm** | 🧪 experimental `-rocm` image (MIGraphX EP) in testing — falls back to CPU where ROCm doesn't bind | ❌ CPU encode (mesa/VAAPI probing is a planned investigation) | testers wanted — open an issue with your GPU model |
 | **ARM / Apple Silicon** | ❌ images are x86-64 only for now | — | untested |
@@ -24,6 +25,12 @@ This matrix is about **suslik's own face pipeline**. Frigate's object-detection 
 will but the test hardware. If you run an AMD GPU and are willing to test, open an issue
 on GitHub and we'll build it together.
 
+**Windows with Docker Desktop:** with the WSL 2 backend and an NVIDIA card, the `-cuda` image runs
+recognition, video decoding and the display transcodes on the card. One thing you won't see there
+is how much card memory suslik uses itself, because the Windows driver doesn't report memory per
+process. Intel and AMD cards under WSL 2 are not supported. Setup and details:
+[hardware-acceleration.md](hardware-acceleration.md#windows-with-docker-desktop-wsl-2).
+
 Details, driver notes and the measured performance comparison:
 [hardware-acceleration.md](hardware-acceleration.md). Older Intel iGPU generations
 (Gen8/9/11 — HD 5xxx/UHD 6xx graphics on 5th–10th gen Core) need the `-gpu-legacy` variant:
@@ -33,8 +40,8 @@ The regular `-gpu` image on such hardware falls back to CPU (loudly) and now sho
 banner pointing to the right variant. Field reports welcome.
 
 **Live watchers and your hardware.** A live watcher decodes its camera stream
-continuously, so it is the most hardware-hungry part of suslik — and GPU-only for now
-(the cpu image shows the tiles as "not available"). There is no capacity verdict:
+continuously, so it is the most hardware-hungry part of suslik — and built for a GPU
+(on the cpu image watchers run in CPU mode, with slower reactions). There is no capacity verdict:
 enabled means running, limited only by a hard cap of **5 watchers** and a RAM floor
 read from the container's memory limit; under load the engine thins its own sampling
 and shows the throttle level. Each watcher has its own **processing resolution**

@@ -53,6 +53,7 @@ import re
 import select
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -83,7 +84,18 @@ WACH_HOEHE = 1080         # AR-treue Verkleinerung (GPU bei VAAPI, swscale sonst
 #                           2,4 s frueher, det-Netz bleibt gleich gross —
 #                           Mehrkosten nur Decode/Scale, Last-Messung je
 #                           Kachel liefert die echte Zahl).
-VIDEO_SEK = 6.0           # Rueckblick fuers Telegram-Video
+# PW3 (Bauplan push_melden, E2, E4, PV5): ein Video je gemeldetem Auftritt, ab dem ersten Gesicht video_s Sekunden
+# lang, gesendet am Auftrittsende. Kein Ring: Bilder haelt der Waechter nur waehrend einer Aufnahme in ihrer Schlange.
+VIDEO_S = 10              # E2: Werkswert der Videolaenge je Waechter (Schluessel video_s)
+VIDEO_S_MIN, VIDEO_S_MAX = 3, 60
+VIDEO_NICE = 19           # E5: der Kodierer laeuft auf niedrigster Prioritaet
+VIDEO_FPS_MAX = 3         # Codex Runde 1, B2: hoechstens so viele Bilder je Sekunde (Werkswert von fps_sample)
+VIDEO_QUEUE_MAX = 7       # Codex Runde 2, B2: feste Kapazitaet der Schlange je Aufnahme
+VIDEO_DECKEL_S = 60       # H4: Deckel fuer jedes Schreiben in den Kodierer und sein Ende, dazu fuer das Warten
+#                           auf Bilder nach dem Fensterende
+NOTIFY_IMAGE_HEIGHT = 720  # PW1 (Bauplan push_melden, E6): Bild fuer Pushover und Telegram
+#                            hoechstens so viele Zeilen, nie hochgerechnet (V: 74 bis 128 KB)
+NOTIFY_IMAGE_QUALITY = 80  # PW1 (E6): JPEG-Qualitaet dieses Bildes; das Beweisbild bleibt bei 90
 RECONNECT_WARTE = 5.0     # Reconnect: erster Versuch ...
 RECONNECT_MAX = 60.0      # ... verdoppelnd bis Deckel
 RECONNECT_STABIL = 30.0   # Backoff-Reset erst nach so lange getragener Verbindung
@@ -221,7 +233,7 @@ VORSCHAU_FRISCH_S = 60.0  # Auslieferungs-Frist des Dienst-Endpunkts /live_bild:
 # in einen Pfad interpolieren — dieselbe Vorsicht wie beim Dienst-Endpunkt).
 VORSCHAU_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 # Vertrag Beweis-Medienpfad im Melde-Protokoll/-Endpunkt (.190, .195 um mp4
-# erweitert fuer die Rueckblick-Videos der Auftritts-Ansicht): data_dir-
+# erweitert fuer die Videos der Auftritts-Ansicht, seit PW3 ab dem ersten Gesicht): data_dir-
 # relativ, exakt live/<kamera>/<datei>.(jpg|mp4) — Schreiber (_bild_rel,
 # schreibt nur jpg) UND Dienst-Endpunkt /live_alarmbild pruefen an DIESEM
 # einen Muster (kein Traversal, keine fremden Ordner). Beide Segmente
@@ -367,10 +379,13 @@ RAM_REST_MIN_MB = 2048    # Restgrenze der RAM-Bilanz (Bauplan §2.3 Warnstufe):
 
 # Meldungs-Literale (EIN Literal je Zweck, Bauplan §6 — UI-Sprache englisch).
 # Sprach-Stufe 4: WATCHER_TITEL bleibt ENGLISCH und literal — er ist die
-# KENNUNG des Waechters im Meldungstitel (Invariante §6, core/registry.py:378:
-# "Live watcher <kamera>: ..."), nicht Prosa. Uebersetzt wird der Rest des
-# Titels: die meldung.wache.*-Schluessel tragen ihn als Platzhalter {wache}
-# (Muster §8.13/§8.16 — Kennung intern, Anzeige als Schluessel).
+# KENNUNG des Waechters im Titel der Stoerungsmeldungen einer Kachel, nicht
+# Prosa (engineweite Stoerungen tragen `suslik-Stoerung`, core/melden.py); deren
+# Schluessel (meldung.wache.titel_stoerung, meldung.wache.caption) tragen ihn
+# als Platzhalter {wache} (Muster §8.13/§8.16 — Kennung intern, Anzeige als
+# Schluessel). Namens-, Sammel- und Unbekannt-Meldung (und der Titel des Videos)
+# tragen eigene Zeilen ohne diese Kennung (Melder._titel; Bauplan push_melden E13,
+# seit PW5 E14 und E17: beim ersten Gesicht gibt es keine Push-Meldung mehr).
 WATCHER_TITEL = "Live watcher"
 HERKUNFT = "live_wache"
 # Bindung an die EINE Quelle (Lens-B M1, per Mutation bewiesen: ein verstelltes
@@ -544,8 +559,8 @@ def bilder_yuv_frist(p, b, h, frist_s, jetzt=time.monotonic):
 
 def bild_mit_box(frame, box, farbe=(0, 200, 255), dicke=2):
     """Beweisbild mit markierter Fundstelle (.313): Rechteck um `box`
-    (x1, y1, x2, y2) auf einer KOPIE des Frames — das Original bleibt fuer
-    Rueckblick/Video unberuehrt. Ohne Box: das Bild unveraendert."""
+    (x1, y1, x2, y2) auf einer KOPIE des Frames — das Original bleibt
+    unberuehrt. Ohne Box: das Bild unveraendert."""
     if box is None or frame is None:
         return frame
     try:
@@ -563,6 +578,20 @@ def bild_mit_box(frame, box, farbe=(0, 200, 255), dicke=2):
     cv2.rectangle(aus, (max(0, x1 - r), max(0, y1 - r)),
                   (min(w - 1, x2 + r), min(h - 1, y2 + r)), farbe, dicke)
     return aus
+
+
+def notification_jpeg(bgr):
+    """Kleines JPEG fuer Pushover und Telegram (PW1, Bauplan push_melden, PV2): hoechstens NOTIFY_IMAGE_HEIGHT
+    Zeilen mit INTER_AREA, Seitenverhaeltnis bleibt, nie hochgerechnet; Qualitaet NOTIFY_IMAGE_QUALITY.
+    -> bytes oder None, wenn kein Bild da ist oder die Kodierung scheitert (Fehler aus cv2 gehen an den Aufrufer)"""
+    if bgr is None:
+        return None
+    h, w = bgr.shape[:2]
+    if h > NOTIFY_IMAGE_HEIGHT:
+        breite = max(1, round(w * NOTIFY_IMAGE_HEIGHT / h))
+        bgr = cv2.resize(bgr, (breite, NOTIFY_IMAGE_HEIGHT), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, NOTIFY_IMAGE_QUALITY])
+    return buf.tobytes() if ok else None
 
 
 class Bewegungswache:
@@ -677,8 +706,11 @@ TEXT_URTEIL_UNSICHER = ("unknown/uncertain (preliminary — best candidate "
 # Der Aufrufer aktiviert die Sprache (Eintrittspunkt (c)); MQTT-Payload und
 # Kachel-Log haengen NICHT an diesen Texten (Additiv-Invariante).
 STIL_WORTE_ZAHLEN = "worte_zahlen"
-TITEL_ERKANNT = "meldung.wache.titel_erkannt"     # Stufe 2, Stil worte
-TITEL_PERSON = "meldung.wache.titel_person"       # Trigger-Titel (Default)
+# PW2 (Bauplan push_melden, E13): die Zeilen fuer Pushover-Titel und Telegram-Beschriftung, in beiden Stilen gleich.
+TITEL_ERKANNT = "meldung.wache.titel_erkannt"     # ein Name, mit Name und Kamera
+TITEL_NAMEN = "meldung.wache.titel_namen"         # Sammelmeldung, mehrere Namen und Kamera
+# PW5 (E14, E17): das erste Gesicht meldet ueber Push nichts mehr; am Auftrittsende ohne Namen kommt diese Zeile.
+TITEL_UNBEKANNT = "meldung.wache.titel_unbekannt"  # niemand erkannt, mit Kamera (Default)
 
 
 def alert_stil(cfg):
@@ -687,7 +719,7 @@ def alert_stil(cfg):
 
 
 def meldetext_trigger(cfg, n_funde, spanne_s, score, latenz_ms, u_text, u_urteil):
-    """Push-/Telegram-Text der Stufe 1 (Trigger). -> str"""
+    """Text der Stufe 1 (erstes Gesicht): Zusatz der Journalzeile; seit PW5 ohne Schnell-Urteil auch Text der Unbekannt-Meldung. -> str"""
     if alert_stil(cfg) == STIL_WORTE_ZAHLEN:
         # .251: Technik-Zahlen nur in diesem Stil; §8.8: vorformatiert.
         text = (_sprache.t_n("meldung.wache.funde", n_funde, sek=f"{spanne_s:.1f}")
@@ -702,14 +734,34 @@ def meldetext_trigger(cfg, n_funde, spanne_s, score, latenz_ms, u_text, u_urteil
 
 
 def meldetext_name(cfg, person, cos, stimmen, win_thresh):
-    """Titel-Schluessel + Text der Stufe 2 (Namens-Meldung). -> (key, str)"""
+    """Titel-Schluessel + Text der Stufe 2 (Namens-Meldung). -> (key, str)
+    PW2 (E13, O1172): der Titel ist in beiden Stilen TITEL_ERKANNT; nur der Text haengt am Stil."""
     if alert_stil(cfg) == STIL_WORTE_ZAHLEN:
         from core import vertrauen as _vt
         text = _sprache.t("meldung.wache.name_satz", name=person,
                           wort=_vt.wort_sprachig(cos, win_thresh), n=stimmen)
         text += " " + _sprache.t("meldung.wache.name_zahl", cos=f"{cos:.2f}")
-        return TITEL_PERSON, text
+        return TITEL_ERKANNT, text
     return TITEL_ERKANNT, str(person)
+
+
+def preliminary_name(face, names_allowed, win_thresh, margin):
+    """Vorlaeufiger Name (Schnell-Urteil) des ersten gueltigen Gesichts, reine Rechnung ohne Platte und Sprache.
+    -> (u_text, u_person, u_urteil); ohne erlaubte Namen oder Kandidaten (None, None, None)."""
+    if not (names_allowed and face["sc"]):
+        return None, None, None
+    from core import vertrauen as _vt
+    werte = sorted(face["sc"].items(), key=lambda pair: pair[1], reverse=True)
+    person, cos = werte[0]
+    wort = _vt.wort(cos, win_thresh)
+    # Bauplan Stapel-Abstand SA1 Punkt 3: liegen bester und zweitbester Name zu nah beieinander
+    # (core.stapel.zu_knapp), traegt die erste Meldung keinen vorlaeufigen Namen, wie unter der Latte.
+    treffer = cos >= win_thresh and not _stapel.zu_knapp(
+        cos, werte[1][1] if len(werte) > 1 else None, margin)
+    u_person = person if treffer else None
+    u_urteil = {"person": person, "cos": cos, "wort": wort, "treffer": treffer}
+    u_text = (TEXT_URTEIL_TREFFER if treffer else TEXT_URTEIL_UNSICHER).format(name=person, wort=wort)
+    return u_text, u_person, u_urteil
 
 
 _POSE = {"wache": None, "fehler": None}
@@ -807,34 +859,86 @@ def person_region(bbox, breite, hoehe):
     return (cx - 2.4 * bh, y1 - 0.6 * bh, cx + 2.4 * bh, y1 + 8.0 * bh)
 
 
-def video_bauen(frames, pfad, fps):
-    """Kurzer Rueckblick als MP4 (H.264, damit Telegram es abspielt). Erzeugt aus
-    den gepufferten Bildern, es wird also NICHTS zusaetzlich von der Kamera geholt."""
-    if not frames:
-        return None
-    h, b = frames[0].shape[:2]
-    # .536 B1a — DIE EINE AUSNAHME der stdin-Regel, mit Absicht: hier IST stdin
-    # der Datenweg (die gepufferten BGR-Bilder werden unten hineingeschrieben).
-    # Weder `stdin=DEVNULL` noch `-nostdin` duerfen hier stehen; die Gate-Probe
-    # tools/proben/s11_v3_stdin_kinder.py fuehrt genau diese Stelle in ihrer
-    # Ausnahmeliste und prueft, dass sie NICHT abgeklemmt wird.
-    p = subprocess.Popen(
-        ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24",
-         "-s", f"{b}x{h}", "-r", f"{max(fps, 1):.2f}", "-i", "-",
-         "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", pfad],
-        stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    try:
-        for f in frames:
-            p.stdin.write(f.tobytes())
-        p.stdin.close()
-        p.wait(timeout=60)
-    except Exception:
+def video_bauen(frames, pfad, fps, hoehe, abbruch=lambda: False):
+    """Das Video des Live-Waechters fuer Telegram (PW3, Bauplan push_melden PV5): die NV12-Rasterbilder aus `frames`
+    gehen per Pipe in libx264 auf niedrigster Prioritaet, verkleinert auf hoechstens `hoehe` Zeilen, nach `pfad`.
+    -> dict pfad (bei Erfolg, sonst None), fehler (Text, leer bei Erfolg), bilder, bytes, cpu_s (Kodierer). ffmpeg
+    ist danach immer beendet und eingesammelt, eine misslungene Ausgabe geloescht. Jedes Schreiben und das Ende
+    haben den Deckel VIDEO_DECKEL_S (ein Kind, das nicht liest, haelt nicht fest); abbruch() True beendet sofort.
+    Anzeige-Weg: die Bilder gehen nie ins Urteil."""
+    from core import melden as _melden
+    erg = {"pfad": None, "fehler": "", "bilder": 0, "bytes": 0, "cpu_s": 0.0}
+    p = form = None
+    with tempfile.TemporaryFile() as err:
         try:
-            p.kill()
-        except Exception:
-            pass
-        return None
-    return pfad if os.path.exists(pfad) and os.path.getsize(pfad) > 0 else None
+            for f in frames:
+                if p is None:
+                    form, h, b = f.shape, f.shape[0] * 2 // 3, f.shape[1]
+                    # .536 B1a — DIE EINE AUSNAHME der stdin-Regel, mit Absicht: hier IST stdin der Datenweg (die
+                    # NV12-Rasterbilder werden unten hineingeschrieben). Weder `stdin=DEVNULL` noch `-nostdin`
+                    # duerfen hier stehen; die Gate-Probe tools/proben/s11_v3_stdin_kinder.py fuehrt genau diese
+                    # Stelle in ihrer Ausnahmeliste und prueft, dass sie NICHT abgeklemmt wird.
+                    p = subprocess.Popen(
+                        ["nice", "-n", str(VIDEO_NICE), "ffmpeg", "-v", "error", "-y", "-f", "rawvideo",
+                         "-pix_fmt", "nv12", "-s", f"{b}x{h}", "-r", f"{fps:.4f}", "-i", "-",
+                         "-vf", f"scale=-2:'min({hoehe},ih)'", "-c:v", "libx264", "-preset", "veryfast",
+                         "-crf", str(_melden.TELEGRAM_CPU_CRF), "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                         "-f", "mp4", pfad],
+                        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=err)
+                    os.set_blocking(p.stdin.fileno(), False)
+                if f.shape != form:
+                    raise RuntimeError(f"frame size changed from {form} to {f.shape}")
+                rest, frist = memoryview(np.ascontiguousarray(f)).cast("B"), time.monotonic() + VIDEO_DECKEL_S
+                while rest:
+                    if abbruch():
+                        raise RuntimeError("stopped")
+                    if time.monotonic() > frist:
+                        raise TimeoutError(f"encoder took no frame within {VIDEO_DECKEL_S:g} s")
+                    if select.select([], [p.stdin], [], 0.2)[1]:
+                        try:
+                            rest = rest[os.write(p.stdin.fileno(), rest):]
+                        except BlockingIOError:
+                            pass
+                erg["bilder"] += 1
+            if p is None:
+                raise RuntimeError("no frames")
+            p.stdin.close()
+            frist = time.monotonic() + VIDEO_DECKEL_S
+            while p.returncode is None:
+                pid, status, nutzung = os.wait4(p.pid, os.WNOHANG)
+                if pid:
+                    p.returncode = os.waitstatus_to_exitcode(status)
+                    erg["cpu_s"] = nutzung.ru_utime + nutzung.ru_stime
+                elif abbruch() or time.monotonic() > frist:
+                    raise RuntimeError("stopped" if abbruch() else f"encoder did not end within {VIDEO_DECKEL_S:g} s")
+                else:
+                    time.sleep(0.05)
+            if p.returncode != 0:
+                raise RuntimeError(f"ffmpeg exit code {p.returncode}")
+            erg["bytes"] = os.path.getsize(pfad)
+            if erg["bytes"] <= 0:
+                raise RuntimeError("empty output")
+            erg["pfad"] = pfad
+        except Exception as e:
+            erg["fehler"] = f"{type(e).__name__}: {e}"
+            if p is not None and p.returncode is None:
+                p.kill()
+                if p.returncode is None:
+                    p.returncode = os.waitstatus_to_exitcode(os.wait4(p.pid, 0)[1])
+            err.seek(0)
+            zeilen = err.read()[-400:].decode("utf-8", "replace").strip().splitlines()
+            erg["fehler"] += f" ({zeilen[-1]})" if zeilen else ""
+            try:
+                os.remove(pfad)
+            except OSError:
+                pass
+        finally:
+            if p is not None:
+                try:
+                    p.stdin.close()
+                except OSError:
+                    pass
+    return erg
 
 
 # ======================================================================
@@ -1540,9 +1644,11 @@ class Stoerungsmelder:
 
 
 def melde_erlaubt(kachel, mono):
-    """MELDE-ANKER (§11 Entscheid 6): fruehestens wieder_scharf_s nach der
-    letzten MELDUNG wird wieder gemeldet (0 = jeder Trigger meldet). Modul-
-    Funktion statt Methode, damit der Mutations-Selbsttest sie fassen kann."""
+    """MELDE-ANKER (§11 Entscheid 6; seit PW5 nach E15): fruehestens wieder_scharf_s nach dem
+    ersten Gesicht des letzten freigegebenen Auftritts wird wieder ein Auftritt freigegeben
+    (0 = jeder). Nur ein freigegebener Auftritt bekommt Video und Unbekannt-Meldung; Namen haben
+    ihre eigene Pause (k.name_push_at). Modul-Funktion statt Methode, damit der Mutations-
+    Selbsttest sie fassen kann. -> bool"""
     return mono >= kachel.melde_bis_mono
 
 
@@ -1750,6 +1856,11 @@ def kommando_unverarbeitet(cfg, status):
 # der DIENST liest und zeigt (melde_zaehler). Datei im data_dir — die Historie
 # ueberlebt Dienst- UND Engine-Neustarts.
 MELDE_PROTOKOLL = "meldungen.jsonl"
+# Stufe TY4 (Bauplan analysen/bauplan_today_seite.md, Punkt 1): das Feld an der Protokoll-Zeile, die ein als unbekannte
+# Person gewerteter Auftritt am Ende schreibt (Wert true, nur geschrieben, wenn gesetzt). Schreiber (_melde_protokoll)
+# und Leser (melde_liste, auftritts_gruppen, unbekannt_auftritte) nehmen den Namen von hier. Alte Zeilen ohne das Feld
+# bleiben gueltig und gelten als nicht gewertet.
+UNBEKANNT_MERKMAL = "unbekannt"
 
 
 def melde_protokoll_zeile(live_dir, eintrag):
@@ -1786,11 +1897,20 @@ def melde_protokoll_vorhanden(cfg):
 def melde_liste(cfg, von, bis, kameras=None, max_gruppen=12):
     """Die Live-ALERTS eines Fensters ALS LISTE (.188, User 13.08.: Today
     soll separat zeigen, WAS live erkannt wurde — der Zaehler sagt nur wie
-    viel). Ein Trigger meldet auf MEHREREN Kanaelen fast zeitgleich —
-    Zeilen derselben Kamera binnen 2 s werden zu EINER Zeile gebuendelt
-    (kanaele-Menge, erster zusatz gewinnt). -> (gruppen_neueste_zuerst
-    gekappt auf max_gruppen, gesamtzahl_gruppen). Kaputte Zeilen fallen
-    still raus (Anzeige-Pfad, wie melde_zaehler)."""
+    viel). Die Zeilen EINES Anlasses stehen im Protokoll dicht beieinander:
+    mehrere Kanaele fast zeitgleich, und seit PW5 (E18) tragen Unbekannt-
+    Meldung und Video die Wanduhr des ersten Gesichts, auch wenn sie erst am
+    Auftrittsende rausgehen —
+    eine Zeile tritt der juengsten Gruppe derselben Kamera UND derselben
+    Sorte bei, wenn deren letzte Zeile hoechstens 2 s zurueckliegt
+    (kanaele-Menge, erster zusatz gewinnt). Sorte heisst: Namenszeile nach
+    ist_namensmeldung oder nicht (MM1, Bauplan mqtt_melden: liegen Gesichts-
+    und Namenszeilen eines Auftritts dicht durcheinander, behaelt die
+    Namensgruppe Namen und Namensbild; zwei Kameras zerreissen sich die
+    Buendelung nicht). -> (gruppen_neueste_zuerst gekappt auf max_gruppen,
+    gesamtzahl_gruppen). Kaputte Zeilen fallen still raus (Anzeige-Pfad,
+    wie melde_zaehler). TY4: traegt eine Zeile der Gruppe das Merkmal
+    UNBEKANNT_MERKMAL, steht es auch an der Gruppe (Feld nur dann vorhanden)."""
     live_dir = os.path.join(cfg.get("data_dir") or os.path.join(WURZEL, "verify_data"),
                             "live")
     zeilen = []
@@ -1813,15 +1933,18 @@ def melde_liste(cfg, von, bis, kameras=None, max_gruppen=12):
                     zeilen.append((ts, kamera, str(d["kanal"]),
                                    str(d.get("zusatz") or ""),
                                    str(d.get("person") or ""),
-                                   str(d.get("bild") or "")))
+                                   str(d.get("bild") or ""),
+                                   d.get(UNBEKANNT_MERKMAL) is True))
                 except Exception:
                     _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
     zeilen.sort()
     gruppen = []
-    for ts, kamera, kanal, zusatz, person, bild in zeilen:
-        g = gruppen[-1] if gruppen else None
-        if g and g["kamera"] == kamera and ts - g["ts_letzte"] <= 2.0:
+    juengste = {}       # Merkblatt: (kamera, sorte) -> juengste Gruppe dieser Art
+    for ts, kamera, kanal, zusatz, person, bild, unbekannt in zeilen:
+        schluessel = (kamera, ist_namensmeldung({"bild": bild}))
+        g = juengste.get(schluessel)
+        if g and ts - g["ts_letzte"] <= 2.0:
             g["ts_letzte"] = ts
             if kanal not in g["kanaele"]:
                 g["kanaele"].append(kanal)
@@ -1832,9 +1955,13 @@ def melde_liste(cfg, von, bis, kameras=None, max_gruppen=12):
             if bild and not g["bild"]:
                 g["bild"] = bild
         else:
-            gruppen.append({"ts": ts, "ts_letzte": ts, "kamera": kamera,
-                            "kanaele": [kanal], "zusatz": zusatz,
-                            "person": person, "bild": bild})
+            g = {"ts": ts, "ts_letzte": ts, "kamera": kamera,
+                 "kanaele": [kanal], "zusatz": zusatz,
+                 "person": person, "bild": bild}
+            gruppen.append(g)
+            juengste[schluessel] = g
+        if unbekannt:
+            g[UNBEKANNT_MERKMAL] = True
     gruppen.reverse()
     return gruppen[:max_gruppen], len(gruppen)
 
@@ -1846,7 +1973,11 @@ def auftritts_gruppen(gruppen, luecke=30.0):
     Felder je Auftritt: ts/ts_letzte (Gesamtspanne), kamera, kanaele
     (Vereinigung), person/zusatz/bild (erster nicht-leerer gewinnt),
     trigger (Anzahl gebuendelter Gruppen). Reihenfolge bleibt neueste
-    zuerst."""
+    zuerst. TY4: traegt eine Gruppe das Merkmal UNBEKANNT_MERKMAL, steht
+    unter diesem Schluessel am Auftritt {"von", "bis", "bild"}: Zeit der
+    ersten und letzten solchen Gruppe und das Bild der ersten (das Bild
+    des ersten Gesichts); der Auftritt selbst kann das Bild einer
+    Namensmeldung tragen. Ohne solche Gruppe fehlt der Schluessel."""
     aus = []
     je_kamera = {}      # kamera -> juengste Auftritts-Karte: verschachtelte
     for g in sorted(gruppen, key=lambda g: g["ts"]):    # Kameras (K1-K2-K1,
@@ -1880,7 +2011,11 @@ def auftritts_gruppen(gruppen, luecke=30.0):
                    "zusatz": g.get("zusatz") or "",
                    "bild": g.get("bild") or "", "trigger": 1}
             aus.append(neu)
-            je_kamera[g["kamera"]] = neu
+            je_kamera[g["kamera"]] = a = neu
+        if g.get(UNBEKANNT_MERKMAL):
+            u = a.setdefault(UNBEKANNT_MERKMAL, {"von": g["ts"], "bis": g["ts"], "bild": g.get("bild") or ""})
+            u["bis"] = max(u["bis"], g["ts"])
+            u["bild"] = u["bild"] or g.get("bild") or ""
     aus.reverse()
     return aus
 
@@ -1892,6 +2027,18 @@ def namensbild_datei(stempel, person):
     einen Pfad."""
     sauber = re.sub(r"[^A-Za-z0-9._-]", "_", str(person))[:40]
     return f"{stempel}{NAMENSBILD_MARKE}{sauber}.jpg"
+
+
+def image_stamp(wall):
+    """Zeitstempel der Beweisbild-Namen aus einer Wanduhrzeit (Ortszeit), eine Quelle fuer Schreiber und Journal.
+    -> str JJJJMMTT_HHMMSS"""
+    return time.strftime("%Y%m%d_%H%M%S", time.localtime(wall))
+
+
+def trigger_image_name(stamp, number):
+    """Dateiname des Beweisbilds der ersten Meldung eines Auftritts (Trigger Nummer `number`).
+    -> str <stamp>_T<n>_1.jpg"""
+    return f"{stamp}_T{number}_1.jpg"
 
 
 def ist_namensmeldung(zeile):
@@ -1932,9 +2079,19 @@ def namens_auftritte(gruppen, luecke=30.0):
         if a.get("person")]
 
 
+def unbekannt_auftritte(gruppen, luecke=30.0):
+    """Die Auftritte, die ein Waechter als unbekannte Person gewertet hat (Stufe TY4 Punkt 2): ungefiltert gebuendelt wie
+    /live_alerts (auftritts_gruppen), davon die mit dem Merkmal UNBEKANNT_MERKMAL.
+    -> Liste von {"anker", "kamera", "von", "bis", "bild"}, juengste zuerst; anker ist der Beginn des gebuendelten
+    Auftritts (die Kennung seiner Karte unter /live_alerts), von, bis und bild kommen aus den Gruppen mit dem Merkmal"""
+    aus = [dict(a[UNBEKANNT_MERKMAL], anker=int(a["ts"]), kamera=a["kamera"])
+           for a in auftritts_gruppen(gruppen or [], luecke) if a.get(UNBEKANNT_MERKMAL)]
+    return sorted(aus, key=lambda u: -u["bis"])
+
+
 def auftritt_medien(cfg, kamera, von, bis, rand=6.0):
     """Alle gespeicherten Beweis-Medien eines Auftritts von der Platte
-    (.195): Ketten-Crops, Namens-Bilder UND die Rueckblick-Videos aus
+    (.195): Ketten-Crops, Namens-Bilder UND die Videos der Auftritte aus
     <data_dir>/live/<kamera>/. Zuordnung ueber den Dateinamens-Stempel
     (Wanduhr des Ausloesers) im Fenster [von-rand, bis+rand] — bewusst von
     der Platte statt aus dem Protokoll, weil Karenz-Trigger Bilder
@@ -2229,7 +2386,7 @@ def kalib_dir(cfg, kamera):
 
 
 def kalib_lesen(cfg, kamera):
-    """Vorrat EINER Kamera -> [{"d","ts","det","e","t","p"}, ...], neueste zuletzt.
+    """Vorrat EINER Kamera -> [{"d","ts","det","e","t","p","n","k","abbruch"}, ...], neueste zuletzt.
 
     Fail-safe: kaputte Zeilen und Eintraege ohne Datei fallen still raus (reiner
     Anzeige-Pfad). Die Datei-Pruefung ist wichtig, weil der Ring die Bilder
@@ -2266,7 +2423,13 @@ def kalib_lesen(cfg, kamera):
                         # None = "nicht gemessen", nie eine geratene Zahl
                         # (die Seite laesst so eine Kachel jede Pose-Latte
                         # passieren, statt sie blind auszublenden).
-                        "p": (None if e.get("p") is None else float(e["p"]))})
+                        "p": (None if e.get("p") is None else float(e["p"])),
+                        # MW1: Norm (n), Kante (k) und die Achse, an der der Fund
+                        # ausschied (abbruch). Fehlt ein Feld (alte Zeile, nicht
+                        # gemessen, Fund ohne Abbruch), steht None.
+                        "n": (None if e.get("n") is None else float(e["n"])),
+                        "k": (None if e.get("k") is None else float(e["k"])),
+                        "abbruch": (None if e.get("abbruch") is None else str(e["abbruch"]))})
     return aus
 
 
@@ -2305,6 +2468,9 @@ def kalib_schreiben(cfg, kamera, bild, mass, deckel=KALIB_DECKEL, log=_log,
 
     `mass` = {"det","e","t"} (e/t duerfen None sein, wenn die Guete-Modelle im
     Image fehlen — dann kalibriert der Nutzer nur ueber det, ehrlich sichtbar).
+    Dazu optional "p" (Kopfhaltung), "n" (Norm), "k" (Kante) und "abbruch"
+    (Achse, an der der Fund ausschied); sie stehen nur in der Index-Zeile, wenn
+    sie gemessen sind (MW1).
     Der Deckel wird HIER durchgesetzt, nicht vom Aufrufer: es gibt genau einen
     Schreibweg, also genau eine Stelle, an der der Ring greifen kann.
     Platten-/IO-Fehler sind eine Log-Zeile, nie ein Waechter-Ende (K-1-Haltung
@@ -2362,7 +2528,15 @@ def kalib_schreiben(cfg, kamera, bild, mass, deckel=KALIB_DECKEL, log=_log,
                                 # ihn fuer die Kalibrier-Anzeige mit; Wege ohne
                                 # Messung lassen das Feld weg -> None).
                                 **({"p": round(float(mass["p"]), 3)}
-                                   if mass.get("p") is not None else {})},
+                                   if mass.get("p") is not None else {}),
+                                # MW1: Norm, Kante und Abbruch-Achse ebenso nur,
+                                # wenn gemessen; alte Zeilen bleiben gueltig.
+                                **({"n": round(float(mass["n"]), 3)}
+                                   if mass.get("n") is not None else {}),
+                                **({"k": int(mass["k"])}
+                                   if mass.get("k") is not None else {}),
+                                **({"abbruch": str(mass["abbruch"])}
+                                   if mass.get("abbruch") is not None else {})},
                                ensure_ascii=False) + "\n")
         _kalib_ring_kappen(d, deckel)
         return name
@@ -2538,39 +2712,86 @@ def guete_reicht(guard, e, t):
     return True
 
 
-def versteckt_lesen(cfg):
-    """Versteck-Liste des Live-Reiters (User 13.08.: Kacheln ausblendbar,
-    Ausgeblendete unten eingeklappt) -> [kamera, ...]. Fail-safe leer."""
-    v = (cfg.get("live") or {}).get("versteckt")
-    if not isinstance(v, list):
-        return []
-    return [x for x in v if isinstance(x, str) and x.strip()]
+def live_platz(cfg, kamera, platz, *, store_pfad, store_laden, store_schreiben, log):
+    """Weist der Kamera einen Platz der Live-Seite zu (platz 1 bis zur Obergrenze) oder leert ihren Platz (platz None
+    oder leer). -> (ok, msg). Store-Muster wie live_schalter.
 
-
-def live_verstecken(cfg, kamera, versteckt, *, store_pfad, store_laden,
-                    store_schreiben, log):
-    """Hide/Show EINER Kachel -> (ok, msg). Reine Anzeige-Praeferenz, kein
-    Riegel (der Waechter-Betrieb haengt nicht daran; ein LAUFENDER Waechter
-    bleibt in der Running-Gruppe sichtbar, egal was hier steht — Regel im
-    Renderer routes/live.gruppen). Store-Muster wie live_schalter."""
+    Regeln aus Bauplan live_seite, Stufe LS1 Punkt 2: ein Platz traegt hoechstens eine Kamera, eine Kamera hoechstens
+    einen Platz; Leeren geht nur bei ausgeschaltetem Waechter (damit auch ein Kamerawechsel auf dem Platz); eine Kamera
+    ohne Block bekommt einen Block nur mit dem Platz, dessen uebrige Felder beim Lesen (guards_lesen) die Werkswerte
+    tragen; beim Leeren bleiben die Einstellungen der Kamera im Store. Nummern ueber der Obergrenze (aus der
+    Uebernahme) lassen sich leeren, vergeben werden nur Nummern bis zur Obergrenze."""
     kamera = str(kamera or "").strip()
     if not kamera:
         return False, "camera name missing"
     store = store_laden(cfg)
-    blk = store.setdefault("live", {})
-    liste = blk.get("versteckt")
-    liste = ([x for x in liste if isinstance(x, str)]
-             if isinstance(liste, list) else [])
-    if versteckt and kamera not in liste:
-        liste.append(kamera)
-    if not versteckt:
-        liste = [x for x in liste if x != kamera]
-    blk["versteckt"] = liste
+    sicht = dict(cfg, live=store.get("live"))
+    alle = guards_lesen(sicht, _logbuch.NULL)[1]
+    eigen = alle.get(kamera) or {}
+    if platz in (None, ""):
+        if eigen.get("platz") is None:
+            return True, "no slot assigned"
+        if eigen.get("enabled"):
+            return False, "clear refused: switch the watcher off first"
+        alt = eigen["platz"]
+        store["live"]["guards"][kamera].pop("platz", None)
+        nr = None
+    else:
+        obergrenze = max_slots_lesen(sicht, _logbuch.NULL)
+        nr = None
+        if not isinstance(platz, bool) and not (isinstance(platz, float) and not platz.is_integer()):
+            try:
+                nr = int(platz)
+            except (TypeError, ValueError):
+                nr = None
+        if nr is None or not 1 <= nr <= obergrenze:
+            return False, f"slot: a whole number from 1 to {obergrenze} is expected"
+        if eigen.get("platz") == nr:
+            return True, f"already on slot {nr}"
+        if eigen.get("platz") is not None:
+            return False, f"{kamera} already has slot {eigen['platz']} — clear it first"
+        belegt = next((k for k, g in alle.items() if g["platz"] == nr), None)
+        if belegt is not None:
+            return False, f"slot {nr} is taken by {belegt} — clear it first"
+        blk = store.setdefault("live", {}).setdefault("guards", {})
+        roh = blk.get(kamera)
+        blk[kamera] = dict(roh if isinstance(roh, dict) else {}, platz=nr)
     store_schreiben(store_pfad(cfg), store)
     cfg["live"] = store["live"]                  # Prozess-Sicht sofort aktuell
-    _audit_zeile(cfg, {"live_versteckt": {kamera: bool(versteckt)}})
-    log.info(f"LIVE tile {kamera} {'hidden' if versteckt else 'shown'} via UI")
-    return True, ("hidden" if versteckt else "shown")
+    _audit_zeile(cfg, {"live_platz": {kamera: nr}})
+    if nr is None:
+        log.info(f"LIVE guard {kamera} slot {alt} cleared via UI")
+        return True, "slot cleared"
+    log.info(f"LIVE guard {kamera} assigned to slot {nr} via UI")
+    return True, f"assigned to slot {nr}"
+
+
+def plaetze_uebernehmen(cfg, *, store_pfad, store_laden, store_schreiben, log):
+    """Uebernahme beim Start des Dienstes (Bauplan live_seite, Stufe LS1 Punkt 3): traegt noch kein Waechter eine
+    Platznummer, bekommen die eingeschalteten Waechter die Plaetze ab 1 in der Reihenfolge ihrer Namen.
+    -> dict {kamera: platz} der vergebenen Plaetze, leer, wenn nichts zu tun war.
+    Danach traegt mindestens ein Waechter eine Nummer, ein spaeterer Start tut also nichts mehr. Mehr eingeschaltete
+    Waechter als die Obergrenze bekommen trotzdem alle eine Nummer; das sagt eine WARNING."""
+    store = store_laden(cfg)
+    sicht = dict(cfg, live=store.get("live"))
+    alle = guards_lesen(sicht, _logbuch.NULL)[1]
+    if any(g["platz"] is not None for g in alle.values()):
+        return {}
+    vergabe = {k: nr for nr, k in enumerate(sorted(k for k, g in alle.items() if g["enabled"]), 1)}
+    if not vergabe:
+        return {}
+    for k, nr in vergabe.items():
+        store["live"]["guards"][k]["platz"] = nr
+    store_schreiben(store_pfad(cfg), store)
+    cfg["live"] = store["live"]                  # Prozess-Sicht sofort aktuell
+    _audit_zeile(cfg, {"live_platz_uebernahme": vergabe})
+    log.info(f"LIVE slots assigned once to the enabled watchers in name order: "
+             f"{', '.join(f'{k} {nr}' for k, nr in vergabe.items())}")
+    obergrenze = max_slots_lesen(sicht, _logbuch.NULL)
+    if len(vergabe) > obergrenze:
+        log.warning(f"LIVE {len(vergabe)} enabled watchers but only {obergrenze} slots — every watcher got a "
+                    f"number; slots above {obergrenze} can be cleared once their watcher is off")
+    return vergabe
 
 
 def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
@@ -2639,10 +2860,10 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
     except (TypeError, ValueError):
         return False, "the two times must be whole seconds"
     if not (ENDE_OHNE_GESICHT_MIN <= ende_s <= ENDE_OHNE_GESICHT_MAX):
-        return False, (f"'end after no face': allowed "
+        return False, (f"'visit ends after': allowed "
                        f"{ENDE_OHNE_GESICHT_MIN}-{ENDE_OHNE_GESICHT_MAX} s")
     if not (WIEDER_SCHARF_MIN <= scharf_s <= WIEDER_SCHARF_MAX):
-        return False, (f"'re-armed after': allowed "
+        return False, (f"'push pause': allowed "
                        f"{WIEDER_SCHARF_MIN}-{WIEDER_SCHARF_MAX} s "
                        f"(0 = every trigger alerts)")
     kanaele = list(_wert("kanaele", []) or [])
@@ -2742,6 +2963,27 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
     for fehler in (f_ruhe, f_bs, f_bf):
         if fehler:
             return False, fehler
+    # WS1 (Bauplan waechterseite, WV1): die Push-Schalter aus PW1, PW3 und PW5. Halte-Regel wie oben (_wert), gelesen
+    # mit derselben Lesart wie beim Laden (_bool_lesen in guards_lesen), damit ein gespeichertes "false" aus bleibt und
+    # None den Werkswert bekommt; bool() wuerde aus "false" ein True machen (Codex Runde 1, B1).
+    push = {feld: _bool_lesen(_wert(feld, None), werk, log, f"live.guards.{kamera}.{feld}")
+            for feld, werk in (("pushover_image", True), ("telegram_image", True), ("telegram_video", True),
+                               ("pushover_known", True), ("pushover_unknown", True), ("telegram_known", True),
+                               ("telegram_unknown", True), ("unknown_with_known", False))}
+    # Videolaenge: ganze Sekunden, ausserhalb der Spanne Ablehnung wie bei den zwei Zeiten oben; gekuerzt wird nie,
+    # deshalb faellt auch 7.5 durch, das int() still auf 7 kuerzen wuerde (Codex Runde 1, H2). None heisst wie beim
+    # Laden (_klemmen) "nie gesetzt" und bekommt den Werkswert.
+    video_s = _wert("video_s", None)
+    video_s = VIDEO_S if video_s is None else video_s
+    if isinstance(video_s, bool) or (isinstance(video_s, float) and not video_s.is_integer()):
+        video_s = None
+    else:
+        try:
+            video_s = int(video_s)
+        except (TypeError, ValueError):
+            video_s = None
+    if video_s is None or not (VIDEO_S_MIN <= video_s <= VIDEO_S_MAX):
+        return False, f"'video length': whole seconds {VIDEO_S_MIN}-{VIDEO_S_MAX} allowed"
     neu = dict(alt, quelle=q, url=url, ende_ohne_gesicht_s=ende_s,
                wieder_scharf_s=scharf_s, kanaele=kanaele, hoehe=hoehe,
                det_min=det_min, guete_e_min=g_e, guete_t_min=g_t,
@@ -2754,7 +2996,8 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
                frigate_events=fr_ev, frigate_abstand_s=fr_ab,
                bewegung_gate=bw_gate, ruhe_takt_s=ruhe_s,
                bewegung_schwelle=bw_schw, bewegung_flaeche=bw_fl,
-               worker_aus=wk_aus, eigene_pruefen=recheck_own)
+               worker_aus=wk_aus, eigene_pruefen=recheck_own,
+               video_s=video_s, **push)
     neu.pop("schnell_urteil", None)   # .197: Haken abgeschafft (Voting immer)
     blk[kamera] = neu
     store_schreiben(store_pfad(cfg), store)
@@ -2774,7 +3017,7 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
         "frigate_abstand_s": fr_ab, "bewegung_gate": bw_gate,
         "ruhe_takt_s": ruhe_s, "bewegung_schwelle": bw_schw,
         "bewegung_flaeche": bw_fl, "worker_aus": wk_aus,
-        "eigene_pruefen": recheck_own}}})
+        "eigene_pruefen": recheck_own, "video_s": video_s, **push}}})
     log.info(f"LIVE guard {kamera} changed via UI (URL masked)")
     hinweis = ""
     alt_fp = (alt.get("test") or {}).get("quelle_fp")
@@ -2863,6 +3106,19 @@ def live_schalter(cfg, kamera, enabled, *, store_pfad, store_laden,
                     elif slots.get("effektiv_grund"):
                         msg += f" — {slots.get('effektiv_grund')}"
                     return False, msg
+        # LS1 Punkt 4 (Bauplan live_seite): eine Kamera ohne Platz bekommt beim Einschalten den niedrigsten freien
+        # Platz; ist keiner frei, wird abgelehnt. Das kommt nach den Pruefungen oben (Quelltest, Kapazitaet) und
+        # ersetzt keine davon.
+        sicht = dict(cfg, live=store.get("live"))
+        alle = guards_lesen(sicht, _logbuch.NULL)[1]
+        if alle[kamera]["platz"] is None:
+            obergrenze = max_slots_lesen(sicht, _logbuch.NULL)
+            belegt = {g_["platz"] for g_ in alle.values()}
+            frei = next((n for n in range(1, obergrenze + 1) if n not in belegt), None)
+            if frei is None:
+                return False, f"enable refused: all {obergrenze} slots are taken — clear a slot first"
+            guard["platz"] = frei
+            log.info(f"LIVE guard {kamera} gets slot {frei}")
     guard["enabled"] = bool(enabled)
     store_schreiben(store_pfad(cfg), store)
     cfg["live"] = store["live"]
@@ -3015,6 +3271,16 @@ _DEFAULTS_GRENZEN = {"hoehe": (2, 4320), "det_basis": (32, 4096),
                      "burst_anzahl": (2, 30), "burst_fenster_s": (0.2, 30.0),
                      "rate": (1, 60)}
 KANAELE_ERLAUBT = ("pushover", "telegram", "mqtt")
+# MQTT-Vertrag des Waechters (Bauplan mqtt_melden, V1): jede Meldung traegt `event` als letzten eigenen
+# Schluessel, die Stoerung dazu `state`, das Auftrittsende dazu `reason` (MM3, E1). Die Kennungen stehen nur
+# hier; der Code nutzt die entpackten Namen.
+MQTT_EVENTS = ("face_found", "face_recognized", "faces_recognized", "appearance_ended", "disturbance")
+MQTT_STATES = ("disturbed", "recovered")
+MQTT_END_REASONS = ("no_face", "stopped")
+(MQTT_FACE_FOUND, MQTT_FACE_RECOGNIZED, MQTT_FACES_RECOGNIZED, MQTT_APPEARANCE_ENDED,
+ MQTT_DISTURBANCE) = MQTT_EVENTS
+MQTT_DISTURBED, MQTT_RECOVERED = MQTT_STATES
+MQTT_END_NO_FACE, MQTT_END_STOPPED = MQTT_END_REASONS
 
 # Spanne der Kamera-Pose-Latte = die Spanne des Vorgabe-Werts `pose_kopf`
 # (EINE Quelle statt eines zweiten Literals, qs_ebenen-Regel): beides ist
@@ -3137,7 +3403,22 @@ GUARD_USER_FELDER = ("enabled", "quelle", "url", "ende_ohne_gesicht_s",
                      # daran, dass Live eingeschaltet ist UND der Watcher
                      # dieser Kamera laeuft (verifyd.process prueft beides).
                      # Faellt der Waechter aus, wird wieder normal analysiert.
-                     "worker_aus", "eigene_pruefen")
+                     "worker_aus", "eigene_pruefen",
+                     # PW1 (Bauplan push_melden, E2): ob Pushover bzw. Telegram
+                     # das kleine Bild mitschickt; Werkswert an. Der Name folgt
+                     # dem Kanal (<kanal>_image), der Meldeweg liest ihn so.
+                     "pushover_image", "telegram_image",
+                     # PW3 (E2, E4): ob Telegram je gemeldetem Auftritt ein Video
+                     # bekommt (Werkswert an) und wie lang es ist (Sekunden).
+                     "telegram_video", "video_s",
+                     # PW5 (E14): Meldeschalter je Nachrichtenart wie bei MQTT. Bekannte (Namensmeldung) und
+                     # Unbekannte (am Auftrittsende) je Kanal, Werkswert an; Unbekannte neben erkannten Namen fuer
+                     # beide Kanaele, Werkswert aus.
+                     "pushover_known", "pushover_unknown", "telegram_known", "telegram_unknown",
+                     "unknown_with_known",
+                     # LS1 (Bauplan live_seite): der Platz der Kamera auf der Live-Seite, ganze Zahl ab 1; ohne Nummer
+                     # hat die Kamera keinen Platz. Geschrieben von live_platz, live_schalter und plaetze_uebernehmen.
+                     "platz")
 # .197: "schnell_urteil" ist KEIN Guard-Feld mehr — die Namens-Stufe laeuft
 # fuer jeden eingeschalteten Waechter (User: "Enable heisst alles laeuft";
 # der Haken stammte aus der Zeit, als das Urteil extra Rechenzeit kostete).
@@ -3395,6 +3676,37 @@ def guards_lesen(cfg, log=_log):
                                       f"live.guards.{name}.worker_aus"),
             "eigene_pruefen": _bool_lesen(g.get("eigene_pruefen"), False, log,
                                           f"live.guards.{name}.eigene_pruefen"),
+            # PW1 (E2, E3): Bild bei Pushover und Telegram, Werkswert an; aus heisst
+            # die Nachricht geht ohne Bild als Text raus. Ob der Kanal ueberhaupt
+            # meldet, sagt weiter nur `kanaele` (PV1).
+            "pushover_image": _bool_lesen(g.get("pushover_image"), True, log,
+                                          f"live.guards.{name}.pushover_image"),
+            "telegram_image": _bool_lesen(g.get("telegram_image"), True, log,
+                                          f"live.guards.{name}.telegram_image"),
+            # PW3 (E2, E4): das Video je gemeldetem Auftritt ueber Telegram, eigener
+            # Schalter neben dem Bild (Werkswert an), und seine Laenge ab dem ersten
+            # Gesicht, geklemmt mit Logzeile.
+            "telegram_video": _bool_lesen(g.get("telegram_video"), True, log,
+                                          f"live.guards.{name}.telegram_video"),
+            "video_s": _klemmen(g.get("video_s"), VIDEO_S, VIDEO_S_MIN, VIDEO_S_MAX,
+                                log, name, "video_s"),
+            # PW5 (E14): wer welche Nachricht bekommt. <kanal>_known gilt fuer Namens- und Sammelmeldung,
+            # <kanal>_unknown fuer "Unknown person" am Auftrittsende; ob der Kanal ueberhaupt meldet, sagt weiter nur
+            # `kanaele`. unknown_with_known: die Unbekannt-Meldung auch neben erkannten Namen (Werkswert aus).
+            "pushover_known": _bool_lesen(g.get("pushover_known"), True, log,
+                                          f"live.guards.{name}.pushover_known"),
+            "pushover_unknown": _bool_lesen(g.get("pushover_unknown"), True, log,
+                                            f"live.guards.{name}.pushover_unknown"),
+            "telegram_known": _bool_lesen(g.get("telegram_known"), True, log,
+                                          f"live.guards.{name}.telegram_known"),
+            "telegram_unknown": _bool_lesen(g.get("telegram_unknown"), True, log,
+                                            f"live.guards.{name}.telegram_unknown"),
+            "unknown_with_known": _bool_lesen(g.get("unknown_with_known"), False, log,
+                                              f"live.guards.{name}.unknown_with_known"),
+            # LS1: Platz auf der Live-Seite, None = kein Platz. Keine Obergrenze beim Lesen: die Uebernahme vergibt
+            # auch Nummern ueber der Obergrenze, die sich nach dem Ausschalten leeren lassen. Die Nummer gehoert
+            # nicht zum Fingerabdruck der Quelle (quelle_fp) und startet deshalb keinen Waechter neu.
+            "platz": _zahl_opt(g.get("platz"), 1, sys.maxsize, log, f"live.guards.{name}.platz", ganz=True),
         }
         # Quittungs-Bloecke (GUARD_QUITTUNG_FELDER) unveraendert durchreichen —
         # UI-B1: `messung` fehlte hier und die Last-Messung war unsichtbar.
@@ -3448,7 +3760,7 @@ class Kachel:
         #                                          still stellte (ehrlich gezaehlt)
         self.eingereiht = 0                      # vom Leser eingereihte Bilder
         self.verarbeitungs_fehler = 0            # B4: IO-/Befund-Fehler (nie Engine-Ende)
-        self.lock = threading.Lock()             # Stapel + Auftritt + Rueckblick
+        self.lock = threading.Lock()             # Stapel + Auftritt + Videoauftrag
         self.stack = _rechnung.CameraStack()
         # Etappe A (Welle 1): eigenes Bewegungs-Hintergrundbild JE KACHEL — die
         # Szenen sind verschieden, ein geteiltes waere fuer jede falsch.
@@ -3461,7 +3773,10 @@ class Kachel:
         self.hw = None
         self.kill = None                         # kill-Callable des laufenden Lesers
         self.stoer = Stoerungsmelder()
-        self.rueckblick = collections.deque(maxlen=max(4, int(VIDEO_SEK * 4)))
+        # PW3 (Bauplan push_melden, PV5): die laufende Aufnahme dieses Waechters (hoechstens eine) und die Fehler am
+        # Video seit dem Start (Statusfeld video_failed). Kein Ring: ohne Aufnahme haelt die Kachel kein Bild dafuer.
+        self.video_job = None
+        self.video_failed = 0
         # Zaehler (Status/Log)
         self.bilder = 0
         self.geprueft = 0                        # WIRKLICH detektierte Bilder (Lens-A M2)
@@ -3491,9 +3806,13 @@ class Kachel:
         self.stoer_sende_mono = -1e18            # letzter WIRKLICH gesendeter Push
         self.stoer_unterdrueckt = 0              # seither zurueckgehaltene Ereignisse
         self.stoer_letzter_text = None           # juengstes zurueckgehaltenes Ereignis
+        self.stoer_held_state = None             # sein MQTT-Zustand (MQTT_STATES)
+        self.mqtt_rejected = 0                   # abgelehnte MQTT-Meldungen; schreibt nur der Sendefaden
         # Auftritt (User-Zeit a, Anker LETZTER Fund — neu gebaut, Bauplan §4a)
         self.auftritt = None                     # {"seit_mono","letzter_fund_mono","funde","trigger",
-        #                                          "start_ts","letzter_fund_ts" (Wanduhr, .408 Anwesenheit)}
+        #                                          "start_ts","letzter_fund_ts" (Wanduhr, .408 Anwesenheit),
+        #                                          "genannt","mensch_bestaetigt"; Merker der Meldewege:
+        #                                          mqtt_face/mqtt_ende (MM3), video (PW3), melden/ohne_name (PW5)}
         self.auftritte = 0
         # Live-Umbau 31.08.: bester Crop DIESES Auftritts fuer den Kalibrier-
         # Vorrat (geschrieben wird EINMAL, am Auftritts-Ende — Schreiben kostet
@@ -3505,6 +3824,9 @@ class Kachel:
         # der Zeitpunkt des letzten create (Frequenz-Deckel je Kamera+Person).
         self.fr_offen = {}                       # person -> event_id
         self.fr_letzte = {}                      # person -> mono
+        # PW2 (Bauplan push_melden, E1 Fassung 1.5): Namenspause je Person auf diesem Waechter; Engine-Zeit der
+        # letzten Freigabe ueber Push, gelesen und geschrieben nur in Engine._namens_meldung.
+        self.name_push_at = {}                   # person -> mono
 
 
 class Melder:
@@ -3512,10 +3834,15 @@ class Melder:
     Objekt. Kanalausfall ist nie Waechterausfall: jeder Weg faengt selbst,
     der Aufrufer drosselt die Fehlerzeilen. Der Harnisch stubbt diese Klasse.
 
-    Waechter-Kennung im Titel (Invariante §6): EIN Literal WATCHER_TITEL fuer
-    Pushover-Titel UND Telegram-Caption, damit die vorlaeufige Waechter-Meldung
-    nie mit dem bestaetigten suslik-Urteil verwechselt wird. herkunft ist
-    IMMER `live_wache` (core.registry.MELDE_HERKUNFT; MQTT-Feld traegt sie).
+    Titel (Invariante §6, nach E13, seit PW5 nach E14 und E17 des Bauplans push_melden):
+    Namens-, Sammel- und Unbekannt-Meldung tragen bei Pushover als Titel und bei Telegram
+    als erste Zeile die Zeilen aus `_titel`, das Video (nur Telegram) als erste Zeile (beim
+    ersten Gesicht geht seit PW5 keine Push-Meldung mehr raus), Stoerungsmeldungen einer
+    Kachel die Kennung WATCHER_TITEL (engineweite Stoerungen `suslik-Stoerung`,
+    core/melden.py). So bleibt die vorlaeufige Waechter-Meldung vom
+    bestaetigten Urteil des Dienstes (Titel `meldung.person.titel`)
+    unterscheidbar. herkunft ist IMMER `live_wache`
+    (core.registry.MELDE_HERKUNFT; MQTT-Feld traegt sie).
 
     SPRACH-STUFE 4: diese Klasse IST der Alert-Pfad des Live-Waechters —
     Eintrittspunkt (c) der Sprachaufloesung (konzept_sprache.md §2). Sie
@@ -3538,42 +3865,51 @@ class Melder:
         if self.pub is None and self.pub_fabrik is not None:
             self.pub = self.pub_fabrik()
 
-    def push(self, kamera, text, bild=None, titel_schluessel=None):
+    def push(self, kamera, text, bild=None, titel_schluessel=None, namen=None):
+        """Namens-, Sammel- oder Unbekannt-Meldung ueber Pushover, Titel nach E13 und E17 (PW2, PW5, Bauplan push_melden).
+        -> Rueckgabe von melden.push (True nur bei Annahme)"""
         from core import melden
         _sprache.aktivieren()                     # Eintrittspunkt (c)
-        # .412: die Namens-Meldung (Stufe 2, Stil 'worte') bringt ihren
-        # eigenen Titel-Schluessel mit ("…: erkannt"); ohne bleibt es der
-        # Trigger-Titel "…: Person entdeckt".
-        # Beide Titel als sichtbare t()-Literale (Sprach-Deckungs-Scan des Gates
-        # liest nur die Form t("…")); ein fremder Schluessel faellt auf den
-        # Trigger-Titel zurueck — nie ein dritter Titel.
-        if titel_schluessel == TITEL_ERKANNT:
-            titel = _sprache.t("meldung.wache.titel_erkannt",
-                               wache=WATCHER_TITEL, kamera=kamera)
-        else:
-            titel = _sprache.t("meldung.wache.titel_person",
-                               wache=WATCHER_TITEL, kamera=kamera)
-        return melden.push(self.cfg, titel, text, attachment=bild, herkunft=HERKUNFT)
+        return melden.push(self.cfg, self._titel(kamera, titel_schluessel, namen), text, attachment=bild,
+                           herkunft=HERKUNFT)
 
-    def telegram(self, kamera, video, text, bild=None):
+    def telegram(self, kamera, video, text, bild=None, titel_schluessel=None, namen=None, nur_video=False):
+        """Dieselbe Meldung ueber Telegram: die Zeile nach E13 als erste Zeile der Beschriftung, darunter der Text;
+        ein leerer Text gibt nur die Zeile. `nur_video` (PW3) reicht an telegram_video durch: nur das Video, ohne
+        Rueckfall auf Foto oder Text. -> Rueckgabe von melden.telegram_video (True nur bei Annahme)"""
         from core import melden
         _sprache.aktivieren()                     # Eintrittspunkt (c)
-        return melden.telegram_video(self.cfg, video,
-                                     _sprache.t("meldung.wache.caption",
-                                                wache=WATCHER_TITEL,
-                                                kamera=kamera, text=text),
-                                     crop=bild, herkunft=HERKUNFT)
+        zeile = self._titel(kamera, titel_schluessel, namen)
+        return melden.telegram_video(self.cfg, video, f"{zeile}\n{text}" if text else zeile,
+                                     crop=bild, herkunft=HERKUNFT, nur_video=nur_video)
 
-    def mqtt(self, kamera, payload):
+    @staticmethod
+    def _titel(kamera, titel_schluessel, namen):
+        """Die Zeile nach E13 (PW2) und E17 (PW5): niemand erkannt, ein Name oder mehrere Namen, mit der Kamera.
+        -> str in der aktiven Sprache; ein fremder Schluessel oder fehlende Namen geben die Zeile fuer niemand erkannt"""
+        # Alle Zeilen als sichtbare t()-Literale (der Sprach-Deckungs-Scan liest nur die Form t("…")). Bei mehreren
+        # Namen stehen alle bis auf den letzten durch Komma getrennt vor dem Bindewort der Sprache.
+        namen = list(namen or ())
+        if titel_schluessel == TITEL_NAMEN and len(namen) >= 2:
+            return _sprache.t("meldung.wache.titel_namen", erste=", ".join(namen[:-1]), letzter=namen[-1],
+                              kamera=kamera)
+        if titel_schluessel == TITEL_ERKANNT and namen:
+            return _sprache.t("meldung.wache.titel_erkannt", name=namen[0], kamera=kamera)
+        return _sprache.t("meldung.wache.titel_unbekannt", kamera=kamera)
+
+    def mqtt(self, kamera, payload, log=None):
         from core import melden
         t = melden.topic(self.cfg, f"live/{kamera}")
         # Retained: nein — ein Trigger ist ein Ereignis, kein Zustand (§6).
-        return melden.mqtt_pub(self.pub, self.log, t,
+        # `log` (MM2): der Sendefaden faengt die Ablehnungszeile von mqtt_pub und meldet sie gedrosselt selbst.
+        return melden.mqtt_pub(self.pub, log or self.log, t,
                                json.dumps(payload, ensure_ascii=False),
                                retain=False, herkunft=HERKUNFT)
 
     def stoerung_kachel(self, kamera, text, kanaele):
-        """Stoerung/Entwarnung EINES Waechters ueber SEINE Kanaele (§11 E2).
+        """Stoerung/Entwarnung EINES Waechters ueber SEINE Push-Kanaele (§11 E2).
+        MQTT laeuft seit MM2 (Bauplan mqtt_melden) nicht mehr hier, sondern
+        ueber den Sendefaden der Engine (Engine._stoerung_senden).
         -> (gesendet, fehler): Kanaele, die die Meldung ANGENOMMEN haben
         (Baustein B: nur die landen im Melde-Protokoll/den Dienst-Zaehlern),
         und Fehlertexte. Der Engine-Aufrufer parst tolerant — Harnisch-Stubs
@@ -3605,13 +3941,6 @@ class Melder:
                     gesendet.append("telegram")
             except Exception as e:
                 fehler.append(f"telegram: {e}")
-        if "mqtt" in kanaele:
-            try:
-                if self.mqtt(kamera, {"ts": round(time.time(), 1),
-                                      "kamera": kamera, "stoerung": text}):
-                    gesendet.append("mqtt")
-            except Exception as e:
-                fehler.append(f"mqtt: {e}")
         return gesendet, fehler
 
     def stoerung_global(self, text):
@@ -3684,6 +4013,10 @@ class Engine:
         self._mess_start_mono = None  # offenes Ein-Stream-RSS-Messfenster
         self.fr_queue = None          # Frigate-Manual-Events, bei Bedarf beim
         #                               Start oder Nachladen gebaut
+        # MM2 (Bauplan mqtt_melden, V5): EINE Sendeschlange fuer alle Waechter und ein
+        # Sendefaden live-mqtt, gestartet mit dem MQTT-Weg (_ensure_notification_paths).
+        self._mqtt_q = queue.SimpleQueue()
+        self._mqtt_thread = None
         # --- Phase 2: Store-Reload + Auftrags-Strecke (Quelltest/Last-Messung)
         self.config_quelle = config_quelle    # callable -> frische cfg (livewached)
         self.store_pfad = store_pfad          # Config-Store-Datei (Mtime-Wache)
@@ -3708,7 +4041,7 @@ class Engine:
         self._det_lock = threading.Lock()
 
     def _ensure_notification_paths(self):
-        """Sichert beide Meldewege fuer die wirksamen eingeschalteten Waechter.
+        """Sichert beide Meldewege fuer die wirksamen eingeschalteten Waechter, bei MQTT samt Sendefaden.
         -> None; einmal angelegte Wege bleiben bis zum Stoppen bestehen.
         """
         # Frigate-Manual-Events (31.08.): der Hintergrund-Schreiber laeuft NUR,
@@ -3727,6 +4060,79 @@ class Engine:
         if any("mqtt" in g["kanaele"] for g in self.guards.values() if g["enabled"]):
             if hasattr(self.melder, "ensure_publisher"):
                 self.melder.ensure_publisher()
+            if self.melder:
+                self._mqtt_start()
+
+    def _mqtt_start(self):
+        """Startet den Sendefaden live-mqtt einmal je Engine (nicht in self.threads; stop() beendet ihn eigens).
+        -> None; ein schon gestarteter Faden bleibt."""
+        if self._mqtt_thread is not None:
+            return
+        self._mqtt_thread = threading.Thread(target=self._mqtt_loop, name="live-mqtt", daemon=True)
+        self._mqtt_thread.start()
+
+    def _mqtt_on(self, k):
+        """Meldet dieser Waechter ueber MQTT (Kanal mqtt und ein Melder da, V5)?
+        -> bool"""
+        return "mqtt" in k.cfg["kanaele"] and bool(self.melder)
+
+    def _mqtt_loop(self):
+        """Sendefaden (V5): holt einen Eintrag und alles Wartende, gibt alle an Melder.mqtt, schreibt danach die
+        Journalzeilen der angenommenen. -> None; endet an der Endmarke None, ein Fehler kostet nur seinen Eintrag."""
+        while True:
+            runde = [self._mqtt_q.get()]
+            while True:
+                try:
+                    runde.append(self._mqtt_q.get_nowait())
+                except queue.Empty:
+                    break
+            ende = None in runde
+            if ende:
+                runde = runde[:runde.index(None)]   # was hinter der Endmarke liegt, geht nicht mehr raus
+            angenommen = []
+            for e in runde:
+                try:                              # try je Eintrag: ein Fehler kostet nur ihn
+                    if self._mqtt_publish(e["k"], e["payload"]):
+                        angenommen.append(e)
+                except Exception as ex:
+                    self._fehler_log(("mqtt", "sendefaden"), f"MQTT entry skipped: {type(ex).__name__}: {ex}",
+                                     stufe=_logbuch.ERROR)
+            for e in angenommen:
+                if e["journal"] is not None:
+                    self._mqtt_journal(e["k"], e["journal"])
+            if ende:
+                return
+
+    def _mqtt_publish(self, k, payload):
+        """Gibt eine Meldung an Melder.mqtt; zaehlt eine Ablehnung und meldet sie gedrosselt (V6).
+        -> True nur, wenn die Bibliothek sie angenommen hat"""
+        gefangen = []
+        try:
+            if self.melder.mqtt(k.name, payload, log=_logbuch.CatchLogger(gefangen.append)):
+                return True
+            ursache = gefangen[-1].removeprefix("!! ") if gefangen else "no publisher"
+        except Exception as e:
+            ursache = f"{type(e).__name__}: {e}"
+        k.mqtt_rejected += 1
+        self._fehler_log(("mqtt", k.name),
+                         f"{k.name}: MQTT {payload.get('event')} rejected ({ursache}); "
+                         f"{k.mqtt_rejected} rejected since start", stufe=_logbuch.ERROR)
+        return False
+
+    def _mqtt_journal(self, k, line):
+        """Schreibt nach der Annahme die mqtt-Journalzeile einer Meldung (V7); Text und Bildname rechnet erst
+        dieser Faden. -> None; ein Fehler kostet nur diese Zeile (gedrosselte Logzeile)."""
+        try:
+            zusatz = ""
+            if line.get("text"):
+                _sprache.aktivieren()             # Eintrittspunkt (c), wie im Meldefaden
+                zusatz = line["text"]()
+            bild = os.path.join(self.live_dir, k.name, line["datei"]()) if line.get("datei") else ""
+            self._melde_protokoll(k.name, line["art"], "mqtt", zusatz=zusatz,
+                                  person=line.get("person") or "", bild=self._bild_rel(bild))
+        except Exception as e:
+            self._fehler_log(("melde_protokoll",), f"notification log failed: {type(e).__name__}: {e}",
+                             stufe=_logbuch.ERROR)
 
     def start(self):
         """Kacheln nach Riegel + Slot-Pruefung starten; Threads hochziehen.
@@ -3807,6 +4213,16 @@ class Engine:
                 t.join(timeout=10)
             except RuntimeError:
                 pass                       # Signal traf zwischen append und start (K11)
+        if self._mqtt_thread is not None:
+            # MM2 (V8): die Erzeuger sind eingesammelt; was vor der Endmarke wartet, geht noch an die
+            # Bibliothek. Grenze: laeuft das Einsammeln in den Deckel, gehen die restlichen Eintraege verloren.
+            # MM3 (E1): vor der Endmarke die Enden offener Auftritte, ohne k.auftritt zu leeren.
+            for k in list(self.kacheln.values()):
+                with k.lock:
+                    if k.auftritt is not None:
+                        self._appearance_end(k, k.auftritt, MQTT_END_STOPPED)
+            self._mqtt_q.put(None)
+            self._mqtt_thread.join(timeout=10)
         with self._melde_lock:
             offene = list(self._melde_threads)
         for t in offene:
@@ -3970,6 +4386,21 @@ class Engine:
         if k is None:
             return
         k.stop_ev.set()
+        # MM3 (E1): das Ende mit reason stopped; k.auftritt bleibt stehen, damit Trigger- und Namenssperren
+        # gelten und ein nachlaufender _befund keinen neuen Auftritt beginnt (Codex Runde 2 an Fassung 2.1, B3).
+        versand = None
+        with k.lock:
+            if k.auftritt is not None:
+                self._appearance_end(k, k.auftritt, MQTT_END_STOPPED)
+                # PW3 (E4, PV5 Senden): auch der Stopp beendet den Auftritt. Ist das Video schon fertig, geht es
+                # jetzt raus; laeuft die Aufnahme noch, bricht sie am gesetzten stop_ev ab (kein Video).
+                job = k.auftritt.get("video")
+                if job is not None and not job["ende"]:
+                    job["ende"] = True
+                    if job["fertig"] and not job["gesendet"]:
+                        job["gesendet"], versand = True, job
+        if versand is not None:
+            self._thread_starten(f"live-melde-{name}", lambda: self._video_senden(k, versand))
         k.zustand = "gestoppt"
         k.zustand_grund = grund
         self._klog(k, f"WATCH STOP ({grund})")
@@ -4094,7 +4525,10 @@ class Engine:
                 self._kachel_stoppen(name, "source changed — restarting")
                 self._kachel_aufnehmen(name, g)
                 continue
-            leichte = ("ende_ohne_gesicht_s", "wieder_scharf_s", "kanaele")
+            leichte = ("ende_ohne_gesicht_s", "wieder_scharf_s", "kanaele",
+                       "pushover_image", "telegram_image", "telegram_video", "video_s",
+                       "pushover_known", "pushover_unknown", "telegram_known", "telegram_unknown",
+                       "unknown_with_known")
             if any(k.cfg.get(f) != g.get(f) for f in leichte):
                 self._klog(k, "config applied without restart "
                               "(times/channels/quick verdict)")
@@ -4247,8 +4681,13 @@ class Engine:
                         with k.lock:
                             k.stack.tick(mono)
                             burst_aktiv = k.stack.door.active(k.bilder - 1)
-                            pruefen = burst_aktiv or (k.bilder - 1) % _rechnung.sample_step(self.cfg, steck["fps"]) == 0
+                            # PW3 (PV5): Rasterbilder gehen vor Drossel, Messpause und Bewegungstor an eine laufende
+                            # Aufnahme; ohne Aufnahme kostet das nur die Abfrage in _video_frame.
+                            raster = (k.bilder - 1) % _rechnung.sample_step(self.cfg, steck["fps"]) == 0
+                            pruefen = burst_aktiv or raster
                             auftritt_aktiv = k.auftritt is not None
+                            if raster:
+                                self._video_frame(k, mono, yuv)
                         if not pruefen:
                             continue
                         # Ueberlast-Drossel NUR fuer den Normaltakt (§7-Auflage):
@@ -4726,21 +5165,23 @@ class Engine:
         with self._det_lock:
             names_allowed = self.detektor.allows_names(result.generation)
         with k.lock:
-            if not burst:
-                k.rueckblick.append((mono, frame))
             decision = k.stack.add(result, frame, mono)
             k.stack.door.report(index, result.rows, decision, result.limits, burst and k.stack.door.active(index))
             if not echte:
                 return
             k.funde += len(echte)
-            if k.auftritt is None:
+            neuer_auftritt = k.auftritt is None
+            if neuer_auftritt:
                 k.auftritte += 1
                 wand = round(self.wanduhr(), 1)
                 k.auftritt = {"seit_mono": mono, "letzter_fund_mono": mono,
-                              "funde": 0, "trigger": 0, "genannt": set(),
+                              "funde": 0, "trigger": 0, "genannt": {},
                               "start_ts": wand, "letzter_fund_ts": wand}
-                self._klog(k, f"appearance #{k.auftritte} started", stufe=_logbuch.DEBUG)
             a = k.auftritt
+            # PW5 (E14, E16): gueltige Gesichter ohne Namensstimme, aus den Zaehlern, die der Stapel schon fuehrt;
+            # einmal gesetzt bleibt das Merkmal im Auftritt, auch wenn das Fenster des Stapels neu beginnt.
+            if decision["diagnose"]["gueltig"] > decision["diagnose"]["stimmen"]:
+                a["ohne_name"] = True
             a["letzter_fund_mono"], a["letzter_fund_ts"] = mono, round(self.wanduhr(), 1)
             a["funde"] += len(echte)
             trigger = next((f for f in echte if _stapel.gueltig(f, result.limits)), None) if not a["trigger"] else None
@@ -4748,19 +5189,100 @@ class Engine:
             if names_allowed:
                 for person in decision["namen"]:
                     if person not in a["genannt"]:
+                        from core import vertrauen as _vt
                         cos, box, bild = k.stack.best[person]
                         feuern.append((person, decision["je_name"][person]["stimmen"], cos, box, bild))
-                        a["genannt"].add(person)
+                        # MM3: genannt haelt Name -> Stufe beim Kippen, im Auftritt eingefroren und in
+                        # Einfuegefolge; die Namensliste der MQTT-Meldungen liest sie von hier.
+                        a["genannt"][person] = _vt.stufe(cos, self.win_thresh)
             anw = self._anw_auftrag(a) if feuern else None
+            # MM2 (Bauplan mqtt_melden, V4/V5): MQTT kommt in die Sendeschlange, bevor Bild, Kameralog,
+            # Frigate, Video oder Push angefasst werden; die Zeile zum Auftrittsbeginn deshalb erst danach.
+            data = self._frame_messages(k, a, trigger, feuern, names_allowed, result.limits, mono)
+            if neuer_auftritt:
+                self._klog(k, f"appearance #{k.auftritte} started", stufe=_logbuch.DEBUG)
         self._kalib_kandidat(k, frame, echte[0])
-        self._namens_feuer_liste(k, feuern, anw=anw)
+        self._namens_feuer_liste(k, feuern, data["wand"] if data else None, anw=anw,
+                                 namen=data["namen"] if data else None)
         if trigger is not None:
-            self._trigger(k, trigger, frame, mono, names_allowed, result.limits["stapel_abstand"])
+            self._trigger(k, trigger, frame, mono, data)
+
+    def _frame_messages(self, k, a, trigger, feuern, names_allowed, limits, mono):
+        """Bucht den Gesichts-Trigger und reiht die MQTT-Meldungen dieses Bildes in V4-Folge ein (unter k.lock).
+        -> dict mit wand, namen (je neuem Name die Namensliste wie faces) und beim Trigger Nummer, Spanne, Payload,
+        Schnell-Urteil; None ohne Neues"""
+        if trigger is None and not feuern:
+            return None                       # H2: nichts Neues, keine Uhr, keine Vorberechnung
+        wand = self.wanduhr()
+        data, eintraege = {"wand": wand}, []
+        if trigger is not None:
+            a["trigger"] += 1
+            a["mensch_bestaetigt"] = True
+            spanne = mono - a["seit_mono"]
+            k.trigger += 1
+            t_nr, score = k.trigger, trigger["det"]
+            u_text, u_person, u_urteil = preliminary_name(trigger, names_allowed, self.win_thresh,
+                                                          limits["stapel_abstand"])
+            payload = {"ts": round(wand, 1), "kamera": k.name, "score": round(score, 3), "bild_anzahl": 1}
+            if u_text:
+                # .190: person ALS FELD (Today-Kartenreihe + MQTT-Konsumenten) —
+                # None bei "unknown"; das preliminary-Flag bleibt die Wahrheit.
+                payload["schnell_urteil"] = {"text": u_text, "preliminary": True, "person": u_person}
+            payload["event"] = MQTT_FACE_FOUND
+            data.update(t_nr=t_nr, spanne=spanne, payload=payload, u_text=u_text, u_urteil=u_urteil)
+            eintraege.append({"k": k, "payload": payload, "journal": {
+                "art": "alert", "person": u_person,
+                "text": lambda: meldetext_trigger(self.cfg, 1, spanne, score, spanne * 1000.0, u_text, u_urteil),
+                "datei": lambda: trigger_image_name(image_stamp(wand), t_nr)}})
+        # MM3 (V2, V4): die neuen Namen dieses Bildes stehen in Folge von feuern am Ende von genannt. Die Liste
+        # je Name ist eine Momentaufnahme aus dieser Einfuegefolge: alle Namen vor diesem Bild und die neuen bis
+        # einschliesslich des aktuellen (Codex Runde 1 an Fassung 2, B2).
+        genannt = list(a["genannt"].items())
+        n_alt = len(genannt) - len(feuern)
+        data["namen"] = {}                    # PW2 (E8): je neuem Name die Namensliste fuer die Sammelmeldung
+        for nr, (person, stimmen, cos, _box, _bild) in enumerate(feuern):
+            bisher = genannt[:n_alt + nr + 1]
+            data["namen"][person] = [n for n, _s in bisher]
+            # "stufe" ADDITIV (.249, User-Auflage: bestehende Schluessel
+            # byte-gleich — HA-Skripte duerfen nie brechen); MM3: die beim Kippen eingefrorene Stufe.
+            payload = {"ts": round(wand, 1), "kamera": k.name, "art": "name",
+                       "schnell_urteil": {"person": person, "cosine": round(cos, 3), "stimmen": stimmen,
+                                          "preliminary": True, "stufe": a["genannt"][person]},
+                       "event": MQTT_FACE_RECOGNIZED}
+            eintraege.append({"k": k, "payload": payload, "journal": {
+                "art": "alert", "person": person,
+                "text": lambda p=person, c=cos, n=stimmen: meldetext_name(self.cfg, p, c, n, self.win_thresh)[1],
+                "datei": lambda p=person: namensbild_datei(image_stamp(wand), p)}})
+            eintraege.append({"k": k, "journal": None, "payload": {
+                "ts": round(wand, 1), "kamera": k.name,
+                "faces": [{"name": n, "stufe": s} for n, s in bisher],
+                "event": MQTT_FACES_RECOGNIZED}})
+        # MM3 (E1): ein gestoppter Waechter reiht nichts mehr ein; der uebrige _befund laeuft wie heute
+        # (Codex Runde 1 an Fassung 2, B3).
+        if self._mqtt_on(k) and not k.stop_ev.is_set():
+            for e in eintraege:
+                self._mqtt_q.put(e)
+            if trigger is not None:
+                a["mqtt_face"] = True         # nur ein uebergebenes face_found bekommt ein Ende (V3)
+        return data
+
+    def _appearance_end(self, k, a, reason):
+        """Reiht unter k.lock das Ende eines Auftritts ein, wenn dessen face_found uebergeben wurde (V2, V3, V9).
+        -> None; mqtt_ende im Auftritt verhindert ein zweites Ende, auch wenn Stopp und Zeitgrenze zusammenfallen."""
+        if not a.get("mqtt_face") or a.get("mqtt_ende") or not self._mqtt_on(k):
+            return
+        self._mqtt_q.put({"k": k, "journal": None, "payload": {
+            "ts": round(self.wanduhr(), 1), "kamera": k.name,
+            "faces": [{"name": n, "stufe": s} for n, s in a["genannt"].items()],
+            "duration_s": round(a["letzter_fund_mono"] - a["seit_mono"], 1),
+            "reason": reason, "event": MQTT_APPEARANCE_ENDED}})
+        a["mqtt_ende"] = True
 
 
-    def _namens_feuer_liste(self, k, feuern, anw=None):
-        """Meldet gekippte Namen mit dem Bild und der Box ihrer besten gueltigen Stimme.
-        -> None; ein Fehler am Anzeigebild kostet keine Namensmeldung.
+    def _namens_feuer_liste(self, k, feuern, wand, anw=None, namen=None):
+        """Meldet gekippte Namen mit dem Bild und der Box ihrer besten gueltigen Stimme (MQTT ist schon eingereiht).
+        -> None; ein Fehler am Anzeigebild kostet keine Namensmeldung; `wand` gibt den Bildnamen, `namen` je Name
+        die Namensliste fuer die Sammelmeldung (PW2, E8).
         """
         if not feuern:
             return
@@ -4770,7 +5292,7 @@ class Engine:
             except Exception as e:
                 self._kachel_fehler(k, "image", f"{type(e).__name__}; notification without evidence image")
                 frame = None
-            self._namens_meldung(k, person, stimmen, cos, frame, box=box)
+            self._namens_meldung(k, person, stimmen, cos, frame, wand, box=box, namen=(namen or {}).get(person))
         if anw:
             personen = [p for p, _n, _c, _b, _f in feuern]
             self._thread_starten(f"live-anw-{k.name}",
@@ -4792,34 +5314,36 @@ class Engine:
             _anw.markieren(self.cfg, p, von, bis, k.name, "live",
                            log=_logbuch.Adapter(self._klog, k))
 
-    def _namens_meldung(self, k, person, stimmen, cos, frame, box=None):
+    def _namens_meldung(self, k, person, stimmen, cos, frame, wand, box=None, namen=None):
         """Die Namens-Meldung der zweiten Stufe: eigene Nachricht NEBEN der
         Anwesenheits-Meldung.
 
-        .319 MELDE-ANKER AUCH HIER (User 22.08., gemessen): bis dahin galt die
-        Karenz der Stufe 1 hier bewusst NICHT — mit der Begruendung, der Name
-        sei "genau EINE zusaetzliche Nachricht je Auftritt und Person" (das
-        Einmal-Tor haelt _namens_stimmen ueber a['genannt']). Im Betrieb stimmt
-        das nicht: das Tor gilt je AUFTRITT, und derselbe Mensch erzeugt auf
-        derselben Kamera viele Auftritte hintereinander. Gemessen an
-        verify_data/live/meldungen.jsonl (1030 Pushover, 13.-22.08.): die
-        Namens-Meldung lief an der Drossel vorbei, weil _namens_pending_feuern
-        VOR der melde_erlaubt-Pruefung des Triggers laeuft. Mit demselben Anker
-        blieben 494 statt 1030 Meldungen (-52 %) — mehr Wirkung als jedes
-        Sammelfenster, ohne Verzoegerung und ohne neuen Config-Wert.
+        .319 (User 22.08., gemessen): derselbe Mensch erzeugt auf derselben
+        Kamera viele Auftritte hintereinander; ohne Pause ging sein Name bei
+        jedem Auftritt ueber Push raus (1030 Pushover, 13.-22.08.).
+        PW2 (Bauplan push_melden, E1 Fassung 1.5, Eigentuemer 09.11.2026):
+        die Pause gilt je Person und Waechter, nicht mehr ueber den Anker der
+        Gesichtsmeldung. Ein Name geht ueber Push raus, wenn er auf diesem
+        Waechter noch nie oder vor mindestens wieder_scharf_s Sekunden
+        freigegeben wurde (k.name_push_at, wie fr_letzte beim Frigate-Deckel);
+        0 heisst keine Pause, nach dem Stopp des Waechters nie. Die Freigabe
+        (Push frei, Push-Kanal gewaehlt, Melder da) setzt die Pause dieser
+        Person; die Pause des Waechters (k.melde_bis_mono) gilt fuer Namen
+        nicht und wird hier nicht gesetzt. Hat `namen` (die Namensliste des
+        Auftritts, E8) zwei oder mehr Namen, folgt im selben Faden die
+        Sammelmeldung: dieselbe Entscheidung, nur Push-Kanaele, kein Bild,
+        keine Journalzeile.
         GEDROSSELT WIRD NUR DER VERSAND an die Push-Kanaele. Nicht gedrosselt:
         (a) MQTT — Home Assistant liest verifyd/live/<kamera> und die
         Additiv-Invariante verbietet, bestehende Ereignisse wegfallen zu
         lassen; (b) das Melde-Protokoll — die Live-Sicht und die Today-Zaehler
-        zehren daraus, sie duerfen keine Auftritte verlieren. Der Anker ist
-        derselbe wie beim Trigger (k.melde_bis_mono / wieder_scharf_s je
-        Kachel, melde_erlaubt) — bewusst KEIN dritter Drossel-Begriff
-        (qs_ebenen-Regel gegen verstreute Literale).
+        zehren daraus, sie duerfen keine Auftritte verlieren (none-Zeile).
 
         SPRACH-STUFE 4: der Meldetext ist sprachfaehig (Eintrittspunkt (c)).
-        Der MQTT-Payload unten bleibt byte-gleich — er traegt nur Kennungen
-        (person/cosine/stimmen/preliminary/stufe), keinen Anzeigetext; genau
-        deshalb ist diese Meldung teilbar, das Schnell-Urteil (§ oben) nicht.
+        Der MQTT-Payload traegt nur Kennungen (person/cosine/stimmen/
+        preliminary/stufe), keinen Anzeigetext; seit MM2 (Bauplan
+        mqtt_melden) baut ihn _frame_messages und reiht ihn VOR dieser
+        Nacharbeit ein, hier laufen nur noch Pushover und Telegram.
         Der Text landet zusaetzlich im Melde-Protokoll (`zusatz`), das die
         UI nur ANZEIGT (html.escape, gekappt) — dort steht kuenftig die
         Sprache, in der wirklich gemeldet wurde."""
@@ -4840,38 +5364,31 @@ class Engine:
         # alten Verhalten.
         if not self.melder and k.cfg["kanaele"]:
             return
-        # .412 (User 02.09.): Stil 'worte' = Titel "…: erkannt" + NUR der
-        # Name; Stil 'worte_zahlen' = .249-Satz mit Wortstufe/Stimmen + Rohzahl
-        # (meldetext_name, im Gate je Sprache geprueft). Der Titel-Schluessel
-        # wandert ueber _kanal_senden an den Pushover-Weg; Telegram-Caption
-        # traegt denselben Text, MQTT-Payload unten unveraendert.
-        from core import vertrauen as _vt
+        # .412 (User 02.09.): Stil 'worte' = NUR der Name; Stil 'worte_zahlen'
+        # = .249-Satz mit Wortstufe/Stimmen + Rohzahl (meldetext_name, im Gate
+        # je Sprache geprueft). PW2 (E13): der Titel-Schluessel ist in beiden
+        # Stilen TITEL_ERKANNT und wandert mit dem Namen ueber _kanal_senden an
+        # Pushover (Titel) und Telegram (erste Zeile der Beschriftung).
         _titel_key, text = meldetext_name(self.cfg, person, cos, stimmen,
                                           self.win_thresh)
+        # Abnahme 09.11.2026 09:10:57: im Stil 'worte' wiederholte die zweite Telegram-Zeile nur die Namen der Zeile
+        # nach E13; Telegram bekommt dort bei Namens- und Sammelmeldung nur die Zeile. Pushover braucht einen Text.
+        nur_zeile = alert_stil(self.cfg) != STIL_WORTE_ZAHLEN
         bild = None
+        # PW1 (Bauplan push_melden, Fix-Stelle 6): das Namensbild mit Kasten bleibt als Verweis fuer den
+        # Meldefaden stehen, auch wenn die Ablage scheitert.
+        gross = bild_mit_box(frame, box) if frame is not None else None
         ablage = self._ablage_sichern(k)
-        if ablage and frame is not None:   # W0: Ende-Feuern ohne Frame-Rueckfall meldet ohne Bild
-            stempel = time.strftime("%Y%m%d_%H%M%S",
-                                    time.localtime(self.wanduhr()))
+        if ablage and gross is not None:   # W0: Ende-Feuern ohne Frame-Rueckfall meldet ohne Bild
             # .313: die Fundstelle sichtbar machen — Rechteck um die Box des
             # besten Fundes (vorher: unmarkiertes Vollbild, bei 20-px-Gesichtern
             # sah der Nutzer einen leeren Garten).
             # .413: Dateiname aus namensbild_datei — DIESER Name ist das
             # einzige Merkmal, an dem die Anzeige Stufe 2 von Stufe 1 trennt
-            # (ist_namensmeldung liest denselben Vertrag).
+            # (ist_namensmeldung liest denselben Vertrag). MM2: derselbe
+            # Name wie in der mqtt-Journalzeile des Sendefadens (image_stamp(wand)).
             bild = self._bild_schreiben(
-                k, os.path.join(ablage, namensbild_datei(stempel, person)),
-                bild_mit_box(frame, box))
-        payload = {"ts": round(self.wanduhr(), 1), "kamera": k.name,
-                   "art": "name",
-                   # "stufe" ADDITIV (.249, User-Auflage: bestehende
-                   # Schluessel byte-gleich — HA-Skripte duerfen nie brechen).
-                   "schnell_urteil": {"person": person,
-                                      "cosine": round(cos, 3),
-                                      "stimmen": stimmen,
-                                      "preliminary": True,
-                                      "stufe": _vt.stufe(cos,
-                                                         self.win_thresh)}}
+                k, os.path.join(ablage, namensbild_datei(image_stamp(wand), person)), gross)
         if not k.cfg["kanaele"]:
             # .245: Journal-Zeile statt Versand — EINE Zeile, kanal 'none'
             # (nie aus Config waehlbar, KANAELE_ERLAUBT bleibt ohne 'none').
@@ -4879,25 +5396,52 @@ class Engine:
                                   person=person, bild=self._bild_rel(bild))
             return
 
-        # .319: Push-Kanaele nur, wenn der Melde-Anker offen ist; MQTT immer.
-        # Der Anker wird hier NICHT neu gesetzt — das bleibt allein Sache des
-        # Triggers (_trigger), sonst verschoebe eine Namens-Meldung die Ruhe
-        # der Stufe 1 und die beiden Stufen wuerden sich gegenseitig
-        # aushungern. Gelesen wird derselbe Wert, den der Trigger setzt.
+        # PW2 (E1 Fassung 1.5): Push-Kanaele nur ausserhalb der Namenspause dieser Person auf diesem Waechter;
+        # MQTT immer (seit MM2 schon vorher eingereiht, _frame_messages). k.melde_bis_mono bleibt Sache von _trigger.
         mono_jetzt = self.jetzt()
-        push_offen = melde_erlaubt(k, mono_jetzt)
+        pause = k.cfg["wieder_scharf_s"]
+        letzte = k.name_push_at.get(person)
+        gestoppt = k.stop_ev.is_set()
+        push_offen = not gestoppt and (not pause or letzte is None or mono_jetzt - letzte >= pause)
         if not push_offen:
-            self._klog(k, f"NAME [{person}]: push suppressed, quiet for "
-                          f"{k.melde_bis_mono - mono_jetzt:.0f} s more "
+            grund = ("watcher stopped" if gestoppt
+                     else f"quiet for {letzte + pause - mono_jetzt:.0f} s more for this name")
+            self._klog(k, f"NAME [{person}]: push suppressed, {grund} "
                           f"(MQTT and journal unaffected)", stufe=_logbuch.WARNING)
+        # MM2: der Faden sendet nur Pushover und Telegram in Listenfolge; er startet nur,
+        # wenn ein Push-Kanal zu senden oder eine 'none'-Zeile faellig ist.
+        # PW5 (E14): nur Kanaele mit <kanal>_known. Bleibt keiner und steht MQTT nicht in kanaele, schreibt der Faden
+        # eine 'none'-Zeile wie im kanallosen Fall, damit die Live-Sicht den Namen nicht verliert.
+        senden = ([kanal for kanal in k.cfg["kanaele"] if kanal != "mqtt" and k.cfg[f"{kanal}_known"]]
+                  if push_offen else [])
+        ohne_kanal = push_offen and not senden
+        if ohne_kanal and "mqtt" in k.cfg["kanaele"]:
+            return
+        if senden:
+            k.name_push_at[person] = mono_jetzt  # Freigabe: Push frei, Push-Kanal gewaehlt, Melder da
+        sammel = list(namen) if senden and namen and len(namen) >= 2 else None
+        mit_bild = [kanal for kanal in senden if k.cfg[f"{kanal}_image"]]
+        if not mit_bild:
+            gross = None                     # kein Kanal will das Bild: der Faden haelt es nicht
 
         def job():
-            for kanal in k.cfg["kanaele"]:
-                if kanal != "mqtt" and not push_offen:
-                    continue                  # gedrosselt: nur der Versand
+            nonlocal gross
+            klein = None
+            if gross is not None:            # PW1 (PV2): einmal kodieren, Verweis freigeben, aus dem Speicher senden
                 try:
-                    if self._kanal_senden(k, kanal, text, bild, None, payload,
-                                          titel_schluessel=_titel_key):
+                    klein = notification_jpeg(gross)
+                    fehler = "" if klein else "imencode=False"
+                except Exception as e:
+                    fehler = f"{type(e).__name__}: {e}"
+                gross = None
+                if fehler:
+                    self._fehler_log(("push_bild", k.name), f"live {k.name}: notification image failed "
+                                     f"({fehler}) — sent without image", stufe=_logbuch.ERROR)
+            for kanal in senden:
+                try:
+                    if self._kanal_senden(k, kanal, "" if nur_zeile and kanal == "telegram" else text,
+                                          klein if kanal in mit_bild else None,
+                                          titel_schluessel=_titel_key, namen=[person]):
                         self._melde_protokoll(k.name, "alert", kanal,
                                               zusatz=text, person=person,
                                               bild=self._bild_rel(bild))
@@ -4905,78 +5449,75 @@ class Engine:
                     self._fehler_log((kanal, k.name),
                                      f"{k.name}: {kanal} failed (Name): "
                                      f"{type(e).__name__}: {e}", stufe=_logbuch.ERROR)
-            if not push_offen:
+            for kanal in senden if sammel else ():
+                # PW2 (E8): die Sammelmeldung nach dem Namen, Text ohne Bild, keine Journalzeile (E7).
+                try:
+                    self._kanal_senden(k, kanal, "" if nur_zeile and kanal == "telegram" else ", ".join(sammel),
+                                       None, titel_schluessel=TITEL_NAMEN, namen=sammel)
+                except Exception as e:
+                    self._fehler_log((kanal, k.name),
+                                     f"{k.name}: {kanal} failed (names): "
+                                     f"{type(e).__name__}: {e}", stufe=_logbuch.ERROR)
+            if not push_offen or ohne_kanal:
                 # Die Live-Sicht darf den Auftritt nicht verlieren (QS-Auflage):
                 # eine Journal-Zeile mit kanal 'none' wie im kanallosen Fall.
                 self._melde_protokoll(k.name, "alert", "none", zusatz=text,
                                       person=person, bild=self._bild_rel(bild))
         self._thread_starten(f"live-name-{k.name}", job)
 
-    def _trigger(self, k, face, buffer, mono, names_allowed, abstand):
-        """Meldet das erste Gesicht des Auftritts, das die Worker-Kaskade bestanden hat.
-        -> None; Versand, Karenz und MQTT-Vertrag bleiben erhalten.
+    def _trigger(self, k, face, buffer, mono, data):
+        """Bucht das erste Gesicht des Auftritts mit Beweisbild, Pause, Vermerk und Video; MQTT ist schon eingereiht.
+        -> None; Buchfuehrung, Payload und Schnell-Urteil kommen aus `data`; seit PW5 kein Push beim ersten Gesicht.
         """
-        stempel = time.strftime("%Y%m%d_%H%M%S", time.localtime(self.wanduhr()))
-        with k.lock:
-            if k.auftritt is None or k.auftritt["trigger"]:
-                return
-            k.auftritt["trigger"] += 1
-            k.auftritt["mensch_bestaetigt"] = True
-            spanne = mono - k.auftritt["seit_mono"]
-            k.trigger += 1
-            t_nr = k.trigger
-        bestes = None
+        stempel, t_nr, spanne = image_stamp(data["wand"]), data["t_nr"], data["spanne"]
+        bestes = gross = None
+        # PW1 (Bauplan push_melden, Fix-Stelle 4): das Bild mit Kasten bleibt als Verweis stehen; der Meldefaden
+        # macht daraus das kleine Bild, auch wenn die Ablage scheitert. Seit PW5 ist es das Bild der Meldung
+        # "Unknown person" am Auftrittsende und entsteht nur, wenn ein Kanal sie mit Bild will.
+        try:
+            gross = bild_mit_box(_rechnung.display_frame(buffer), face["bb"])
+        except Exception as e:
+            self._kachel_fehler(k, "image", f"{type(e).__name__}; no evidence image for this appearance")
         ablage = self._ablage_sichern(k)
-        if ablage:
-            try:
-                bestes = self._bild_schreiben(k, os.path.join(ablage, f"{stempel}_T{t_nr}_1.jpg"),
-                                              bild_mit_box(_rechnung.display_frame(buffer), face["bb"]))
-            except Exception as e:
-                self._kachel_fehler(k, "image", f"{type(e).__name__}; notification without evidence image")
-        u_text, u_person, u_urteil = None, None, None
-        if names_allowed and face["sc"]:
-            from core import vertrauen as _vt
-            werte = sorted(face["sc"].items(), key=lambda pair: pair[1], reverse=True)
-            person, cos = werte[0]
-            wort = _vt.wort(cos, self.win_thresh)
-            # Bauplan Stapel-Abstand SA1 Punkt 3: liegen bester und zweitbester Name zu nah beieinander
-            # (core.stapel.zu_knapp), traegt die erste Meldung keinen vorlaeufigen Namen, wie unter der Latte.
-            treffer = cos >= self.win_thresh and not _stapel.zu_knapp(
-                cos, werte[1][1] if len(werte) > 1 else None, abstand)
-            u_person = person if treffer else None
-            u_urteil = {"person": person, "cos": cos, "wort": wort, "treffer": treffer}
-            u_text = (TEXT_URTEIL_TREFFER if treffer else TEXT_URTEIL_UNSICHER).format(name=person, wort=wort)
+        if ablage and gross is not None:
+            bestes = self._bild_schreiben(k, os.path.join(ablage, trigger_image_name(stempel, t_nr)), gross)
+        u_text, u_urteil = data["u_text"], data["u_urteil"]
         beste_score = face["det"]
-        self._klog(k, f"TRIGGER #{t_nr}: first valid face, score {beste_score:.2f}"
+        # MW1: hinter dem Erkennungswert die uebrigen gemessenen Werte des Funds (Namen wie auf der Kalibrier-Seite);
+        # ein ungemessener Wert fehlt. Nachsichtig gelesen: eine Log-Zeile darf den Ausloeser nie abbrechen.
+        werte = "".join(form.format(face[achse]) for achse, form in (
+            ("k", ", face size {:.0f} px"), ("e", ", picture impression {:.3f}"), ("t", ", recognisability {:.3f}"),
+            ("p", ", head pose {:.3f}"), ("norm", ", feature norm {:.1f}")) if face.get(achse) is not None)
+        self._klog(k, f"TRIGGER #{t_nr}: first valid face, score {beste_score:.2f}{werte}"
                       + (f" — {u_text}" if u_text else ""), stufe=_logbuch.DEBUG)
         k.letzter_trigger_wand = self.wanduhr()
         if not melde_erlaubt(k, mono):
-            self._klog(k, f"notification suppressed (min interval, "
-                          f"{k.melde_bis_mono - mono:.0f} s left)", stufe=_logbuch.DEBUG)
+            # MM2: MQTT ist zu diesem Zeitpunkt schon eingereiht; die Pause gilt nur fuer Push, seit PW5 (E15)
+            # fuer das Video und die Unbekannt-Meldung dieses Auftritts.
+            self._klog(k, f"appearance starts within the pause ({k.melde_bis_mono - mono:.0f} s left): "
+                          f"no video and no unknown person alert", stufe=_logbuch.DEBUG)
             return
         k.melde_bis_mono = mono + k.cfg["wieder_scharf_s"]
-        # .412 (User 02.09.): der Push-Text kommt aus meldetext_trigger —
-        # Stil 'worte' NUR Name oder "nicht erkannt", Stil 'worte_zahlen' die
-        # .249/.251-Detailtexte (Funde/Sekunden/Score/Latenz + Schnell-Urteil).
-        # Sprach-Stufe 4 (Eintrittspunkt (c)): der PUSH-Text ist sprachfaehig.
-        # u_text (englisch) bleibt der MQTT-Payload-Wert unten — byte-gleich.
+        # .412 (User 02.09.): der Text kommt aus meldetext_trigger — Stil 'worte' NUR Name oder
+        # "nicht erkannt", Stil 'worte_zahlen' die .249/.251-Detailtexte (Funde/Sekunden/Score/Latenz +
+        # Schnell-Urteil). Seit PW5 traegt ihn nur die Journalzeile; der Text der Unbekannt-Meldung entsteht
+        # am Auftrittsende neu, ohne Schnell-Urteil. Sprach-Stufe 4 (Eintrittspunkt (c)): sprachfaehig.
+        # u_text (englisch) bleibt der MQTT-Payload-Wert — byte-gleich.
         _sprache.aktivieren()
         text = meldetext_trigger(self.cfg, 1, spanne,
                                  beste_score, spanne * 1000.0, u_text, u_urteil)
-        payload = {"ts": round(self.wanduhr(), 1), "kamera": k.name,
-                   "score": round(beste_score, 3), "bild_anzahl": 1}
-        if u_text:
-            # .190: person ALS FELD (Today-Kartenreihe + MQTT-Konsumenten) —
-            # None bei "unknown"; das preliminary-Flag bleibt die Wahrheit.
-            payload["schnell_urteil"] = {"text": u_text, "preliminary": True,
-                                         "person": u_person}
+        # PW5 (E15): der Vermerk "freigegebener Auftritt" fuer das Auftrittsende, mit der Wanduhr des ersten Gesichts
+        # (E18), dem Beweisbild, den Werten fuer den Text und einem Platz fuer das kleine Bild. Kein Versand hier.
         with k.lock:
-            rb = list(k.rueckblick)
-        # Video-Pfad unabhaengig von der Ablage-Pruefung bauen (K-1): scheitert
-        # der Ordner, faengt video_bauen im Melde-Thread das selbst (vid=None).
-        self._meldung_starten(k, text, bestes, rb, payload,
-                              os.path.join(self.live_dir, k.name,
-                                           f"{stempel}_T{t_nr}.mp4"))
+            a = k.auftritt
+            if a is not None:
+                a["melden"] = {"wand": data["wand"], "bild": bestes, "spanne": spanne, "score": beste_score,
+                               "klein": None}
+        # PW3 (Bauplan push_melden, E4): nach dem Setzen der Pause die Aufnahme ab diesem Gesicht; das Video geht am
+        # Auftrittsende raus. Der Pfad haengt nicht an der Ablage-Pruefung (K-1): scheitert der Ordner, meldet der
+        # Videofaden den Fehler selbst.
+        self._video_start(k, buffer, mono, text, os.path.join(self.live_dir, k.name, f"{stempel}_T{t_nr}.mp4"))
+        self._meldung_starten(k, text, bestes, gross, data["payload"], a)
         k.gemeldet += 1
 
     def frigate_abstand(self, guard):
@@ -5049,8 +5590,9 @@ class Engine:
             return 0
 
     def _kalib_kandidat(self, k, frame, face):
-        """Merkt den besten echten det-Fund und seine bereits gerechneten Guete-Werte.
+        """Merkt den besten echten det-Fund und seine bereits gerechneten Messwerte aus der Fund-Zeile der Kaskade.
         -> None; der Ring wird weiterhin erst am Auftrittsende geschrieben.
+        MW1: neben det, e und t auch Kopfhaltung (p), Norm, Kante (k) und die Abbruch-Achse; ungemessen ist None.
         """
         if not self._kalib_deckel() or face.get("fd") is not False:
             return
@@ -5064,7 +5606,8 @@ class Engine:
                 return
             with k.lock:
                 if k.kalib_kand is None or det > k.kalib_kand["det"]:
-                    k.kalib_kand = {"crop": crop, "det": det, "e": face["e"], "t": face["t"]}
+                    k.kalib_kand = {"crop": crop, "det": det, "e": face["e"], "t": face["t"], "p": face.get("p"),
+                                    "n": face.get("norm"), "k": face.get("k"), "abbruch": face.get("abbruch")}
         except Exception as e:
             self._fehler_log(("kalib", k.name),
                              f"live {k.name}: calibration candidate skipped ({type(e).__name__}: {e})",
@@ -5072,8 +5615,9 @@ class Engine:
 
     def _kalib_ablegen(self, k, kand, mensch_ok=True):
         """Den Kandidaten EINES Auftritts in den Ring legen (Status-Thread).
-        Die Guete-Werte stammen aus der Fundzeile; guete_reicht und der
-        gemeinsame Schreibweg entscheiden unveraendert ueber die Aufnahme."""
+        Die Messwerte stammen aus der Fundzeile und gehen alle an den Schreibweg
+        (MW1); guete_reicht und der gemeinsame Schreibweg entscheiden
+        unveraendert ueber die Aufnahme."""
         deckel = self._kalib_deckel()
         if not deckel or not kand:
             return
@@ -5084,7 +5628,8 @@ class Engine:
         # (kalib_schreiben) — praefix=False raeumt das doppelte
         # `live X: live X:` weg, das 2.180 Zeilen entstellt hat.
         if kalib_schreiben(self.cfg, k.name, kand["crop"],
-                           {"det": kand["det"], "e": e, "t": t},
+                           {"det": kand["det"], "e": e, "t": t, "p": kand["p"], "n": kand["n"],
+                            "k": kand["k"], "abbruch": kand["abbruch"]},
                            deckel=deckel,
                            log=_logbuch.Adapter(self._klog, k, stufe=_logbuch.DEBUG, praefix=False),
                            mensch_ok=mensch_ok):
@@ -5092,15 +5637,18 @@ class Engine:
 
     def _ablage_sichern(self, k):
         """Beweisbild-Ordner der Kachel anlegen -> Pfad oder None. K-1 (Sched-
-        R4): ein Platten-/IO-Fehler hier ist eine Log-Zeile, nie der Verlust
-        der Personen-Meldung — der Aufrufer meldet dann ohne Beweisbild."""
+        R4): ein Platten-/IO-Fehler hier ist eine Log-Zeile, kein Abbruch — der
+        Aufrufer arbeitet ohne abgelegtes Beweisbild weiter: die Journalzeile
+        bleibt ohne Bild, das kleine Bild einer Nachricht kommt seit PW1 aus dem
+        Speicher. Das Video des Auftritts liegt im selben Ordner; scheitert er,
+        meldet der Videofaden den Fehler selbst (PW3)."""
         ablage = os.path.join(self.live_dir, k.name)
         try:
             os.makedirs(ablage, exist_ok=True)
             return ablage
         except OSError as e:
-            self._klog(k, f"image storage not possible ({e}) — notification goes "
-                          f"out without evidence image", stufe=_logbuch.ERROR)
+            self._klog(k, f"image storage not possible ({e}) — no evidence image "
+                          f"is stored", stufe=_logbuch.ERROR)
             return None
 
     def _bild_schreiben(self, k, pfad, bild):
@@ -5165,75 +5713,283 @@ class Engine:
         t.start()
         return t
 
-    def _meldung_starten(self, k, text, bild, rueckblick, payload, video_pfad):
-        """Versand im Thread (Transcode+Upload blockieren die Detektion nicht,
-        telegram_melden-Muster). Kanalausfall ist nie Waechterausfall.
-        .245 (User-Go 17.08.): ohne Meldekanal wird das Ergebnis JOURNALT
-        statt verworfen (kanal 'none' — Anzeige ja, Versand nein); die
-        Recognized-live-Reihe und /live_alerts lesen genau dieses Protokoll
-        und blieben auf kanal-losen Installationen sonst fuer immer leer."""
-        if not k.cfg["kanaele"]:
-            sp = payload.get("schnell_urteil") or {}
-            self._melde_protokoll(k.name, "alert", "none", zusatz=text,
-                                  person=sp.get("person") or "",
-                                  bild=self._bild_rel(bild))
-            return
-        if not self.melder:
+    def _meldung_starten(self, k, text, bild, frame, payload, auftritt):
+        """Nacharbeit des ersten Gesichts eines freigegebenen Auftritts im Meldefaden (PW5, E14 und E18): kein
+        Versand ueber Pushover oder Telegram mehr. Kanalausfall ist nie Waechterausfall.
+        .245 (User-Go 17.08.): was nicht ueber einen Kanal geht, wird JOURNALT
+        (kanal 'none' — Anzeige ja, Versand nein); die Recognized-live-Reihe
+        und /live_alerts lesen genau dieses Protokoll. Seit PW5 (E18, Punkt 2)
+        gilt das fuer jeden Waechter ohne MQTT, auch mit Pushover oder Telegram:
+        die Zeile des ersten Gesichts haelt den Auftritt sichtbar; mit MQTT
+        schreibt wie bisher der Sendefaden seine Zeile. Der Payload dient nur
+        der Person der none-Zeile.
+        PW1 (PV2) und PW5: `bild` ist der Pfad des Beweisbilds fuer die Zeile,
+        `frame` das Anzeigebild mit Kasten (oder None), `auftritt` der Auftritt
+        mit dem Vermerk `melden` (oder None). Will ein Kanal die Meldung
+        "Unknown person" mit Bild (`<kanal>_unknown` und `<kanal>_image`), macht
+        der Faden daraus einmal das kleine JPEG und legt es unter k.lock in den
+        Vermerk; sonst haelt er das grosse Bild nicht. Ohne beides startet kein
+        Faden."""
+        zeile = "mqtt" not in k.cfg["kanaele"]
+        wollen = [kanal for kanal in k.cfg["kanaele"] if kanal != "mqtt" and k.cfg[f"{kanal}_unknown"]
+                  and k.cfg[f"{kanal}_image"]]
+        if not (self.melder and wollen and auftritt is not None):
+            frame = None                     # niemand will das kleine Bild: der Faden haelt das grosse nicht
+        if not zeile and frame is None:
             return
 
         def job():
-            vid = None
-            if "telegram" in k.cfg["kanaele"] and len(rueckblick) > 1:
-                try:
-                    zeiten = [t for t, _ in rueckblick]
-                    fps = (len(zeiten) - 1) / max(zeiten[-1] - zeiten[0], 0.1)
-                    # Rueckblick liegt als YUV (K8) — Konvertierung erst hier,
-                    # je Meldung statt je Frame.
-                    frames = [_rechnung.display_frame(y) for _, y in rueckblick]
-                    vid = video_bauen(frames, video_pfad, fps)
-                except Exception as e:
-                    self._fehler_log(("video", k.name), f"{k.name}: look-back video "
-                                                        f"failed: {e}", stufe=_logbuch.ERROR)
-            for kanal in k.cfg["kanaele"]:
-                try:
-                    if self._kanal_senden(k, kanal, text, bild, vid, payload):
-                        # Baustein B: NUR die real angenommene Meldung landet
-                        # im Protokoll (eine Quelle, kein Doppelzaehlen).
-                        # Einzige Ausnahme seit .245: kanal-lose Installation
-                        # -> EINE 'none'-Zeile (oben, vor dem job).
-                        sp = payload.get("schnell_urteil") or {}
-                        self._melde_protokoll(k.name, "alert", kanal,
-                                              zusatz=text,
-                                              person=sp.get("person") or "",
-                                              bild=self._bild_rel(bild))
-                except Exception as e:
-                    # gedrosselt, nicht je Trigger neu (§6)
-                    self._fehler_log((kanal, k.name),
-                                     f"{k.name}: {kanal} failed: {type(e).__name__}: {e}", stufe=_logbuch.ERROR)
+            nonlocal frame
+            if zeile:
+                sp = payload.get("schnell_urteil") or {}
+                self._melde_protokoll(k.name, "alert", "none", zusatz=text, person=sp.get("person") or "",
+                                      bild=self._bild_rel(bild))
+            if frame is None:
+                return
+            try:
+                klein = notification_jpeg(frame)
+                fehler = "" if klein else "imencode=False"
+            except Exception as e:
+                klein, fehler = None, f"{type(e).__name__}: {e}"
+            frame = None                     # PV2: danach haelt der Faden das grosse Bild nicht mehr
+            if fehler:
+                # Codex Runde 4 (PW5), B3: hier wird nichts gesendet; das Bild fehlt nur der Unbekannt-Meldung am Ende.
+                self._fehler_log(("push_bild", k.name), f"live {k.name}: notification image failed "
+                                 f"({fehler}); an unknown person alert of this appearance, if sent, goes "
+                                 f"without image", stufe=_logbuch.ERROR)
+            with k.lock:
+                auftritt["melden"]["klein"] = klein
         self._thread_starten(f"live-melde-{k.name}", job)
 
-    def _kanal_senden(self, k, kanal, text, bild, vid, payload,
-                      titel_schluessel=None):
-        """EINEN Kanal einer Personen-Meldung senden -> True NUR, wenn der
+    def _kanal_senden(self, k, kanal, text, bild, titel_schluessel=None, namen=None):
+        """EINEN Push-Kanal einer Personen-Meldung senden -> True NUR, wenn der
         Kanal sie ANGENOMMEN hat (Sender-Rueckgabe; False auch bei fehlender
         Konfiguration). Eigener Baustein, damit der Mutations-Selbsttest die
         ok-Wahrheit fassen kann (Baustein B: kein Zaehlen von Fehlversand).
-        titel_schluessel (.412, Stufe-2-Titel "…: erkannt"): nur gesetzt
-        weitergereicht — Harnisch-Stubs mit der alten push()-Signatur bleiben
-        gueltig; None = Trigger-Titel wie bisher."""
+        titel_schluessel (.412; seit PW2 TITEL_ERKANNT oder TITEL_NAMEN, seit PW5 auch
+        TITEL_UNBEKANNT): nur gesetzt weitergereicht — Harnisch-Stubs mit der alten
+        push()-Signatur bleiben gueltig; None ergibt in Melder._titel die Zeile fuer niemand erkannt. MQTT laeuft seit MM2 ueber
+        den Sendefaden (_mqtt_loop), nicht mehr hier.
+        `bild` (PW1, Bauplan push_melden): je nach Schalter `<kanal>_image` die
+        bytes des kleinen JPEG oder None (dann Text ohne Bild); der Aufrufer
+        entscheidet, hier wird nur durchgereicht. Ein Video geht hier seit PW3
+        nie mit; es kommt am Auftrittsende ueber _video_senden.
+        `namen` (PW2, E13): die Namen der Zeile, bei der Namensmeldung einer, bei
+        der Sammelmeldung alle; wie titel_schluessel nur gesetzt weitergereicht.
+        Pushover nimmt die Zeile als Titel, Telegram als erste Zeile der
+        Beschriftung."""
+        zeile = {"titel_schluessel": titel_schluessel, "namen": namen} if titel_schluessel else {}
         if kanal == "pushover":
-            if titel_schluessel:
-                return bool(self.melder.push(k.name, text, bild,
-                                             titel_schluessel=titel_schluessel))
-            return bool(self.melder.push(k.name, text, bild))
+            return bool(self.melder.push(k.name, text, bild, **zeile))
         if kanal == "telegram":
-            return bool(self.melder.telegram(k.name, vid, text, bild))
-        if kanal == "mqtt":
-            return bool(self.melder.mqtt(k.name, payload))
+            return bool(self.melder.telegram(k.name, None, text, bild, **zeile))
         return False
 
+    @staticmethod
+    def _unbekannt_gewertet(g, a):
+        """Wertet der Waechter einen beendeten Auftritt als unbekannte Person (Stufe TY4 Punkt 1, die Regel an einer
+        Stelle), unter k.lock. -> bool; ja, wenn es den Waechter gibt, der Auftritt freigegeben ist (Vermerk melden) und
+        kein Name genannt wurde oder ohne_name und unknown_with_known gesetzt sind; der Kanal spielt keine Rolle"""
+        if not g or "melden" not in a:
+            return False
+        return not a["genannt"] or bool(a.get("ohne_name") and g["unknown_with_known"])
+
+    @staticmethod
+    def _unbekannt_kanaele(g, a):
+        """Die Kanaele, an die die Meldung "Unknown person" eines beendeten Auftritts geht (PW5, Fix-Stelle 7), unter
+        k.lock. -> Liste in der Folge von kanaele; leer, wenn _unbekannt_gewertet nein sagt. Telegram nie, wenn der
+        Auftritt einen Videoauftrag hat (Codex Runde 6, B3)."""
+        if not Engine._unbekannt_gewertet(g, a):
+            return []
+        return [kanal for kanal in g["kanaele"] if kanal != "mqtt" and g[f"{kanal}_unknown"]
+                and not (kanal == "telegram" and a.get("video") is not None)]
+
+    def _unbekannt_melden(self, k, a):
+        """Sendet am Auftrittsende "Unknown person on <Kamera>" im Meldefaden (PW5, E14, E16, E18), mit der Kanalwahl,
+        die dann gilt; ohne Melder wird nichts gesendet. -> None; je angenommenem Kanal eine alert-Zeile mit der Wanduhr
+        des ersten Gesichts, hat keiner angenommen, genau eine mit dem Kanal none (TY4 Punkt 1), alle mit dem Merkmal
+        UNBEKANNT_MERKMAL; nach einem Stopp oder ohne Wertung keine"""
+        g = self.guards.get(k.name)
+        if self.stop_ev.is_set() or k.stop_ev.is_set():
+            return
+        with k.lock:
+            if not self._unbekannt_gewertet(g, a):          # erneut unter dem Schloss, auch: gibt es den Waechter noch
+                return
+            kanaele = self._unbekannt_kanaele(g, a) if self.melder else []   # ein fehlender Melder sperrt nur den Versand
+            m, neben_namen = a["melden"], bool(a["genannt"])
+            klein = None if neben_namen else m["klein"]      # E16: neben Namen ohne Bild
+        _sprache.aktivieren()                                # Eintrittspunkt (c), wie im Namensfaden
+        # Codex Runde 6, B4: der Text ohne vorlaeufiges Urteil, im Stil worte "not recognized", sonst nur die Zahlen.
+        text = meldetext_trigger(self.cfg, 1, m["spanne"], m["score"], m["spanne"] * 1000.0, None, None)
+        nur_zeile = alert_stil(self.cfg) != STIL_WORTE_ZAHLEN
+        angenommen = False
+        for kanal in kanaele:
+            try:
+                if self._kanal_senden(k, kanal, "" if nur_zeile and kanal == "telegram" else text,
+                                      klein if g[f"{kanal}_image"] else None, titel_schluessel=TITEL_UNBEKANNT):
+                    self._melde_protokoll(k.name, "alert", kanal, zusatz=text, bild=self._bild_rel(m["bild"]),
+                                          ts=m["wand"], unbekannt=True)
+                    angenommen = True
+            except Exception as e:
+                self._fehler_log((kanal, k.name), f"{k.name}: {kanal} failed (unknown person): "
+                                 f"{type(e).__name__}: {e}", stufe=_logbuch.ERROR)
+        if not angenommen:
+            # TY4 Punkt 1: kein Push-Kanal hat angenommen (nur MQTT, Schalter aus, kein Kanal, Versand gescheitert,
+            # Telegram mit Video, kein Melder). Die Live-Sicht und Heute verlieren den Auftritt nicht: eine Zeile mit
+            # dem Kanal none, Bild und Wanduhr des ersten Gesichts, ohne Text, damit die Karte unter /live_alerts
+            # ihren Text behaelt.
+            self._melde_protokoll(k.name, "alert", "none", bild=self._bild_rel(m["bild"]), ts=m["wand"],
+                                  unbekannt=True)
+
+    def _video_frame(self, k, mono, yuv):
+        """Reicht ein Rasterbild des Lesers an die laufende Aufnahme (PW3, PV5), aufgerufen unter k.lock.
+        -> None; ohne Aufnahme nur die Abfrage, bei voller Schlange wird das Bild verworfen und gezaehlt"""
+        job = k.video_job
+        if job is None or job["voll"]:
+            return
+        if mono >= job["ende_mono"]:
+            job["voll"] = True                   # Fensterende: der Videofaden nimmt den Rest und schliesst ab
+            return
+        if mono <= job["start_mono"]:
+            return
+        job["n"] += 1
+        if job["n"] % job["schritt"]:
+            return                               # Codex Runde 1, B2: hoechstens VIDEO_FPS_MAX Bilder je Sekunde
+        try:
+            job["q"].put_nowait(yuv)             # Verweis, keine Kopie: jeder Leserpuffer ist ein eigenes Bild
+        except queue.Full:
+            job["verworfen"] += 1
+
+    def _video_start(self, k, buffer, mono, text, pfad):
+        """Startet beim ersten Gesicht eines freigegebenen Auftritts die Aufnahme (PW3, E4, PV5; seit PW5 ohne
+        Gesichtsmeldung ueber Push): Telegram in kanaele, telegram_video an, Melder da.
+        -> None; laeuft schon eine Aufnahme dieses Waechters, keine zweite"""
+        if not (self.melder and "telegram" in k.cfg["kanaele"] and k.cfg["telegram_video"]) or k.stop_ev.is_set():
+            return
+        # Rasterrate der Quelle; ist sie schneller als VIDEO_FPS_MAX, nimmt die Aufnahme nur jedes schritt-te
+        # Rasterbild, und die Eingangsrate des Videos ist rate (Codex Runde 1 und 2, B2).
+        fps = float(k.steckbrief.get("fps") or 0)
+        raster = fps / _rechnung.sample_step(self.cfg, fps) if fps > 0 else 0.0
+        if raster <= 0:
+            with k.lock:
+                k.video_failed += 1
+            self._fehler_log(("video", k.name), f"live {k.name}: video not started — the source reports no frame "
+                             f"rate", stufe=_logbuch.ERROR)
+            return
+        schritt = max(1, int(-(-raster // VIDEO_FPS_MAX)))
+        job = {"q": queue.Queue(maxsize=VIDEO_QUEUE_MAX), "start_mono": mono, "ende_mono": mono + k.cfg["video_s"],
+               "schritt": schritt, "rate": raster / schritt, "n": 0, "verworfen": 0, "voll": False,
+               "pfad": pfad, "text": text, "auftritt": None, "fertig": None, "ende": False, "gesendet": False}
+        job["q"].put_nowait(buffer)              # das erste Bild ist das Bild des Gesichts
+        with k.lock:
+            if k.video_job is not None or k.auftritt is None:
+                return
+            job["auftritt"] = k.auftritt         # Verweis haelt, auch wenn k.auftritt geleert wird (Codex R4, H1)
+            k.auftritt["video"] = k.video_job = job
+        self._thread_starten(f"live-video-{k.name}", lambda: self._video_run(k, job))
+
+    def _video_run(self, k, job):
+        """Der Faden einer Aufnahme (PW3, PV5): Bilder aus der Schlange in video_bauen, umbenennen, dann den Pfad im
+        Auftritt vermerken oder, ist der Auftritt schon zu Ende, selbst senden (E4). -> None; nie blockiert auf das
+        Ende; bei Stopp kein Video, Fehler zaehlen video_failed mit gedrosselter ERROR-Zeile"""
+        from core import melden as _melden
+
+        def abbruch():
+            return self.stop_ev.is_set() or k.stop_ev.is_set()
+
+        def bilder():
+            while not abbruch():
+                try:
+                    yield job["q"].get(timeout=0.2)
+                    continue
+                except queue.Empty:
+                    pass
+                with k.lock:
+                    voll = job["voll"]
+                if voll or self.jetzt() > job["ende_mono"] + VIDEO_DECKEL_S:   # H3: Strom ohne Bilder
+                    while True:
+                        try:
+                            yield job["q"].get_nowait()
+                        except queue.Empty:
+                            return
+            raise RuntimeError("watcher stopped")
+        part = job["pfad"] + ".part"
+        try:
+            os.makedirs(os.path.dirname(part), exist_ok=True)
+            erg = video_bauen(bilder(), part, job["rate"], _melden.telegram_height(self.cfg), abbruch)
+            if erg["pfad"] and not abbruch():
+                os.replace(part, job["pfad"])
+        except Exception as e:
+            erg = {"pfad": None, "fehler": f"{type(e).__name__}: {e}"}
+        gestoppt, versand = abbruch(), False
+        with k.lock:
+            if k.video_job is job:
+                k.video_job = None
+            verworfen = job["verworfen"]
+            if erg["pfad"] and not gestoppt:
+                job["fertig"] = job["pfad"]
+                versand = job["ende"] and not job["gesendet"]
+                job["gesendet"] = job["gesendet"] or versand
+            elif not gestoppt:
+                k.video_failed += 1
+        if verworfen:
+            self._klog(k, f"video: {verworfen} frames dropped (queue full) — the video is shorter and plays faster",
+                       stufe=_logbuch.WARNING)
+        if gestoppt or not erg["pfad"]:
+            try:
+                os.remove(part)                  # die .part kommt weg (Stopp, Fehler beim Kodieren oder Umbenennen)
+            except OSError:
+                pass
+        if gestoppt:
+            self._klog(k, "video discarded — watcher stopped during the recording", stufe=_logbuch.DEBUG)
+        elif not erg["pfad"]:
+            self._fehler_log(("video", k.name), f"live {k.name}: video failed: {erg['fehler']}", stufe=_logbuch.ERROR)
+        else:
+            self._klog(k, f"VIDEO {erg['bilder']} frames, {erg['bilder'] / job['rate']:.1f} s, {erg['bytes']} bytes, "
+                          f"{verworfen} dropped, encoder CPU {erg['cpu_s']:.2f} s")
+            if versand:
+                self._video_senden(k, job)
+
+    def _video_senden(self, k, job):
+        """Sendet das fertige Video eines Auftritts einmal ueber Telegram (PW3, E4), aus dem Video- oder einem
+        Meldefaden. -> None; nach stop() der Engine, ohne Melder oder ohne telegram in kanaele wird nichts gesendet"""
+        from core import melden as _melden
+        # Codex-Gegenpruefung PW3 Runde 1, B1 (PV5): die Kanalwahl, die JETZT fuer diesen Waechter gilt, steht in
+        # self.guards (_config_pruefen ersetzt es bei jedem Neuladen); k.cfg einer beim Quellwechsel oder Ausschalten
+        # gestoppten Kachel ist veraltet. Fehlt der Waechter dort oder telegram in kanaele: kein Versand, kein Fehler,
+        # die Datei bleibt auf /data.
+        g = self.guards.get(k.name)
+        if self.stop_ev.is_set() or not self.melder or not g or "telegram" not in g["kanaele"]:
+            return
+        # PW5 (Fix-Stelle 9): Titel aus dem Auftritt, ein Name TITEL_ERKANNT, mehrere TITEL_NAMEN, niemand
+        # TITEL_UNBEKANNT; mit Namen, ohne_name und unknown_with_known steht darunter die Zeile "Unknown person".
+        with k.lock:
+            a = job["auftritt"]
+            namen, m = list(a["genannt"]), a.get("melden") or {}
+            dazu = bool(namen and a.get("ohne_name") and g["unknown_with_known"])
+        schluessel = TITEL_NAMEN if len(namen) >= 2 else TITEL_ERKANNT if namen else TITEL_UNBEKANNT
+        _sprache.aktivieren()                                # Eintrittspunkt (c), wie im Namensfaden
+        text = _sprache.t("meldung.wache.titel_unbekannt", kamera=k.name) if dazu else ""
+        try:
+            groesse = os.path.getsize(job["fertig"])
+            if groesse > _melden.TELEGRAM_VIDEO_MAX:
+                fehler = f"too large for Telegram ({groesse} bytes, limit {_melden.TELEGRAM_VIDEO_MAX})"
+            elif self.melder.telegram(k.name, job["fertig"], text, titel_schluessel=schluessel, namen=namen,
+                                      nur_video=True):
+                # E18: die Zeile des Videos mit der Wanduhr des ersten Gesichts und dem Beweisbild.
+                self._melde_protokoll(k.name, "alert", "telegram", bild=self._bild_rel(m.get("bild")),
+                                      ts=m.get("wand"))
+                return
+            else:
+                fehler = "Telegram did not accept the video"
+        except Exception as e:
+            fehler = f"{type(e).__name__}: {e}"
+        with k.lock:
+            k.video_failed += 1
+        self._fehler_log(("video", k.name), f"live {k.name}: video failed: {fehler}", stufe=_logbuch.ERROR)
+
     def _melde_protokoll(self, kamera, art, kanal, zusatz="", person="",
-                         bild=""):
+                         bild="", ts=None, unbekannt=False):
         """Buchhaltungs-Zeile je real rausgegangener Meldung (Baustein B:
         Today-/System-Zaehler des Dienstes lesen diese EINE Quelle).
         IO-Fehler kosten nie die Meldung — nur eine gedrosselte Logzeile.
@@ -5241,10 +5997,16 @@ class Engine:
         Today-Reihe 'Recognized live' braucht WEN und das Beweisbild):
         Schnell-Urteils-Name und der DATA-DIR-RELATIVE Bildpfad (Vertrag
         ALARMBILD_RE — der Dienst-Endpunkt serviert nur, was dem Muster
-        genuegt). Alte Zeilen ohne die Felder bleiben gueltig."""
+        genuegt). Alte Zeilen ohne die Felder bleiben gueltig.
+        ts (PW5, E18): die Wanduhr der Zeile; ohne Angabe jetzt. Unbekannt-Meldung
+        und Video geben die Wanduhr des ersten Gesichts, damit sie zur Karte des
+        Auftritts gehoeren. unbekannt (TY4): die Zeile der Unbekannt-Meldung
+        traegt das Merkmal UNBEKANNT_MERKMAL; das Feld steht nur, wenn gesetzt."""
         try:
-            eintrag = {"ts": round(self.wanduhr(), 1),
+            eintrag = {"ts": round(self.wanduhr() if ts is None else ts, 1),
                        "kamera": kamera, "art": art, "kanal": kanal}
+            if unbekannt:
+                eintrag[UNBEKANNT_MERKMAL] = True
             if zusatz:
                 eintrag["zusatz"] = str(zusatz)[:140]
             if person:
@@ -5346,7 +6108,7 @@ class Engine:
             while k.fps_fenster and mono - k.fps_fenster[0][0] > FPS_FENSTER_S:
                 k.fps_fenster.popleft()
             # Auftritts-Ende (User-Zeit a, Anker letzter Fund).
-            kand, beendet = None, False
+            kand, beendet, versand, unbekannt = None, False, None, None
             anw_personen, anw_spanne = [], None
             with k.lock:
                 k.stack.tick(mono)
@@ -5361,10 +6123,27 @@ class Engine:
                     anw_personen = sorted(a.get("genannt") or ())
                     anw_spanne = (self._anw_auftrag(a)
                                   if anw_personen else None)
+                    self._appearance_end(k, a, MQTT_END_NO_FACE)    # MM3: im Schloss, vor dem Leeren
+                    # PW3 (E4, PV5 Senden): "Tuer zu". Ist das Video schon fertig, startet das Ende den Versand,
+                    # sonst vermerkt es das Ende, und der Videofaden sendet selbst, sobald er fertig ist.
+                    job = a.get("video")
+                    if job is not None and not job["ende"]:
+                        job["ende"] = True
+                        if job["fertig"] and not job["gesendet"]:
+                            job["gesendet"], versand = True, job
+                    # PW5 (Fix-Stelle 8), seit TY4 Punkt 1: der Faden der Unbekannt-Meldung startet fuer jeden als
+                    # unbekannte Person gewerteten Auftritt, auch ohne Melder und ohne Push-Kanal (er schreibt dann
+                    # die Zeile mit dem Kanal none); er startet erst nach dem Schloss.
+                    if self._unbekannt_gewertet(self.guards.get(k.name), a):
+                        unbekannt = a
                     k.auftritt = None
                     k.stack.reset()
                     kand, k.kalib_kand = k.kalib_kand, None
                     beendet = True
+            if versand is not None:
+                self._thread_starten(f"live-melde-{k.name}", lambda k=k, job=versand: self._video_senden(k, job))
+            if unbekannt is not None:
+                self._thread_starten(f"live-melde-{k.name}", lambda k=k, a=unbekannt: self._unbekannt_melden(k, a))
             if beendet:
                 if anw_spanne and anw_personen:
                     self._anw_schreiben(k, anw_personen, anw_spanne["von"],
@@ -5383,14 +6162,14 @@ class Engine:
                        + (f", {k.zustand_grund}" if k.zustand_grund else "")
                        + f"), reconnect attempts {k.abrisse + k.reconnect_fehler}")
             elif ereignis == "entwarnung":
-                self._stoerung_senden(k, "recovered — frames flowing again")
+                self._stoerung_senden(k, "recovered — frames flowing again", MQTT_RECOVERED)
             # K-3: haengt ein zurueckgehaltenes Stoerungs-Ereignis nach Ablauf
             # des Mindestabstands noch, geht es JETZT (mit Flatter-Zaehler)
             # raus — sonst bliebe z. B. eine unterdrueckte Entwarnung fuer
             # immer aus und der letzte gemeldete Zustand waere eine Luege.
             if (k.stoer_letzter_text is not None
                     and mono - k.stoer_sende_mono >= STOERUNG_LOG_DROSSEL_S):
-                self._stoerung_senden(k, k.stoer_letzter_text)
+                self._stoerung_senden(k, k.stoer_letzter_text, k.stoer_held_state)
         # Ein-Stream-RSS-Messfenster schliessen (geoeffnet in start(), M9).
         if self._mess_start_mono is not None and mono - self._mess_start_mono >= 60.0:
             self.vermessung.stream_messung_ende()
@@ -5533,6 +6312,8 @@ class Engine:
              # fehler) — additiv, der Dienst zaehlt seine eigenen im
              # Systemstatus; ein Fehlschlag wird sichtbar, nie verschluckt.
              "anwesenheit": _anw.zaehler(),
+             # MM2 (V10): wartende MQTT-Eintraege (ohne die gerade entnommene Runde)
+             "mqtt_queue": self._mqtt_q.qsize(),
              "kacheln": {}}
         # Laufender Auftrag (Quelltest/Last-Messung): Phase + Restsekunden
         # fuer den UI-Countdown (User-Auflage: der User sieht jederzeit, WAS
@@ -5601,6 +6382,8 @@ class Engine:
                 # Frage: sammelt er ueberhaupt gerade?
                 "kalib_bilder": k.kalib_bilder,
                 "frigate_offen": len(k.fr_offen),
+                "mqtt_rejected": k.mqtt_rejected,     # MM2 (V10): von der Bibliothek abgelehnt
+                "video_failed": k.video_failed,       # PW3 (PV6): Fehler am Video seit dem Start
             }
         if self.fr_queue is not None:
             d["frigate_events"] = self.fr_queue.status()
@@ -5631,9 +6414,10 @@ class Engine:
             self._fehler_log(("verbrauch",), f"consumption line failed: {e}", stufe=_logbuch.ERROR)
 
     # ---------------------------------------------------------------- Hilfen
-    def _stoerung_senden(self, k, text):
-        """Stoerung/Entwarnung eines Waechters ueber SEINE Kanaele — im Thread,
-        damit der Status-Takt nicht am Kanal haengt.
+    def _stoerung_senden(self, k, text, state=MQTT_DISTURBED):
+        """Stoerung/Entwarnung eines Waechters ueber SEINE Kanaele — MQTT ueber
+        die Sendeschlange (MM2, `state` aus MQTT_STATES), Push im Thread, damit
+        der Status-Takt nicht am Kanal haengt.
 
         K-3 (Sched-R3, gemessen: Sporadik-Kamera mit 1 Bild je 400 s = 18
         Pushes/h): Mindestabstand je Kachel = STOERUNG_LOG_DROSSEL_S —
@@ -5655,6 +6439,7 @@ class Engine:
         if mono - k.stoer_sende_mono < STOERUNG_LOG_DROSSEL_S:
             k.stoer_unterdrueckt += 1
             k.stoer_letzter_text = text
+            k.stoer_held_state = state
             self._klog(k, f"STOERUNGS-MELDUNG zurueckgehalten (Mindestabstand "
                           f"{STOERUNG_LOG_DROSSEL_S:.0f} s, "
                           f"#{k.stoer_unterdrueckt}): {text}")
@@ -5665,13 +6450,22 @@ class Engine:
         k.stoer_sende_mono = mono
         k.stoer_unterdrueckt = 0
         k.stoer_letzter_text = None
+        k.stoer_held_state = None
+        if self._mqtt_on(k):
+            # MM2 (V2): zuerst die MQTT-Uebergabe, der Text unveraendert; Journalart 'stoerung'.
+            self._mqtt_q.put({"k": k, "journal": {"art": "stoerung"},
+                              "payload": {"ts": round(self.wanduhr(), 1), "kamera": k.name, "stoerung": text,
+                                          "state": state, "event": MQTT_DISTURBANCE}})
         self._klog(k, f"STOERUNGS-MELDUNG: {text}")
         if not self.melder:
+            return
+        push = [kanal for kanal in k.cfg["kanaele"] if kanal != "mqtt"]
+        if not push:
             return
 
         def job():
             try:
-                r = self.melder.stoerung_kachel(k.name, text, k.cfg["kanaele"])
+                r = self.melder.stoerung_kachel(k.name, text, push)
                 # tolerant: echte Melder liefern (gesendet, fehler), aeltere
                 # Harnisch-Stubs nur die Fehlerliste (Baustein B, additiv).
                 gesendet, fehler = (r if isinstance(r, tuple) and len(r) == 2

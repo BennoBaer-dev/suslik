@@ -6,7 +6,7 @@ their camera streams and react while the person is still in the picture, and the
 analysis runs as Frigate produces person events.
 
 ## The web UI
-The UI has **eleven sections** (top bar): **Activity** (Today / Events / To label),
+The UI has **eleven sections** (top bar): **Activity** (Today / Passes / Events / Unknown),
 **People** (your reference library), **Person** (the body-recognition path:
 learned material and model status), **Vision** (vision detect), **Live**
 (live watchers — see [live-watchers.md](live-watchers.md)), **Areas** (camera groups),
@@ -30,43 +30,84 @@ version that introduced the page — earlier days stay empty.
 **Activity**
 
 - **Today** — the day at one glance: who was here, from when to when, and whether there
-  were strangers. **People** leads the page, one card per person with at least one
-  confirmation that day (from the normal analysis or from a live watcher), newest sighting
-  first: best picture, "first–last confirmed HH:MM–HH:MM · N passes · last seen CAMERA
-  HH:MM", and — once the presence journal has that day — a small hour bar (red: confirmed
-  present, green: system running, nobody seen; always over all cameras, even in an area
-  view) with "present about N h". A person only a live watcher has named carries a small
-  "live" mark (preliminary, no confirmed pass yet). Twelve cards are shown, the rest folds
-  behind "all N people". There are no combined "A & B" cards any more: the person is the
-  unit. Clicking a card opens their **Appearances** day view (route `/auftritte`).
-  **Unknown** follows: passes where nobody was recognized appear as "Unknown N" cards once
-  the unknown pool has grouped them, each naming the pool identity and how often it was
-  seen before. Passes whose whole clip contains no serious face get a quiet "no usable
-  face in this pass" note instead and never become unknown-visitor cards.
-  **Passes** lists every walk (events grouped by time, across all cameras unless you set a
-  narrower reach per area under Areas), newest first, one
-  collapsed row each: time, duration, up to three avatars plus "+N", the "+N not matched"
-  footnote, the source tag (via face / via person / live), the red body bar for
-  body-only attributions and the vision line. A row starts open only when it needs a
-  look: nobody recognized with a serious face, or an alert went out (at most three). Inside,
-  each camera line shows at most three names plus "+N", eight camera lines are visible and
-  the rest folds behind "all N cameras". The side column counts People, Passes, Events
-  analysed, the detection rate (the share of the analysed events with at least one face,
-  the count in its tooltip) and
-  Unidentified — every number explains in its
-  tooltip what it counts. Live-watcher statistics live on the Live tab and in System stats.
-  A scenario still in progress is shown live and finalizes once the walk ends.
+  were strangers. Below the day navigation and the area chips the page shows only cards,
+  in three bands across the full width: **Recognized**, **Probably recognized** and
+  **Unknown**. Each card has its action at the bottom right; the action belongs to the
+  card, so a click anywhere on the card does the same. Card pictures are sent scaled down
+  to at most 160 pixels wide.
+  **Recognized** has one card per person with at least one confirmation that day (from
+  the normal analysis or from a live watcher), newest sighting first: best picture,
+  "first–last confirmed HH:MM–HH:MM · N passes · last seen CAMERA HH:MM", and, once the
+  presence journal has that day, a small hour bar (red: confirmed present, green: system
+  running, nobody seen; always over all cameras, even in an area view) with "present about
+  N h". The action is **Change**, and the card opens the person's **Appearances** day view
+  (route `/auftritte`). A person only a live watcher has named carries a small "live" mark
+  (preliminary, no confirmed pass yet), and the card opens that live alert instead. Twelve
+  cards are shown, the rest folds behind "all N people". There are no combined "A & B"
+  cards: the person is the unit.
+  **Probably recognized** appears when unknown faces of the day closely resemble a known
+  person: one card "probably NAME" per person, listing the unknown identities behind it,
+  with the action **Check**.
+  **Unknown**: faces nobody was recognized for appear as "Unknown N" cards once the
+  unknown pool has grouped them, each saying how often that identity was seen before
+  ("seen N× before" or "first time here"), with the action **Name**. Behind them come the
+  cards of live watchers (next paragraph). The band header counts the identities.
+  **Unknown person from a live watcher.** When a live watcher judges an appearance as an
+  unknown person, the Unknown band gets a card "Unknown person" with the "live" mark,
+  newest first: "seen HH:MM" (or the span, when one card holds several such appearances),
+  the camera and the watcher's picture of the first face (the camera picture with the face
+  framed, not a cut-out face). Its action is **View**, and the card opens that
+  appearance's card in the live day view (`/live_alerts`). The card comes for every
+  appearance that started outside the watcher's "Push pause" and in which nobody was
+  recognized, or, with "Also report unknown people next to recognized ones" on, in which
+  names were recognized but other valid faces gave no name vote. The channel makes no
+  difference: a watcher on MQTT only, one without any channel, or one with the "Unknown
+  person" switches for Pushover and Telegram off gets these cards too, and there is no
+  switch for them. An appearance that starts within the push pause gets no card, and none
+  comes when the watcher or the engine stops before the appearance ends. These cards have
+  no identity: they cannot be named, they do not say how often someone was seen, and the
+  same person can show up several times, next to an "Unknown N" card or next to a person
+  card of the same visit. Twelve are shown, the rest folds behind "all N alerts"; the band
+  header adds "N live watcher alerts" to the count of identities. Appearances recorded
+  before the version that added these cards have none. The page reads the newest 200
+  alert groups of the day (in an area view those of its cameras); if the appearance is no
+  longer among the newest 200 of the day in the live day view, the click lands at the top
+  of that page.
+  The page ends with a line giving the number of passes that day and a link to the
+  **Passes** tab. On today's date, without any alert channel set up, a line under the
+  Recognized band points to Notifications.
+- **Passes** (route `/durchgaenge`, between Today and Events) — the numbers and the walks
+  of the day. Day navigation and area chips work as on Today; the chosen day and area stay
+  when you switch between the two tabs. A row of four numbers comes first: **People
+  recognized** (links to the Recognized band on Today), **Passes**, **Events analysed**
+  (links to Events) and **Detection rate** (the share of the analysed events with at least
+  one checked face, the count in its tooltip); every number explains in its tooltip what
+  it counts. One sentence follows with the unknown people and the people probably
+  recognized (each a link to its band on Today), the passes with nobody recognized, more in
+  archived clusters and the events without a match in recognized passes; in an area view a
+  line above it says what the area view covers. Then the list of every walk (events
+  grouped by time, across all cameras unless you set a narrower reach per area under
+  Areas), newest first, one collapsed row each: time, duration, up to three avatars plus
+  "+N", the "+N not matched" footnote, the source tag (via face / via person / live), the
+  red body bar for body-only attributions and the vision line. A row starts open only when
+  it needs a look: nobody recognized with a serious face, or an alert went out (at most
+  three). Inside, each camera line shows at most three names plus "+N", eight camera lines
+  are visible and the rest folds behind "all N cameras". Passes whose whole clip contains
+  no serious face show a quiet "no usable face in this pass" note instead of a warning
+  badge. Under the list, notes count the hidden motion-only passes (a link to Events), the
+  detections filtered as non-faces and the likely false triggers per camera.
+  Live-watcher statistics live on the Live tab and in System stats.
+  A pass still in progress is marked "in progress" on both tabs, which then reload every
+  30 seconds, and finalizes once the walk ends.
 - **Events** — the flat event list with filters and paging, category badges, ground-truth
   buttons, and video links. Useful for drilling into a single event.
-- **To label** — the work list of unconfirmed events (route `/offen`, 50 per page): events that
-  have a usable face but aren't ground-truth confirmed yet, so you can label them one by one.
-  Besides the person buttons and *Stranger*/*?* there is a **No person** button for false
-  triggers (a video with nobody in it): one click closes the case and it stops counting as
-  unknown. The same button row appears wherever labeling is offered, including the event
-  detail page. Weak faces with no confirmed recognition nearby are collapsed by default
-  ("N weak-face events hidden") — they are almost always false triggers; a link shows them.
-  Passes whose whole clip contains no serious face get a quiet "no usable face in this pass"
-  note on Today instead of a warning badge and an unknown-visitor card.
+- The former **To label** work list is gone; its address `/offen` now leads to the **Unknown**
+  tab, where faces are named per identity (see **People** below). Single events are labeled
+  wherever the label buttons appear, for example on the event detail page: besides the person
+  buttons and *Stranger*/*?* there is a **No person** button for false triggers (a video with
+  nobody in it); one click closes the case and it stops counting as unknown. Passes whose
+  whole clip contains no serious face get a quiet "no usable face in this pass" note in the
+  list on the **Passes** tab instead of a warning badge and an unknown-visitor card.
 
 **People**
 
@@ -128,7 +169,10 @@ version that introduced the page — earlier days stay empty.
   The Pushover card shows the channel state: **off** while token or user key is missing (nothing
   is sent, one startup log line), **paused** after 5 rejections in a row (save the tab or run a
   successful Test to resume), otherwise active.
-  Live watchers use the same channels but pick them **per watcher** on the Live tab.
+  This attachment choice applies to the service's own alerts. Live watchers use the same
+  channels but pick them **per watcher** on the Live tab, and have their own switches for
+  known and unknown people, picture and video
+  ([live-watchers.md](live-watchers.md#pictures-and-video-on-pushover-and-telegram)).
 - **Recognition chain** — its own page: the order and conditions of the recognition
   paths (face → person → vision), each step with a plain-language condition. It used to
   sit inside Advanced.
@@ -207,13 +251,23 @@ and matches it against your references over time. It reports one of:
 Alerts fire only for the categories you enable (disagreement by default), with a global cooldown
 so continuous presence doesn't spam you.
 
-Live watchers alert on a separate path these categories do not govern: the presence
-trigger reports every person immediately ("<watcher> <camera>: person detected" with
-just the name of the quick check, or "not recognized"), and the name stage adds its own
-message per appearance and person ("<watcher> <camera>: recognized" with just the name)
-— both on the channels picked per watcher, with their own per-watcher re-arm time. The
-alert style `worte_zahlen` keeps the detailed texts with scores, seconds and the
-"preliminary" wording; the MQTT payload is unchanged either way.
+Live watchers alert on a separate path these categories do not govern. MQTT reports every
+person at the first face. Pushover and Telegram report a known person as soon as the name
+stage has recognized them ("Face of <name> recognized on <camera>", once per appearance
+and person); from the second name on, a list of all names of the appearance follows. When
+nobody was recognized, they send "Unknown person on <camera>" once the appearance is over.
+All of these go to the channels picked per watcher, and each watcher has switches for
+which of the two kinds Pushover and Telegram get. By default Pushover and Telegram carry a
+small picture, and Telegram also gets a video of the appearance once it is over; when
+there is a video, it carries the unknown person note instead of a separate alert. The
+per-watcher "Push pause" applies to Pushover and Telegram only: it
+starts with the first face of a reported appearance, and appearances that start before it
+runs out get no video and no unknown person alert. Names have their own pause of the same
+length, per person and watcher, so a name still goes out in such an appearance. MQTT never
+pauses; its messages are described in
+[live-watchers.md](live-watchers.md#home-automation-via-mqtt). The alert style
+`worte_zahlen` keeps the detailed texts with scores, seconds and the "preliminary"
+wording; the MQTT messages are the same in both styles.
 
 ## Reading the startup self-check
 

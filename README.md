@@ -15,7 +15,7 @@ running (see the roadmap section below).
 
 The `latest-*` image tags follow the newest release, so `docker compose pull` gets you
 what this README describes. To pin a version instead, use its tag explicitly:
-`ghcr.io/bennobaer-dev/suslik:0.1.1.057-gpu`.
+`ghcr.io/bennobaer-dev/suslik:0.1.1.101-gpu`.
 
 ## Why this exists
 
@@ -40,14 +40,14 @@ declines rather than mislabels.
 The Today page answers "who was on the property, when, and where did they go" — one card per
 person, one block per pass, unknowns kept visible instead of buried:
 
-![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.1.057)
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.1.101)
 
 *(Screenshot from a live install of v0.1.0.199; names and faces anonymized. The
 "Recognized live" row is the live watchers' preliminary naming, right on the stream.)*
 
 "Recognized live" cards collect the appearances a live watcher named right on the
 stream; clicking one opens the live day view with one card per camera appearance,
-all stored face images and short look-back videos.
+all stored face images and, where Telegram video is on, the video of the appearance.
 
 ## Features
 
@@ -272,8 +272,8 @@ only needed for the optional push-notification channels.
   together produce two name messages. Watchers are switched on per tile after a source
   test; enabled means running (no capacity estimate any more — the only hard limits are
   five watchers at once and a memory floor, and under load the service thins out its own
-  sampling). GPU-only for now (video decode via Intel VAAPI or NVIDIA NVDEC, the latter
-  verified on an RTX 2060). The live part is still young — report what breaks.
+  sampling). Built for a GPU (video decode via Intel VAAPI or NVIDIA NVDEC, the latter
+  verified on an RTX 2060); the cpu image runs watchers in a slower CPU mode. The live part is still young — report what breaks.
   How it works: [live-watchers.md](docs/live-watchers.md).
 - **Planned — "recurring, not a resident"**: a third review option next to naming and
   discarding, so the courier who comes three times a week doesn't silently disable your

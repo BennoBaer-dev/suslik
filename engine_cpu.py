@@ -203,7 +203,9 @@ CACHE_VORGABE = "/data/clips/ov_cache_models"
 #          (48,7 gegen 192,2 ms). Kein Klassen-Deckel: hier zahlt sich Breite aus,
 #          begrenzt wird allein durch das Strang-Budget.
 #   det    der Detektor (det_10g) auf der grossen Leinwand — dito.
-STUFEN_DECKEL = {"e": 4, "t": 4, wk.FD: 4, "p": 4, "r": None, "det": None}
+#   zb     der zweite Blick (Bauplan zweiter_blick, Stufe ZB1): derselbe Detektor auf dem Feld
+#          worker_kern.ZB_FELD; wie det ohne Klassen-Deckel. Nicht eigens gemessen.
+STUFEN_DECKEL = {"e": 4, "t": 4, wk.FD: 4, "p": 4, "r": None, "det": None, wk.ZB: None}
 
 
 

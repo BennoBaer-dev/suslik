@@ -332,8 +332,10 @@ def render(verlauf, jetzt, takt_s, aufbewahrung_h, live=None):
     eng = ge.get("engines") or {}
     eig_zeilen = tuple((n, _zahl(w, " %", 1)) for n, w in
                        sorted(eng.items(), key=lambda x: -x[1])[:3] if w > 0)
-    if gpu.get("prozent") is not None:
-        # Gesamtlast fuehrt; unser Anteil steht als erste Detailzeile darunter
+    if gpu.get("prozent") is not None or gpu.get("prozent_grund"):
+        # Gesamtlast fuehrt; unser Anteil steht als erste Detailzeile darunter.
+        # Bauplan nvidia_wsl2 NV3: auch eine gemessene Karte ohne Auslastung (WSL2: „[N/A]")
+        # steht hier, mit ihren Speicherwerten und dem Grund fuer die fehlende Zahl.
         zeilen = ((t("systemstat.gpu_eigen.zeile"),
                    _zahl(ge.get("prozent"), " %", 1) if ge.get("prozent") is not None else ""),
                   (t("systemstat.gpu.engine"), str(gpu.get("engine") or "")),
@@ -342,7 +344,13 @@ def render(verlauf, jetzt, takt_s, aufbewahrung_h, live=None):
                     if gpu.get("speicher_mb") is not None else "")),
                   (t("systemstat.gpu.temperatur"), _zahl(gpu.get("temperatur_c"), " °C")
                    if gpu.get("temperatur_c") is not None else ""))
-        k_gpu = _prozent_kachel("GPU", gpu, _reihe("gpu"), zeilen)
+        if gpu.get("prozent") is not None:
+            k_gpu = _prozent_kachel("GPU", gpu, _reihe("gpu"), zeilen)
+        else:
+            # Zahlen stehen in den Zeilen, es fehlt nur der Prozentsatz: die kleinere Marke.
+            k_gpu = _kachel("GPU", {"grund": gpu.get("prozent_grund")},
+                            '<span class="sst-gross dim">—</span>', _balken(_reihe("gpu")), zeilen,
+                            marke=t("systemstat.kein_prozent"))
     else:
         # Keine Gesamtlast auf dieser Maschine: der eigene Anteil IST die Kachel.
         # Der Grund, warum die Gesamtzahl fehlt, steht als Zeile darunter — nicht

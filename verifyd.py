@@ -206,6 +206,7 @@ def _unbekannt_karte(uid, heute, vorher, paesse, ziel, anker, aehnlich=None):
     pk-aehnlich, die Sichtungen aller dieser Identitaeten zusammengefasst, darunter je Identitaet die U-Nummer mit Median und
     Abstand. -> HTML der Karte"""
     from routes.unbekannte import bild as _bild
+    from core import kleinbild as _kleinbild          # TY1 Punkt 3: die Karte zeigt das kleine Bild
     erst, letzt = heute[0], heute[-1]
     rid = letzt["ref_id"]
     if not rid and not letzt["satz"]:
@@ -226,16 +227,21 @@ def _unbekannt_karte(uid, heute, vorher, paesse, ziel, anker, aehnlich=None):
             "heute.aehnlich.ident", uid=u, median=f"{m['median']:.2f}", abstand=f"{m['abstand']:.2f}")) + '</div>'
             for u, m in eintraege)
     else:
-        name = f"Unknown {uid.lstrip('U')}"
-        zusatz = (f'<div class="pk-kam">seen {vorher}× before</div>' if vorher > 0
-                  else '<div class="pk-kam">first time here</div>')
+        name = _sprache.t("unbekannte.name", nummer=uid.lstrip("U"))
+        zusatz = ('<div class="pk-kam">' + html.escape(_sprache.t("heute.unbek.vorher", n=vorher) if vorher > 0
+                                                       else _sprache.t("heute.unbek.erstmals")) + '</div>')
         if any(s.get("gt_fremd") for s in paesse):    # F2/A2: vom User bestaetigter Fremder, ruhig ausweisen
-            zusatz += '<div class="pk-kam badge-gtfremd">confirmed stranger</div>'
+            zusatz += f'<div class="pk-kam badge-gtfremd">{html.escape(_sprache.t("heute.unbek.fremder"))}</div>'
+    # Bauplan analysen/bauplan_today_seite.md, Stufe TY2 Punkt 5: die Handlung steht unten rechts in der Kachel und gehoert
+    # zum selben Verweis (kein zweites Klickziel); „Prüfen“ fuer „wahrscheinlich P“, „Benennen“ fuer Unbekannte.
+    akt = (f'<span class="pk-akt">{html.escape(_sprache.t("heute.akt.pruefen"))}</span>' if aehnlich
+           else f'<span class="pk-akt stark">{html.escape(_sprache.t("heute.akt.benennen"))}</span>')
     return (f'<div class="pkwrap"><a{anker} class="pk {"pk-aehnlich" if aehnlich else "pk-unbek"}" '
-            f'title="Open this walk-through" href="{ziel}">'
-            f'<div class="pk-av pk-av-unbek"><img src="{_bild(rid, letzt["id"])}" loading="lazy" alt=""></div>'
+            f'title="{html.escape(_sprache.t("heute.unbek.link_title"), quote=True)}" href="{ziel}">'
+            f'<div class="pk-av pk-av-unbek"><img src="{_kleinbild.adresse(_bild(rid, letzt["id"]))}" loading="lazy" '
+            'alt=""></div>'
             f'<div class="pk-txt"><div class="pk-name">{html.escape(name)}</div>'
-            f'<div class="pk-meta">{html.escape(" · ".join(teile))}</div>{zusatz}</div></a></div>')
+            f'<div class="pk-meta">{html.escape(" · ".join(teile))}</div>{zusatz}{akt}</div></a></div>')
 
 
 def _pass_von(szenarien):
@@ -293,6 +299,55 @@ def _unbekannt_karten(uid_mitglieder, uids, szenarien, fenster, gap_s, tag_s, nu
     return [_unbekannt_karte(uid, heute, vorher, paesse, ziel,
                              ' id="unidentified"' if i == 0 and aehnlich is None else '', extra)
             for i, (_t, uid, heute, vorher, paesse, ziel, extra) in enumerate(roh)]
+
+
+def _durchgaenge_zahlen(personen, paesse, events, gesicht, events_ziel, abfrage):
+    """Die Zeile mit den vier Zahlen des Reiters Durchgaenge (Bauplan analysen/bauplan_today_seite.md, Stufe TY2 Punkt 2;
+    vorher die Randspalte von Heute): Personen, Durchgaenge, analysierte Ereignisse und Gesichtsquote, je mit dem Tooltip
+    ihres Zaehl-Bezugs. Die Personen verweisen auf das Band Erkannt von Heute (Tag und Bereich in abfrage), die Ereignisse
+    auf events_ziel. Die Gesichtsquote in ganzen Prozent wie in Stufe TS3, ohne analysierte Ereignisse „–“.
+    -> HTML der Zeile"""
+    quote = f"{round(100 * gesicht / events)} %" if events else "–"
+
+    def zahl(titel, wert, lab):
+        return (f'<div class="hk-zahl" title="{html.escape(titel, quote=True)}"><span class="num">{wert}</span>'
+                f'<span class="hk-zahl-lab">{lab}</span></div>')
+    return ('<div class="hk-zahlen">'
+            + zahl(_sprache.t("heute.rand.personen_title"), personen,
+                   f'<a href="/heute{abfrage}#recognized">{html.escape(_sprache.t("heute.rand.personen"))}</a>')
+            + zahl(_sprache.t("heute.rand.passes_title"), paesse, html.escape(_sprache.t("heute.rand.passes")))
+            + zahl(_sprache.t("heute.rand.events_title"), events,
+                   f'<a href="{events_ziel}">{html.escape(_sprache.t("heute.rand.events"))}</a>')
+            + zahl(_sprache.t("heute.rand.gesicht_title", n=gesicht, m=events), quote,
+                   html.escape(_sprache.t("heute.rand.gesicht")))
+            + '</div>')
+
+
+def _durchgaenge_satz(unbek, aehnlich, ohne_pass, archiv, nebenbei, abfrage, area):
+    """Der Satz unter den Zahlen des Reiters Durchgaenge (TY2 Punkt 2): unbekannte Personen (Verweis auf das Band
+    Unbekannt von Heute), wahrscheinlich erkannte Personen, Durchgaenge ohne erkannte Person, weitere in archivierten
+    Gruppen und Ereignisse ohne Zuordnung in erkannten Durchgaengen; die Teile der Randspalte, mit denselben Bedingungen.
+    Mit area steht davor die Zeile zur Bereichs-Sicht.
+    -> HTML (Zeile zur Sicht und Satz)"""
+    teile = []
+    if unbek:
+        teile.append(f'<a href="/heute{abfrage}#unknown" title="{html.escape(_sprache.t("heute.rand.unbek_title"), True)}">'
+                     f'{html.escape(_sprache.t_n("heute.neben.unbek", unbek))}</a>')
+    if aehnlich:
+        teile.append(f'<a href="/heute{abfrage}#similar">{html.escape(_sprache.t_n("heute.neben.aehnlich", aehnlich))}</a>')
+    # Widerleger MUSS-1 (Realfall 12.08.): neben der Zahl der Unbekannten steht die Zahl der Durchgaenge ohne Erkennung nur,
+    # wenn sie selbst etwas meldet; ohne Unbekannte und Archiv steht sie immer, als „keine“, wenn sie 0 ist.
+    if ohne_pass:
+        teile.append(html.escape(_sprache.t_n("heute.neben.ohne", ohne_pass)))
+    elif not (unbek or archiv):
+        teile.append(html.escape(_sprache.t("heute.neben.keine")))
+    if archiv:                                  # Widerleger MUSS-2 (U155): nie still verstecken
+        teile.append(html.escape(_sprache.t_n("heute.neben.archiv", archiv)))
+    if nebenbei:
+        teile.append(html.escape(_sprache.t_n("heute.neben.nebenbei", nebenbei)))
+    sicht = (f'<p class="hk-neben">{html.escape(_sprache.t("heute.neben.area", area=area))}</p>'
+             if area is not None else '')
+    return sicht + f'<p class="hk-neben">{" · ".join(teile)}</p>'
 
 
 def _base_dirs(dd):
@@ -1126,8 +1181,12 @@ def _placement_hw_key():
     # /dev/kfd + /dev/nvidia*: ohne sie aendert ein AMD-/Nvidia-GPU-Wechsel den Key nicht und
     # ein altes Placement bliebe kleben (Inventur-Fund 31.07.). Key-Aenderung invalidiert
     # gespeicherte Placements einmalig — gewollt, naechster Boot misst neu.
+    # Bauplan nvidia_wsl2 NW1: unter WSL2 kommt die Karte ueber den WSL2-Knoten der Registry
+    # (dort ohne /dev/nvidia*); er gehoert in den Schluessel. Ohne ihn bleibt der Schluessel gleich.
+    from core.registry import knoten_von as _knoten_von       # noqa: PLC0415
     devs = sorted(_glob.glob("/dev/dri/renderD*")) + sorted(_glob.glob("/dev/accel/accel*")) \
-         + sorted(_glob.glob("/dev/kfd")) + sorted(_glob.glob("/dev/nvidia[0-9]*"))
+         + sorted(_glob.glob("/dev/kfd")) + sorted(_glob.glob("/dev/nvidia[0-9]*")) \
+         + sorted(_glob.glob(_knoten_von("WSL2")))
     return f"{cpu}|{','.join(devs)}|ort{ov}|{os.environ.get('SUSLIK_VERSION', '')}"
 
 
@@ -1834,6 +1893,7 @@ def load_config(path):
                          ("vorlauf_min", VORLAUF_MIN_WERK),
                          ("vorlauf_max", VORLAUF_MAX_WERK),
                          ("vorlauf_parallel", VORLAUF_PARALLEL_WERK),
+                         ("vorlauf_timeout_s", VORLAUF_TIMEOUT_WERK),
                          # .534 (B8): eigener Platz fuer Hintergrund-Jobs.
                          # 0 = Verhalten der .533 (sie sitzen auf den
                          # Analyse-Plaetzen).
@@ -5958,10 +6018,10 @@ def video_encoder():
     # NVIDIA zuerst: dort gibt es kein VAAPI, und /dev/nvidia* existiert nur, wenn die Geraete
     # wirklich in den Container gereicht wurden (--gpus). Trotzdem proben, nicht annehmen.
     # -nostdin wie in jedem produktiven ffmpeg-Aufruf (die Probe erbt sonst stdin des Dienstes).
-    try:
-        nvidia = any(n.startswith("nvidia") for n in os.listdir("/dev"))
-    except OSError:
-        nvidia = False
+    # Bauplan nvidia_wsl2 NW1: ob NVENC Kandidat ist, entscheidet core/nvidia_lage (Knoten unter
+    # Linux, Treiber unter WSL2); die echte Probe unten bleibt Pflicht.
+    from core.nvidia_lage import nvidia_da as _nvidia_da       # noqa: PLC0415
+    nvidia = _nvidia_da()[0]
     if nvidia and _encode_probe(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
                                  *quelle, "-vf", "format=yuv420p", "-c:v", "h264_nvenc",
                                  "-f", "null", "-"]):
@@ -7368,6 +7428,12 @@ VORLAUF_PARALLEL_WERK = 2
 VORLAUF_PARALLEL_MAX = 4
 VORLAUF_MIN_GRENZE = 200
 VORLAUF_MAX_GRENZE = 500
+# Bauplan analysen/bauplan_abruffenster.md, Stufe AF1 (Eigentuemer 10.11.2026 09:07:36): so viele Sekunden wartet der
+# Disponent beim Abruf eines Clips auf Daten von Frigate (`vorlauf_timeout_s`), Werkswert und Grenzen. Die uebrigen
+# Abrufwege behalten das Fenster aus core/frames.clip_holen.
+VORLAUF_TIMEOUT_WERK = 60
+VORLAUF_TIMEOUT_KLEIN = 10
+VORLAUF_TIMEOUT_GROSS = 300
 # Wie lange eine Antwort von Frigate zu einem Ereignis gilt, bevor erneut gefragt wird: bei einem noch offenen
 # Ereignis und nach einem Abfragefehler (ausser 404). KEIN Budget: ein Ereignis, das Frigate noch nicht abgeschlossen
 # hat, wird durch haeufigeres Fragen nicht schneller fertig — und der Disponent, der Frigate schonen soll, darf es nicht
@@ -7481,15 +7547,17 @@ class Vorlauf:
         self.phase_letzte = None
 
     # ----------------------------------------------------------- Einstellungen
+    def _z(self, name, werk, klein, gross):
+        """Eine ganze Zahl aus der Config, auf klein bis gross geklemmt; nicht lesbar heisst Werkswert.
+        -> int"""
+        try:
+            return max(klein, min(gross, int(self.svc.cfg.get(name, werk))))
+        except (TypeError, ValueError):
+            return werk
+
     def _zahlen(self):
         """(min, max, parallel) aus der Config, geklemmt. max = 0 heisst Vorrat aus."""
-        cfg = self.svc.cfg
-
-        def _z(name, werk, klein, gross):
-            try:
-                return max(klein, min(gross, int(cfg.get(name, werk))))
-            except (TypeError, ValueError):
-                return werk
+        _z = self._z
         hoch = _z("vorlauf_max", VORLAUF_MAX_WERK, 0, VORLAUF_MAX_GRENZE)
         tief = _z("vorlauf_min", VORLAUF_MIN_WERK, 0, VORLAUF_MIN_GRENZE)
         if hoch and hoch < tief:
@@ -7771,6 +7839,9 @@ class Vorlauf:
                 # aus der Config statt 30 s.
                 vod=_frames.vod_an(cfg.get("clip_vod")),
                 erzeugung=erzeugung, erzeugung_deckel_s=clip_erzeugung_deckel_s_aus_cfg(cfg),
+                # Bauplan Abruffenster AF1: das Warten auf Daten von Frigate aus `vorlauf_timeout_s`.
+                timeout=self._z("vorlauf_timeout_s", VORLAUF_TIMEOUT_WERK, VORLAUF_TIMEOUT_KLEIN,
+                                VORLAUF_TIMEOUT_GROSS),
                 deadline_s=frist)                                # D3b Punkt 3: die heutige Job-Frist
             _frames.frei(eid, dd)                       # Fadenpin nach dem Abruf loesen, danach haelt nur der benannte
             self._abruf_zaehlen()
@@ -12470,7 +12541,7 @@ class Service:
         "sichtung_norm_veto": (float, 0.0, 40.0, "quality line for learning runs: faces at or below this feature-norm value are dropped from the group view — this is what separates false detections (hedges, wheel arches) from small real faces, because the detector itself is confident about both (0 = off)"),
         "reihung_luma_min": (int, 0, 255, "darkest brightness a face crop may have and still be recommended for learning: below it the picture is shown with the reason \"too dark\" and sorted behind the well-lit ones. It is never dropped — you can still pick it by hand. Measured on 4929 crops from this system: median brightness 90, and a third of them below 80, while none of the other sorting axes tells dark from bright (0 = off)"),
         "reihung_luma_max": (int, 0, 255, "brightest a face crop may be and still be recommended for learning: above it the picture is shown with the reason \"overexposed\" and sorted behind the well-lit ones. Never dropped, same as the lower line (0 = off)"),
-        "live_retention_d": (int, 0, 365, "how many days the live watchers' evidence pictures and look-back clips are kept in <data_dir>/live/ (0 = keep forever)"),
+        "live_retention_d": (int, 0, 365, "how many days the live watchers' evidence pictures and videos are kept in <data_dir>/live/ (0 = keep forever)"),
         "live_verworfen_retention_d": (int, 0, 365, "how many days the live watchers' rejected frames (pose check, prefix verworfen_) are kept — they are diagnostic material only and are never shown; they are by far the largest part of <data_dir>/live/ (0 = keep forever)"),
         # Live-Umbau 31.08.: Deckel des Kalibrier-Vorrats JE KAMERA. Er ist der
         # Grund, warum der Ring nie wachsen kann — <data_dir>/live/ war schon
@@ -12593,6 +12664,7 @@ class Service:
         "vorlauf_max": (int, 0, VORLAUF_MAX_GRENZE, "how many finished clips the service keeps ready on disk ahead of the analysis. Live analyses read their clip only from the local clip cache; the service's dispatcher fetches all of them from Frigate, so no compute thread stands still while a clip is pulled. The dispatcher fetches in the order the clips will be needed: weighted by camera priority (High 7, Mid 2, Low 1 out of every ten), and within one priority the newest event first. It fetches until vorlauf_max clips are ready, then pauses until fewer than vorlauf_min are ready; a newer event without a clip is fetched right away. 50 is the default, derived from a field measurement: about 20 events per minute on two compute threads and about 3 s per fetch, so 50 gives short refill bursts instead of one long pull. 0 switches the stock off: the dispatcher then fetches only as many clips as there are compute threads, and it does the same while the clip cache is at its size cap. The clips go into the normal clip cache and obey its size cap"),
         "vorlauf_min": (int, 0, VORLAUF_MIN_GRENZE, "the lower mark of the stock (see vorlauf_max): once fewer than this many clips are ready, the dispatcher fetches again until vorlauf_max is reached; a newer event without a clip is fetched right away in any case. 20 is the default, about one minute of stock at the measured rate. The gap between the two marks keeps the service from asking Frigate for a new clip after every single analysed event"),
         "vorlauf_parallel": (int, 1, VORLAUF_PARALLEL_MAX, "how many clips the dispatcher fetches from Frigate at the same time. 2 is the default. Frigate 0.18 serves clip streams and authentication from one thread pool, so more parallel pulls make the whole installation slower, not faster. Up to this number the dispatcher may use every place of the clip gate; none is kept free for live analyses any more, because they no longer fetch their own clips"),
+        "vorlauf_timeout_s": (int, VORLAUF_TIMEOUT_KLEIN, VORLAUF_TIMEOUT_GROSS, f"fetch-ahead: how many seconds suslik waits for data from Frigate while it fetches the clip of a new event. If Frigate sends nothing for this long, the fetch is aborted and tried again. {VORLAUF_TIMEOUT_WERK} is the default. Raise it if the clips of long events fail with 'TimeoutError: timed out' in the log."),
         "zeitprotokoll": (int, 0, 1, "1 writes one balance line per event to the log and keeps the same figures in the record and in /health: how long the event waited in the queue, how long its clip took to fetch (with size), how long the handover to the worker took, how long until the first decoded frame (and which decoder), the analysis itself, writing the record, and the total time the analysis slot was busy. It costs one line per event and answers the question the record cannot: where the time goes when the accelerator sits idle while events are waiting. 0 turns the line off"),
         "api_event_max_min": (int, 1, 1440, "how long one of suslik's OWN Frigate events may stay open before the service closes it after the fact, in minutes. 30 is the default. The live watchers can create their own events in Frigate (per camera switch) and close them when the appearance is over; if that close is lost — Frigate creates API events asynchronously and can answer the close with a 404 — the event would stay open for ever, and an event without an end has no usable clip. The service keeps a list of its own open events, retries the close, and checks afterwards that the end really arrived"),
         "offen_max_min": (int, 0, 1440, "how long an event that Frigate never finished (no end_time) is held back before it is skipped for good, in minutes. 60 is the default. Such an event has no end, so the analysis reads its clip until the job deadline expires and the worker is shot — one of them can stall the whole queue. While it is held back nothing is computed and nothing is written; after this many minutes the record gets one honest line (\"skipped, event never ended in Frigate\") and the event is done. 0 keeps holding it back for ever"),
@@ -13004,7 +13076,6 @@ class Service:
         gesperrt, sperr_grund = self._live_gesperrt()
         _auftrag, _auftraege, ks_ui = _lw.status_fuer_ui(status, frisch)
         _d, guards = _lw.guards_lesen(self.cfg, _logbuch.NULL)
-        versteckt = set(_lw.versteckt_lesen(self.cfg))
         briefe = _lw.steckbriefe_lesen(self.cfg)
         kacheln = []
         for name in sorted(set(cams or {}) | set(guards)):
@@ -13022,7 +13093,6 @@ class Service:
                 "test": (g or {}).get("test") or None,
                 "test_fehler": (g or {}).get("test_fehler") or None,
                 "messung": (g or {}).get("messung") or None,
-                "versteckt": name in versteckt,
                 "steckbrief": briefe.get(name) or None,
             })
         return kacheln, {"frisch": frisch, "status": status,
@@ -13208,17 +13278,15 @@ class Service:
             msg = (msg or "") + cpu_warnung
         return ok, msg
 
-    def live_verstecken(self, kamera, versteckt):
-        """Duenner Mantel (Muster live_schalter) — reine Anzeige-Praeferenz,
-        deshalb KEINE Build-Sperre: auch auf cpu-only darf man die Kachel-
-        Liste aufraeumen (die Kacheln existieren dort ja, nur gesperrt)."""
+    def live_platz(self, kamera, platz):
+        """Duenner Mantel (Muster live_schalter) fuer Zuweisen und Leeren eines Platzes der Live-Seite (Bauplan
+        live_seite, Stufe LS1). -> (ok, msg) aus core/livewache.live_platz."""
         from core import livewache as _lw
         with _cfg_lock:                    # Engine-M5, s. live_speichern
-            return _lw.live_verstecken(self.cfg, kamera, bool(versteckt),
-                                       log=self.log,
-                                       store_pfad=_config_store_pfad,
-                                       store_laden=_lade_config_store,
-                                       store_schreiben=_store_schreiben)
+            return _lw.live_platz(self.cfg, kamera, platz, log=self.log,
+                                  store_pfad=_config_store_pfad,
+                                  store_laden=_lade_config_store,
+                                  store_schreiben=_store_schreiben)
 
     def start_stream_steckbriefe(self):
         """Stream-Steckbriefe je Frigate-Kamera EINMAL je Dienststart im
@@ -26207,7 +26275,7 @@ class Service:
         kannte (cleanup_cache filtert auf .mp4/.part im clips-Ordner). Gemessen am
         21.08.: 72,9 GB / 137.719 Dateien in neun Tagen, davon 61,1 GB Pose-Sieb-
         Ausschuss. Zwei Alters-Achsen aus der Config: verworfen_* (Diagnose) faellt
-        frueher, Beweis-Medien (Bilder + Rueckblick-Videos gemeldeter Auftritte,
+        frueher, Beweis-Medien (Bilder + Videos gemeldeter Auftritte,
         core.livewache.alarmbilder liest sie) halten laenger. Nur Kamera-Unterordner —
         preview/, meldungen.jsonl und verbrauch.csv sind laufende Dateien.
         Feldstau Stufe 4: die dritte Zahl zaehlt die gesehenen Dateien der Kamera-Ordner
@@ -28390,13 +28458,17 @@ def make_handler(svc):
         def log_message(self, *a):
             pass
 
-        def _send(self, code, body, ctype="text/html; charset=utf-8", location=None):
+        def _send(self, code, body, ctype="text/html; charset=utf-8", location=None, haltbar=False):
             self.send_response(code)
             if location:
                 self.send_header("Location", location)
             self.send_header("Content-Type", ctype)
-            if ctype.startswith(("text/html", "application/json",
-                                 "application/javascript", "text/css")):
+            if haltbar:
+                # Bauplan analysen/bauplan_today_seite.md, Stufe TY1 Punkt 4: Skript und Stil mit dem geltenden
+                # Stempel in der Adresse darf der Browser behalten; ein neuer Stand hat einen neuen Stempel.
+                self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+            elif ctype.startswith(("text/html", "application/json",
+                                   "application/javascript", "text/css")):
                 # ohne das zeigte der Browser beim Oeffnen die GESTRIGE Seite aus seinem
                 # Heuristik-Cache (User-Befund 19.07.); JS/CSS ebenfalls, sonst laufen neue
                 # Seiten gegen ein altes app.js (onclick-Funktionen fehlen -> Knoepfe tot)
@@ -28414,9 +28486,11 @@ def make_handler(svc):
             except (BrokenPipeError, ConnectionResetError):
                 pass                              # Client weg — nichts mehr zuzustellen
 
-        def _heute_senden(self, titel, inhalt, live_offen, ist_heute):
+        def _heute_senden(self, titel, inhalt, live_offen, ist_heute, ansicht):
             """Die Huelle der Seite /heute je Aufruf bauen (Banner, Nachhol-Knopf, Takt, Frigate-Hinweis) und senden;
-            aus dem Zweig /heute unveraendert verschoben (Bauplan analysen/bauplan_render_cache.md, RC1 Punkt 4). -> None"""
+            aus dem Zweig /heute unveraendert verschoben (Bauplan analysen/bauplan_render_cache.md, RC1 Punkt 4). Der
+            aktive Unterreiter ist die Ansicht, /heute oder /durchgaenge (Bauplan analysen/bauplan_today_seite.md, TY2).
+            -> None"""
             import webui
             # Auto-Aktualisierung NUR am heutigen Tag: ein vergangener Tag aendert sich nicht
             # mehr, ein Reload wuerde nur die Position im Blaettern zerstoeren.
@@ -28446,7 +28520,7 @@ def make_handler(svc):
                     and not cfg.get("frigate_sync")):
                 _hw = _sprache.t("hinweis.frigate_fr_an")
             _seite = webui.layout(
-                titel, "/heute", inhalt, _bn,
+                titel, ansicht, inhalt, _bn,
                 refresh=(30 if (live_offen or _bakt) else 120) if ist_heute else 0,
                 banner_aktion=_bakt, hinweis=_hw)
             return self._send(200, _seite)
@@ -30546,7 +30620,7 @@ def make_handler(svc):
                 return self._send(200, json.dumps(
                     {"ok": not fehl, "msg": m}), "application/json")
             if pfad in ("/live_speichern", "/live_schalter", "/live_test",
-                        "/live_messung", "/live_verstecken",
+                        "/live_messung", "/live_platz",
                         "/live_kalib_leeren", "/kalibrierung_fuellen"):
                 # Live-Reiter (Phase 2): duenne Maentel, Logik/Riegel in
                 # core/livewache (live_speichern/live_schalter serverseitig —
@@ -30580,9 +30654,9 @@ def make_handler(svc):
                     ok, msg = svc.live_schalter(kamera, bool(d.get("enabled")))
                 elif pfad == "/live_test":
                     ok, msg = svc.live_test_starten(kamera)
-                elif pfad == "/live_verstecken":
-                    ok, msg = svc.live_verstecken(kamera,
-                                                  bool(d.get("versteckt")))
+                elif pfad == "/live_platz":
+                    # LS1: `platz` ist die Nummer des Platzes; fehlt sie oder ist sie leer, wird der Platz geleert.
+                    ok, msg = svc.live_platz(kamera, d.get("platz"))
                 elif pfad == "/live_kalib_leeren":
                     # Reine Datei-Handlung im Vorrats-Ring — kein Store-Schreib,
                     # deshalb ohne Dienst-Methode und ohne _cfg_lock. Die Logik
@@ -31973,8 +32047,11 @@ def make_handler(svc):
                 fn = os.path.basename(path)
                 p = os.path.join(HERE, "webui", fn)
                 if fn in ("style.css", "app.js") and os.path.isfile(p):
+                    import webui
                     ct = "text/css" if fn.endswith(".css") else "application/javascript"
-                    return self._send(200, open(p, "rb").read(), ct + "; charset=utf-8")
+                    # TY1 Punkt 4: haltbar nur mit dem geltenden Stempel, sonst no-store wie bisher.
+                    return self._send(200, open(p, "rb").read(), ct + "; charset=utf-8",
+                                      haltbar=qs.get("v", [""])[0] == webui._STATIK_STEMPEL)
                 return self._send(404, "not found", "text/plain")
             if path == "/":
                 ziel = "/heute" if _setup_done(cfg) else "/setup"   # frisches System -> Wizard (User 22.07.)
@@ -32014,7 +32091,11 @@ def make_handler(svc):
                 else:
                     _titel, _inhalt = _auf.render(cfg, svc.log_path, master_persons(cfg), qs)
                 return self._send(200, webui.layout(_titel, "/heute", _inhalt, self._banner()))
-            if path == "/heute":
+            if path in ("/heute", "/durchgaenge"):
+                # Bauplan analysen/bauplan_today_seite.md, Stufe TY2 Punkt 3: ein Zweig, zwei Ansichten. /heute zeigt die
+                # Baender mit Kacheln, /durchgaenge die Zahlen und die Liste der Durchgaenge; gerechnet wird wie bisher,
+                # gebaut nur, was die Ansicht zeigt.
+                _durch = path == "/durchgaenge"
                 _t0_seite = time.monotonic()      # Bauplan Seiten-Tempo ST1 Punkt 4: Dauer fuer die DEBUG-Zeile
                 # .232 (User-Entwurf): wer Today ansieht, klickt womoeglich
                 # gleich einen Pass-Check — .235: die DIENST-Instanz vorwaermen
@@ -32059,14 +32140,15 @@ def make_handler(svc):
                     from core import aehnlich as _aeh
                     _upd = webui.UPDATE_INFO or {}
                     with _rt.step("render_cache"):
-                        _rc_griff = _rc.lookup(_rc.PAGE_TODAY, cfg, svc.log_path, tag_dt.strftime("%Y-%m-%d"),
+                        _rc_griff = _rc.lookup(_rc.PAGE_PASSES if _durch else _rc.PAGE_TODAY, cfg, svc.log_path,
+                                               tag_dt.strftime("%Y-%m-%d"),
                                                _heute_dt.strftime("%Y-%m-%d"),
                                                (qs.get("area", [""])[0], _upd.get("tag"), _upd.get("url"),
                                                 _aeh.SPEICHER.rot()),
                                                gt_path=ground_truth_path(cfg["data_dir"]))
                     if _rc_griff is not None and _rc_griff.hit is not None:
                         return self._heute_senden(_rc_griff.hit.title, _rc_griff.hit.content, False,
-                                                  _rc_griff.hit.today_page)
+                                                  _rc_griff.hit.today_page, path)
                 z_events = 0
                 # by_h (last-wins je eid) MUSS vor die KPI: nach einem Nachhol-Lauf gibt es zwei
                 # Zeilen fuer dasselbe Event. Zaehlte die KPI wie frueher die ERSTE, stuende die
@@ -32143,6 +32225,7 @@ def make_handler(svc):
                 #  (konzept_gt_label_fix.md); .313: EINE Lese-Quelle (szenarien.gt_labelmap).
                 gtmap_h = _szen.gt_labelmap(ground_truth_path(cfg["data_dir"]))
                 # (by_h wird oben vor der KPI gebaut)
+                from core import kleinbild as _kleinbild   # TY1 Punkt 3: Kacheln und Chips zeigen kleine Bilder
 
                 def _av_farbe(name):
                     # Avatar-Toene (weisse Initiale darauf). Ersetzt am 25.07.: von den sechs
@@ -32160,7 +32243,8 @@ def make_handler(svc):
                         js = ([c for c in os.listdir(edir) if f"_show_{person}_" in c] or
                               [c for c in os.listdir(edir) if f"_best_{person}_NN" in c])
                         if js:
-                            return f"/events/{urllib.parse.quote(ed)}/{urllib.parse.quote(js[0])}"
+                            # TY1 Punkt 3: Kachel und Chip zeigen das kleine Bild.
+                            return _kleinbild.adresse(f"/events/{urllib.parse.quote(ed)}/{urllib.parse.quote(js[0])}")
                     return None
 
                 def _av(person, eid=None, cls="av", url=None):
@@ -32305,7 +32389,6 @@ def make_handler(svc):
                 aeh_fehler = _aeh.SPEICHER.rot()
                 pool_unbek = {uid: n for uid, n in pool_tag.items() if uid not in aeh_tag}
                 pool_unbek_n = len(pool_unbek)
-                pool_auftritte = sum(pool_unbek.values())
                 # Widerleger MUSS-2 (Realfall U155): ARCHIVIERTE Nicht-Objekt-Identitaeten
                 # mit frischem Mitglied im Fenster als eigene Zeile mitzaehlen — die Kachel
                 # darf sie nicht still verstecken. Entscheid 19 (Bauplan analysen/bauplan_aehnlich.md): Identitaeten, die
@@ -32338,8 +32421,8 @@ def make_handler(svc):
                         if os.path.isfile(os.path.join(
                                 cfg["data_dir"], "personlern", "treffer",
                                 ed + ".jpg")):
-                            u = ("/person/treffer/"
-                                 + urllib.parse.quote(ed) + ".jpg")
+                            u = _kleinbild.adresse("/person/treffer/"
+                                                   + urllib.parse.quote(ed) + ".jpg")
                     av = (f'<span class="avs"><img src="{u}" loading="lazy" alt=""></span>' if u
                           else f'<span class="avs" style="background:{_av_farbe(name)}">'
                                f'{html.escape(name[:1].upper())}</span>')
@@ -32367,24 +32450,25 @@ def make_handler(svc):
                         'stroke="currentColor" stroke-width="1.6" stroke-linecap="round" '
                         'stroke-linejoin="round"/></svg>')
                 karten = []
-                live_offen = False
+                # TY2 Punkt 3: live_offen brauchen beide Ansichten (Takt, Kopf), die Zeilen nur der Reiter Durchgaenge.
+                live_offen = any(s.get("laeuft") for s in interessant)
                 n_offen = 0           # .412: Oeffnungsregel, hoechstens PASS_OFFEN_MAX
-                for s in interessant:
+                for s in (interessant if _durch else ()):
                     live = s.get("laeuft")
-                    live_offen = live_offen or live
                     # .412: Alarm dieses Durchgangs (Oeffnungskriterium §3/M3) aus
                     # der Akte — szenarien kennt nur die eid je Event.
                     alarm = any((by_h.get(e.get("eid")) or {}).get("alerted")
                                 for e in s["evs"])
+                    # TY2 Punkt 6: die Texte der Zeilen aus den Schluesseln heute.pass.* der Sprache.
                     if live:
-                        zeit = f'since {_hhmm(s["start"])}'
-                        dauer = f'{s["n"]} event{"s" if s["n"] != 1 else ""} so far'
+                        zeit = _sprache.t("heute.pass.seit", zeit=_hhmm(s["start"]))
+                        dauer = _sprache.t_n("heute.pass.bisher", s["n"])
                     else:
                         kurz = (s["ende"] - s["start"]) < 60
                         zeit = _hhmm(s["start"]) if kurz else f'{_hhmm(s["start"])}–{_hhmm(s["ende"])}'
-                        _pl = "s" if s["n"] != 1 else ""
-                        dauer = (f'{s["n"]} event{_pl}' if kurz
-                                 else f'{int((s["ende"] - s["start"]) / 60)} min · {s["n"]} event{_pl}')
+                        dauer = (_sprache.t_n("heute.pass.events", s["n"]) if kurz
+                                 else _sprache.t("heute.pass.dauer", m=int((s["ende"] - s["start"]) / 60),
+                                                 ev=_sprache.t_n("heute.pass.events", s["n"])))
                     # .356: VOR der Verzweigung — die Kartenzeile (kls) liest
                     # es weiter unten auf DIESER Ebene. Stuende es nur im
                     # else-Zweig, gaebe ein Live-Durchgang einen NameError
@@ -32403,19 +32487,20 @@ def make_handler(svc):
                     if live:
                         # Durchgang laeuft noch (letztes Event < Karenz her): nur Fakten (erkannte
                         # Personen), noch KEIN abschliessendes Urteil, es koennen Kameras dazukommen
-                        mitte = ('<span class="badge live"><span class="ldot"></span>in progress</span>'
-                                 + (mitte or '<span class="dim">identifying…</span>'))
+                        mitte = (f'<span class="badge live"><span class="ldot"></span>'
+                                 f'{html.escape(_sprache.t("heute.laeuft"))}</span>'
+                                 + (mitte or f'<span class="dim">{html.escape(_sprache.t("heute.pass.erkennt"))}</span>'))
                     else:
                         if not s["pers"] and s["unbek"] and not s.get("unbek_stark"):
                             # Issue #16 Automatik: kein einziges ernstzunehmendes
                             # Gesicht im ganzen Durchgang -> stille Klasse statt
                             # Warn-Plakette und Unknown-Karte. Events bleiben
                             # unter Events/To-label erreichbar.
-                            mitte = ('<span class="dim">no usable face in this '
-                                     f'pass ({s["unbek"]} event'
-                                     f'{"s" if s["unbek"] != 1 else ""})</span>')
+                            mitte = (f'<span class="dim">'
+                                     f'{html.escape(_sprache.t_n("heute.pass.kein_gesicht", s["unbek"]))}</span>')
                         elif not s["pers"]:
-                            mitte = '<span class="badge q">?</span><span class="dim">no known person</span>'
+                            mitte = (f'<span class="badge q">?</span><span class="dim">'
+                                     f'{html.escape(_sprache.t("heute.pass.niemand"))}</span>')
                         if s["unbek"] and not s["pers"] and s.get("unbek_stark"):
                             # Kein einziger Bestaetigter im ganzen Durchgang — DAS ist der Fall,
                             # der Aufmerksamkeit verdient, und nur der.
@@ -32423,19 +32508,21 @@ def make_handler(svc):
                             # unerkannte Events desselben Durchgangs — meist ein und dieselbe Person
                             # auf mehreren Kameras. "unmatched" ohne Hauptwort behauptet keine Anzahl
                             # von Menschen; wie viele es waren, weiss an dieser Stelle niemand.
+                            _ohne = html.escape(_sprache.t_n("heute.pass.ohne", s["unbek"]))
                             mitte += (f'<a class="badge warn" href="/event/{urllib.parse.quote(str(s["unbek_eid"]))}">'
-                                      f'{s["unbek"]} unmatched</a>' if s.get("unbek_eid")
-                                      else f'<span class="badge warn">{s["unbek"]} unmatched</span>')
+                                      f'{_ohne}</a>' if s.get("unbek_eid")
+                                      else f'<span class="badge warn">{_ohne}</span>')
                         elif s["unbek"]:
                             # Nicht zugeordnete Gesichter in einem Durchgang MIT bestaetigter Person:
                             # das sind dieselben Leute, nur schlecht getroffen (User 25.07.). Ruhige
                             # Fussnote statt Warn-Plakette — sonst sieht jeder normale Durchgang
                             # nach Vorfall aus.
+                            _plus = html.escape(_sprache.t("heute.pass.plus_ohne", n=s["unbek"]))
                             mitte += (f'<a class="fussnote" href="/event/{urllib.parse.quote(str(s["unbek_eid"]))}">'
-                                      f'+{s["unbek"]} not matched</a>' if s.get("unbek_eid")
-                                      else f'<span class="fussnote">+{s["unbek"]} not matched</span>')
+                                      f'{_plus}</a>' if s.get("unbek_eid")
+                                      else f'<span class="fussnote">{_plus}</span>')
                         elif s["pers"]:
-                            mitte += '<span class="badge ok">all recognized</span>'
+                            mitte += f'<span class="badge ok">{html.escape(_sprache.t("heute.pass.alle"))}</span>'
                         # Erkennungs-QUELLE ausweisen (User 04.08./05.08.): face /
                         # person / beides — Zuschreibung passiert in szenarien
                         # (quelle="koerper"), hier nur noch die Kennzeichnung.
@@ -32457,23 +32544,22 @@ def make_handler(svc):
                             # zitiert ihn) und wandert in die Plakette.
                             # Fix vision-stimme-2: hat die Vision-Stimme die
                             # Zuschreibung MITgetragen, weist die Quelle das aus.
-                            mitte += ('<span class="badge koerper">via person + '
-                                      'vision, no face</span>'
-                                      if any(d.get("vision_stimme")
-                                             for d in s["pers"].values())
-                                      else '<span class="badge koerper">via person '
-                                           'recognition, no face</span>')
+                            mitte += ('<span class="badge koerper">'
+                                      + html.escape(_sprache.t("heute.pass.via_koerper_vision")
+                                                    if any(d.get("vision_stimme") for d in s["pers"].values())
+                                                    else _sprache.t("heute.pass.via_koerper"))
+                                      + '</span>')
                         elif s["pers"] and _kp:
-                            mitte += '<span class="fussnote">via face + person</span>'
+                            mitte += f'<span class="fussnote">{html.escape(_sprache.t("heute.pass.via_beides"))}</span>'
                         elif s["pers"]:
-                            mitte += '<span class="fussnote">via face</span>'
+                            mitte += f'<span class="fussnote">{html.escape(_sprache.t("heute.pass.via_gesicht"))}</span>'
                         elif _kp:
                             # Koerper-Treffer unter der Stuetzen-Regel (keine
                             # Zuschreibung): als Hinweis zeigen, ehrlich duenn.
                             mitte += ("".join(f'<span class="badge q">{html.escape(p)}</span>'
                                               for p in _kp)
-                                      + '<span class="fussnote">person recognition hint '
-                                        '(below support rule)</span>')
+                                      + f'<span class="fussnote">'
+                                        f'{html.escape(_sprache.t("heute.pass.hinweis_koerper"))}</span>')
                     # .412 (§3.5): Quellen-Plakette "live" neben via face/person,
                     # wenn ein Live-Waechter in der Spanne dieses Durchgangs
                     # jemanden benannt hat (Zeitueberdeckung, kameraunabhaengig).
@@ -32512,15 +32598,15 @@ def make_handler(svc):
                         # welche zwei Galerien verglichen wurden) steht im
                         # Erzaehl-Log des Erkennungstests, und der Link daneben
                         # fuehrt genau dorthin.
-                        mitte += ('<span class="fussnote">vision: '
-                                  + (html.escape(_vz["person"])
-                                     if _vz.get("person") else
-                                     "no verdict — " + html.escape(
-                                         _vis_grund(_vz.get("grund"))[:70]))
+                        mitte += ('<span class="fussnote">'
+                                  + html.escape(_sprache.t("heute.pass.vision", person=_vz["person"])
+                                                if _vz.get("person") else
+                                                _sprache.t("heute.pass.vision_kein",
+                                                           grund=_vis_grund(_vz.get("grund"))[:70]))
                                   + ' <a href="/erkennungstest?pass='
                                   + urllib.parse.quote(_vpk)
-                                  + '" title="how vision got there: rounds, '
-                                  'galleries compared, timings">details</a>'
+                                  + f'" title="{html.escape(_sprache.t("heute.pass.vision_title"), quote=True)}">'
+                                  + html.escape(_sprache.t("heute.pass.vision_details")) + '</a>'
                                   "</span>")
                     crows = []
                     for cam, cl in s["kams"].items():
@@ -32532,18 +32618,21 @@ def make_handler(svc):
                             _r_heute.CHIPS_JE_ZEILE)
                         chips = ("".join(_chip(p, cl["eid"].get(p), k, bild=False) for p, k in _cz)
                                  + _r_heute.plus_html([p for p, _k in _crest]))
+                        _cohne = html.escape(_sprache.t_n("heute.pass.ohne", cl["unbek"])) if cl["unbek"] else ''
                         ub = (f'<a class="badge warn" href="/event/{urllib.parse.quote(str(cl["unbek_eid"]))}">'
-                              f'{cl["unbek"]} unmatched</a>' if cl["unbek"] and cl.get("unbek_eid")
-                              else (f'<span class="badge warn">{cl["unbek"]} unmatched</span>' if cl["unbek"] else ''))
-                        detail = (chips + ub) or '<span class="dim">motion only, no face</span>'
+                              f'{_cohne}</a>' if cl["unbek"] and cl.get("unbek_eid")
+                              else (f'<span class="badge warn">{_cohne}</span>' if cl["unbek"] else ''))
+                        detail = ((chips + ub)
+                                  or f'<span class="dim">{html.escape(_sprache.t("heute.pass.nur_bewegung"))}</span>')
                         px = f'<span class="num">{cl["bw"]}px</span>' if cl["bw"] else '<span class="dim">—</span>'
                         vid = (f' <a class="badge" href="/video/{urllib.parse.quote(str(cl["bw_eid"]))}" '
-                               f'title="best clip of this camera">&#9654; video</a>'
+                               f'title="{html.escape(_sprache.t("heute.pass.video_title"), quote=True)}">&#9654; '
+                               f'{html.escape(_sprache.t("heute.pass.video"))}</a>'
                                if cl.get("bw_eid") else '')
                         crows.append(
                             f'<div class="camrow"><div class="camname"><span class="dot"></span>'
-                            f'{html.escape(cam)}</div><span class="camn num">{cl["n"]} '
-                            f'event{"s" if cl["n"] != 1 else ""}</span>'
+                            f'{html.escape(cam)}</div><span class="camn num">'
+                            f'{html.escape(_sprache.t_n("heute.pass.events", cl["n"]))}</span>'
                             f'<div class="camdetail">{detail}</div><span class="campx">{px}{vid}</span></div>')
                     nk = len(s["kams"])
                     # .412 (§3, M2): hoechstens KAMERAZEILEN_SICHTBAR Zeilen im
@@ -32570,11 +32659,15 @@ def make_handler(svc):
                            + (" sz-koerper" if _nur_k else ""))
                     karten.append(
                         f'<details class="{kls}"{offen}><summary>'
-                        f'<div class="sz-zeit"><div class="t num">{zeit}</div><div class="d">{dauer}</div></div>'
+                        f'<div class="sz-zeit"><div class="t num">{html.escape(zeit)}</div>'
+                        f'<div class="d">{html.escape(dauer)}</div></div>'
                         f'<div class="sz-mitte">{mitte}</div>'
-                        f'<div class="sz-rechts"><span>{nk} camera{"s" if nk > 1 else ""}</span>{chev}</div>'
+                        f'<div class="sz-rechts"><span>{html.escape(_sprache.t_n("heute.pass.kameras", nk))}</span>'
+                        f'{chev}</div>'
                         f'</summary><div class="sz-body">{body}</div></details>')
-                if karten:
+                if not _durch:
+                    liste = ""                  # TY2: die Liste steht nur im Reiter Durchgaenge
+                elif karten:
                     liste = f'<div class="szlist">{"".join(karten)}</div>'
                 elif _nk is not None:
                     # Leerzustand einer Area-Sicht: der Standard-Text waere hier woertlich
@@ -32593,64 +32686,76 @@ def make_handler(svc):
                 else:
                     liste = webui.leer(_sprache.t("leer.tag"),
                                        _sprache.t("leer.tag_hinweis"))
-                motiv = (f'<div class="pnote">{motion_n} motion-only passes without a face are hidden, '
-                         f'fully listed under <a href="/ereignisse?tag={tag_dt.strftime("%Y-%m-%d")}{_aq}">'
-                         f'Events</a>.</div>' if motion_n else '')
-                # #42 Teil B: was der Fehldetektions-Filter heute aussortiert hat, als
-                # Fussnote ausweisen — nichts verschwindet still (QS-Fehlerklasse 3).
-                # Bei aktiver Area-Sicht zaehlen beide Fussnoten NUR die Sicht-Kameras
-                # (dieselbe Menge wie Karten und KPI — Zaehler-Ehrlichkeit).
-                fd_tag = sum(x.get("faces", 0) - x["faces_geprueft"] for x in by_h.values()
-                             if "faces_geprueft" in x
-                             and (_nk is None or str(x.get("camera", "?")) in _nk)
-                             and heute0 <= (x.get("start") or x.get("ts") or 0) < tag_ende
-                             and x.get("faces", 0) > x["faces_geprueft"])
-                if fd_tag:
-                    motiv += (f'<div class="pnote">{fd_tag} detection{"s" if fd_tag != 1 else ""} '
-                              f'filtered as non-faces (static-object signature) — judgments untouched.</div>')
-                # S2/A4 (konzept_no_person.md): stille Fussnote je Kamera — zeigt, WO
-                # Frigate die Fehltrigger produziert (Tuning-Hinweis, User-v2-Wunsch).
-                # Event-Zaehlung je Kamera; die Events selbst bleiben unter Events auffindbar.
-                np_cams = {}
-                for x in by_h.values():
-                    if (x.get("kategorie") == "no_person"
-                            and (_nk is None or str(x.get("camera", "?")) in _nk)
-                            and heute0 <= (x.get("start") or x.get("ts") or 0) < tag_ende):
-                        c = x.get("camera") or "?"
-                        np_cams[c] = np_cams.get(c, 0) + 1
-                if np_cams:
-                    np_n = sum(np_cams.values())
-                    je = ", ".join(f"{html.escape(str(c))} ×{n}"
-                                   for c, n in sorted(np_cams.items(), key=lambda kv: -kv[1]))
-                    motiv += (f'<div class="pnote">{np_n} event{"s" if np_n != 1 else ""} '
-                              f'classified as likely false trigger (no person found): {je}.</div>')
-                cnt = ('newest first · a pass in progress updates automatically'
-                       if live_offen else 'newest first · click opens the cameras')
+                motiv = ""
+                if _durch:
+                    # TY2 Punkt 6: die drei Hinweise unter der Liste als ganze Saetze aus heute.notiz.*; der erste ist
+                    # als Ganzes der Verweis auf Events.
+                    if motion_n:
+                        motiv = (f'<div class="pnote"><a href="/ereignisse?tag={tag_dt.strftime("%Y-%m-%d")}{_aq}">'
+                                 f'{html.escape(_sprache.t_n("heute.notiz.bewegung", motion_n))}</a></div>')
+                    # #42 Teil B: was der Fehldetektions-Filter heute aussortiert hat, als
+                    # Fussnote ausweisen — nichts verschwindet still (QS-Fehlerklasse 3).
+                    # Bei aktiver Area-Sicht zaehlen beide Fussnoten NUR die Sicht-Kameras
+                    # (dieselbe Menge wie Karten und KPI — Zaehler-Ehrlichkeit).
+                    fd_tag = sum(x.get("faces", 0) - x["faces_geprueft"] for x in by_h.values()
+                                 if "faces_geprueft" in x
+                                 and (_nk is None or str(x.get("camera", "?")) in _nk)
+                                 and heute0 <= (x.get("start") or x.get("ts") or 0) < tag_ende
+                                 and x.get("faces", 0) > x["faces_geprueft"])
+                    if fd_tag:
+                        motiv += (f'<div class="pnote">'
+                                  f'{html.escape(_sprache.t_n("heute.notiz.fehldetektion", fd_tag))}</div>')
+                    # S2/A4 (konzept_no_person.md): stille Fussnote je Kamera — zeigt, WO
+                    # Frigate die Fehltrigger produziert (Tuning-Hinweis, User-v2-Wunsch).
+                    # Event-Zaehlung je Kamera; die Events selbst bleiben unter Events auffindbar.
+                    np_cams = {}
+                    for x in by_h.values():
+                        if (x.get("kategorie") == "no_person"
+                                and (_nk is None or str(x.get("camera", "?")) in _nk)
+                                and heute0 <= (x.get("start") or x.get("ts") or 0) < tag_ende):
+                            c = x.get("camera") or "?"
+                            np_cams[c] = np_cams.get(c, 0) + 1
+                    if np_cams:
+                        np_n = sum(np_cams.values())
+                        je = ", ".join(f"{c} ×{n}" for c, n in sorted(np_cams.items(), key=lambda kv: -kv[1]))
+                        motiv += (f'<div class="pnote">'
+                                  f'{html.escape(_sprache.t_n("heute.notiz.fehltrigger", np_n, je=je))}</div>')
+                cnt = _sprache.t("heute.liste.cnt_laeuft") if live_offen else _sprache.t("heute.liste.cnt")
                 # Tagesnavigation: vor/zurueck um einen Tag. Vorwaerts ist am heutigen Tag
                 # deaktiviert — in die Zukunft gibt es nichts zu sehen, und ein Link dorthin
                 # waere ein Versprechen, das die Seite nicht halten kann.
+                # TY2 Punkt 2: die Verweise bleiben im Reiter der Ansicht (path), Tag und Bereich reisen mit (_abfrage).
                 _vor = (tag_dt + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
                 _zur = (tag_dt - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-                _titel = "Today" if ist_heute else tag_dt.strftime("%A, %d %B %Y")
+                _tag_s = tag_dt.strftime("%Y-%m-%d")
+                _abfrage = "&amp;".join(([] if ist_heute else [f"tag={_tag_s}"])
+                                        + ([f"area={urllib.parse.quote(_ar_aktiv)}"] if _nk is not None else []))
+                _abfrage = f"?{_abfrage}" if _abfrage else ""
+                _titel = _sprache.t("nav.heute") if ist_heute else tag_dt.strftime("%A, %d %B %Y")
                 _unter = (tag_dt.strftime("%A, %d %B %Y") if ist_heute else
-                          ("yesterday" if (_heute_dt - tag_dt).days == 1 else ""))
+                          (_sprache.t("heute.nav.gestern") if (_heute_dt - tag_dt).days == 1 else ""))
                 # Areas: die aktive Sicht ueberlebt das Tage-Blaettern (_aq, s.o.) und die
                 # Chip-Leiste ist der Umschalter — sie rendert NUR, wenn Areas angelegt sind.
                 from routes import areas as _r_areas
                 nav_tag = (
                     '<div class="tagnav">'
-                    f'<a class="gtb" href="/heute?tag={_zur}{_aq}" title="previous day">&#8592;</a>'
+                    f'<a class="gtb" href="{path}?tag={_zur}{_aq}" '
+                    f'title="{html.escape(_sprache.t("heute.nav.zurueck"), quote=True)}">&#8592;</a>'
                     f'<div class="tagnav-mitte"><div class="tagnav-t">{html.escape(_titel)}</div>'
                     f'<div class="tagnav-u">{html.escape(_unter)}</div></div>'
-                    + (f'<span class="gtb" aria-disabled="true" title="no future days">&#8594;</span>'
+                    + (f'<span class="gtb" aria-disabled="true" '
+                       f'title="{html.escape(_sprache.t("heute.nav.keine_zukunft"), quote=True)}">&#8594;</span>'
                        if ist_heute else
-                       f'<a class="gtb" href="/heute?tag={_vor}{_aq}" title="next day">&#8594;</a>')
+                       f'<a class="gtb" href="{path}?tag={_vor}{_aq}" '
+                       f'title="{html.escape(_sprache.t("heute.nav.vor"), quote=True)}">&#8594;</a>')
                     + ('' if ist_heute else
-                       f'<a class="gtb on" href="/heute{_aq.replace("&amp;", "?", 1)}">back to today</a>')
+                       f'<a class="gtb on" href="{path}{_aq.replace("&amp;", "?", 1)}">'
+                       f'{html.escape(_sprache.t("heute.nav.heute"))}</a>')
                     + '</div>'
-                    + _r_areas.chips(_areas_h, _ar_aktiv, "/heute",
-                                     {} if ist_heute else {"tag": tag_dt.strftime("%Y-%m-%d")})
-                    + webui.update_block() + webui.whatsnew_block())
+                    + _r_areas.chips(_areas_h, _ar_aktiv, path,
+                                     {} if ist_heute else {"tag": _tag_s})
+                    # TY2 Punkt 1: Update- und Neuigkeiten-Block stehen nur auf Heute.
+                    + ('' if _durch else webui.update_block() + webui.whatsnew_block()))
                 # --- Personen-Band (ersetzt die vier gleichrangigen Kennzahlkacheln) ---
                 # User 25.07.: "Wichtig ist, WER erkannt wurde." Vier gleich grosse Kacheln, von
                 # denen eine "People recognized: 3" sagt, sind redundant, sobald drei Personen
@@ -32662,15 +32767,15 @@ def make_handler(svc):
                 # keine Datei -> keine Miniatur, kein Platzhalter). Ungefiltert
                 # ueber alle Kameras auch unter ?area= (K8, Tooltip sagt es);
                 # Fenster = das geltende Tagesfenster (wie /anwesenheit).
-                _tag_s = tag_dt.strftime("%Y-%m-%d")
                 anw_tag, anw_fenster = None, None
                 try:
-                    if _tag_s in _anw.tage_vorhanden(cfg):
+                    if not _durch and _tag_s in _anw.tage_vorhanden(cfg):   # TY2: die Miniatur steht nur auf Heute
                         anw_tag = _anw.tag_lesen(cfg, _tag_s, None)
                         anw_fenster = _anw.fenster(cfg, log=svc.log)
                 except Exception as e:
                     svc.log.error(f"!! presence day file failed: {type(e).__name__}: {e}")
-                for p, e in sorted(pers_tag.items(), key=lambda x: -x[1]["letzt"]):
+                # TY2 Punkt 3: die Kacheln baut nur die Ansicht Heute.
+                for p, e in (sorted(pers_tag.items(), key=lambda x: -x[1]["letzt"]) if not _durch else ()):
                     # Hauptzeile (§3, K1, Wortliste M5): "first–last confirmed
                     # HH:MM–HH:MM · N passes · last seen KAMERA HH:MM" — Text,
                     # tragend auch ohne Miniatur. Laufender Durchgang: "confirmed
@@ -32691,8 +32796,8 @@ def make_handler(svc):
                     if e["kam"]:
                         teile.append(_sprache.t("heute.person.zuletzt",
                                                 kamera=str(e["kam"]), zeit=_hhmm(e["letzt"])))
-                    live = ('<span class="badge live"><span class="ldot"></span>in progress</span>'
-                            if e["laeuft"] else '')
+                    live = (f'<span class="badge live"><span class="ldot"></span>'
+                            f'{html.escape(_sprache.t("heute.laeuft"))}</span>' if e["laeuft"] else '')
                     if e.get("nur_live"):
                         live += (f' <span class="badge hk-live" title="'
                                  f'{html.escape(_sprache.t("heute.person.live_title"), quote=True)}">'
@@ -32702,48 +32807,63 @@ def make_handler(svc):
                         mini = _r_heute.anw_balken_html(anw_tag["personen"][p],
                                                         anw_tag["zellen"], anw_fenster,
                                                         gesamt=_nk is not None)
-                    _lb = (f'/live_alarmbild?p={urllib.parse.quote(e["bild"])}'
+                    _lb = (_kleinbild.adresse(f'/live_alarmbild?p={urllib.parse.quote(e["bild"])}')
                            if e.get("nur_live") and e.get("bild") else None)
                     # Paket B (.50): Personen-Karte -> Personen-Tagessicht (nicht mehr Einzel-Event)
                     ziel = (f'/auftritte?person={urllib.parse.quote(p)}'
                             + ('' if ist_heute else f'&tag={tag_dt.strftime("%Y-%m-%d")}')
                             + (f'&area={urllib.parse.quote(_ar_aktiv)}' if _nk is not None else ''))
-                    _titel = ""
+                    # TY2: eigener Name fuer den Tooltip der Kachel. Hier stand `_titel` und ueberschrieb den Titel der
+                    # Seite (der leere oder der Tooltip-Text ging als <title> hinaus, sobald eine Person erkannt war).
+                    _ktitel = ""
                     if e.get("nur_live"):
                         # .413: Wer NUR live benannt ist, hat keinen Worker-
                         # Durchgang — /auftritte?person= zeigte ihm "0
                         # Durchgaenge" (Sackgasse bis T2). Bis dahin fuehrt die
                         # Karte auf den Live-Auftritt selbst (Muster .195).
                         ziel = f'/live_alerts?tag={_tag_s}#a{int(e.get("anker") or 0)}'
-                        _titel = (' title="' + html.escape(_sprache.t(
+                        _ktitel = (' title="' + html.escape(_sprache.t(
                             "heute.person.live_link", zeit=_hhmm(e["letzt"]),
                             kamera=str(e["kam"] or "")), quote=True) + '"')
+                    # TY2 Punkt 5: die Handlung „Ändern“ unten rechts, im selben Verweis wie die Kachel.
                     pkarten.append(
                         f'<a class="pk hk-pk{" pk-live" if e["laeuft"] else ""}"'
-                        f' href="{ziel}"{_titel}>'
+                        f' href="{ziel}"{_ktitel}>'
                         f'{_av(p, e["eid"], cls="pk-av", url=_lb)}'
                         f'<div class="pk-txt"><div class="pk-name">{html.escape(p)} {live}</div>'
-                        f'<div class="pk-meta">{html.escape(" · ".join(teile))}</div>{mini}</div></a>')
+                        f'<div class="pk-meta">{html.escape(" · ".join(teile))}</div>{mini}'
+                        f'<span class="pk-akt">{html.escape(_sprache.t("heute.akt.aendern"))}</span></div></a>')
                 # --- Unbekannt-Karten (Bauplan analysen/bauplan_verbraucher_unbekannt.md Stufe V1c Punkt 1) ---
                 # Je Identitaet mit Sichtung am Tag EINE Karte unter "People", unabhaengig vom Urteil des
                 # Durchgangs (die Regel vom 25.07. "Unbekannte in Durchgaengen mit bestaetigter Person sind
                 # harmlos" ist mit Entscheid 12 abgeloest). Die Identitaeten sind dieselben wie die Zahl der
-                # Randspalte (tages_cluster: aktiv, kein Objekt); Aufbau wie die Personenkarten.
-                ukarten = _unbekannt_karten(uid_mitglieder, pool_unbek, szenarien, (heute0, tag_ende), gap,
-                                            tag_dt.strftime("%Y-%m-%d"), _nk is not None)
+                # Zahl der Durchgaenge (tages_cluster: aktiv, kein Objekt); Aufbau wie die Personenkarten. TY2: nur auf Heute.
+                ukarten = [] if _durch else _unbekannt_karten(uid_mitglieder, pool_unbek, szenarien, (heute0, tag_ende),
+                                                              gap, _tag_s, _nk is not None)
                 # Bauplan analysen/bauplan_aehnlich.md Entscheide 8 und 16: je Person P eine Karte „probably P“ aus allen
                 # ihren Identitaeten des Tags, Sichtungen ausgewaehlt wie bei den Unbekannt-Karten (Fenster, Area); eine
                 # Identitaet steht nur in einem Block.
-                akarten = _unbekannt_karten(uid_mitglieder, aeh_tag, szenarien, (heute0, tag_ende), gap,
-                                            tag_dt.strftime("%Y-%m-%d"), _nk is not None, aehnlich=aeh_tag)
+                akarten = [] if _durch else _unbekannt_karten(uid_mitglieder, aeh_tag, szenarien, (heute0, tag_ende),
+                                                              gap, _tag_s, _nk is not None, aehnlich=aeh_tag)
+                # Bauplan analysen/bauplan_today_seite.md, Stufe TY4 Punkt 4: je Auftritt, den ein Waechter als unbekannte
+                # Person gewertet hat, eine Kachel im Band Unbekannt hinter den Karten der Identitaeten, juengste zuerst;
+                # zwoelf sichtbar, der Rest im Aufklapper. Der Bereich wirkt schon ueber die Kameras von melde_liste. Die
+                # Zahl im Kopf zaehlt weiter die Identitaeten, dahinter die Meldungen des Waechters.
+                wkarten = [] if _durch else [_r_heute.waechter_kachel(u, _tag_s)
+                                             for u in _lwz.unbekannt_auftritte(z_live_liste)]
+                _wk_zeig, _wk_rest = _r_heute.deckel(wkarten, _r_heute.PERSONEN_SICHTBAR)
+                _ucnt = " · ".join(([_sprache.t_n("heute.unbek.cnt", len(ukarten))] if ukarten else [])
+                                   + ([_sprache.t_n("heute.waechter.cnt", len(wkarten))] if wkarten else []))
                 # Leerzustand nach URSACHE (Plan-QS P.6): ein frisches System hat drei sehr
                 # verschiedene Gruende fuer eine leere Seite, und nur einer davon ist "heute war
                 # niemand da". Ohne Frigate-URL kann nie etwas kommen; ohne Referenzgesichter
                 # wird KEIN Event verarbeitet (der Wizard behauptete frueher das Gegenteil).
                 # .357: der Leerzustand haengt an BEIDEN Baendern — ein Tag mit
                 # ausschliesslich unbekannten Besuchern ist nicht leer.
-                _keine = not pkarten and not ukarten and not akarten
-                if _keine and not (cfg.get("frigate_url") or "").strip():
+                _keine = not pkarten and not ukarten and not akarten and not wkarten
+                if _durch:
+                    band = ""                   # TY2: die Baender stehen nur auf Heute
+                elif _keine and not (cfg.get("frigate_url") or "").strip():
                     band = webui.leer(_sprache.t("leer.frigate"),
                                       _sprache.t("leer.frigate_hinweis"))
                 # SZ1 Punkt 6: step als Dekorator, der Aufruf steht mitten in der Bedingung.
@@ -32759,7 +32879,7 @@ def make_handler(svc):
                         band += (f'<details class="hk-mehr hk-personen"><summary>'
                                  f'{html.escape(_sprache.t("heute.person.mehr", n=len(pkarten), m=len(_pk_rest)))}'
                                  f'</summary><div class="pband">{"".join(_pk_rest)}</div></details>')
-                elif ukarten or akarten:
+                elif ukarten or akarten or wkarten:
                     band = ""          # nur Unbekannte oder Aehnliche: die eigenen Baender tragen den Tag
                 else:
                     # B9-Ganz-Satz-Umbau wie oben: zwei volle Satz-Schluessel.
@@ -32772,170 +32892,96 @@ def make_handler(svc):
                 # nebenbei ehrlicher — mqtt_publish ohne Broker-Host zaehlte
                 # vorher als vorhandener Meldeweg.
                 _kanal_da = bool(_melden.konfigurierte_kanaele(cfg))
-                if ist_heute and not _kanal_da:
-                    band += ('<p class="dim" style="margin-top:8px">No alert channel configured '
-                             'yet — recognitions appear here, but nothing will notify you. '
-                             '<a href="/benachrichtigungen">Set one up in Notifications.</a></p>')
-                # Randspalte: alles, was NICHT "wer war da" ist — bewusst leise.
-                unbek_txt = (f'{len(unbek_echt)} pass{"es" if len(unbek_echt) != 1 else ""} '
-                             f'with nobody recognized' if unbek_echt else 'none unidentified')
-                # TS3 (Bauplan analysen/bauplan_today_statistik.md): nur der Anteil an „Events analysed“ in ganzen Prozent,
-                # gerundet wie in TS1; ohne analysierte Ereignisse „–“. Die Zahl steht im Tooltip.
-                gesicht_txt = f'{round(100 * z_gesicht / z_events)} %' if z_events else '–'
-                neben = (
-                    '<aside class="tagseite">'
-                    # Areas: die Randspalte traegt die aktive Sicht im Kopf — sonst laese sich
-                    # "Events analysed 6" wie eine Tages-Gesamtzahl (Fehlerklasse Darstellung).
-                    # Auswahl-Semantik (.92): Paesse = beruehrt die Area, gezeigt wird der GANZE
-                    # Durchgang; die Event-Zaehler unten zaehlen die Kameras der Area.
-                    + (f'<div class="ts-block"><div class="ts-lab">Area view</div>'
-                       f'<div class="ts-meta">{html.escape(_ar_aktiv)}: passes that touched this '
-                       f'area (each shown in full); event counts cover its cameras only'
-                       f'</div></div>' if _nk is not None else '')
-                    + '<div class="ts-block"><div class="ts-lab">'
-                    '<a href="#unidentified" class="ts-link">Unidentified</a></div>'
-                    # Baustein A: hat der Pool Unbekannt-Stuetzen im Tag, traegt ER die
-                    # Kachel-Zahl (PERSONEN aus einer Quelle, nicht Passes) — auch und
-                    # gerade, wenn die Unbekannten innerhalb erkannter Passes liefen.
-                    # "today"/"on this day" folgt der Tagesnavigation (Widerleger MUSS-3:
-                    # das Fenster war schon der ANGEZEIGTE Tag, nur das Wort log). Ohne
-                    # Pool-Stuetzen im Tag bleibt die alte Anzeige unveraendert.
-                    # .412 (§3 Randspalte, M4): je Kopfzahl ein Tooltip, der sagt,
-                    # was gezaehlt wird — Unidentified = Pool-Identitaeten mit
-                    # Stuetze im Tag, ohne Pool-Stuetzen Durchgaenge ohne jede
-                    # Bestaetigung.
-                    + (f'<div class="ts-val" title="{html.escape(_sprache.t("heute.rand.unbek_title"), quote=True)}">'
-                       f'{pool_unbek_n}</div>'
-                       f'<div class="ts-meta"><a class="ts-link" href="/unbekannte">'
-                       f'{pool_unbek_n} unknown person{"s" if pool_unbek_n != 1 else ""} '
-                       f'{"today" if ist_heute else "on this day"} '
-                       f'({pool_auftritte} appearance{"s" if pool_auftritte != 1 else ""}) '
-                       f'— see Unknown</a></div>'
-                       if pool_unbek_n else
-                       f'<div class="ts-val" title="{html.escape(_sprache.t("heute.rand.unbek_title"), quote=True)}">'
-                       f'{len(unbek_echt)}</div>')
-                    # Bauplan analysen/bauplan_aehnlich.md Entscheide 8 und 16: die Personen P des Tags als eigene Zeile
-                    # mit Link auf den Block „Probably recognized“, nur wenn es welche gibt.
-                    + (f'<div class="ts-meta"><a class="ts-link" href="#similar">'
-                       f'{html.escape(_sprache.t_n("heute.aehnlich.rand", len(aeh_personen)))}</a></div>'
-                       if aeh_personen else '')
-                    # EINE widerspruchsfreie Kachel (Widerleger MUSS-1, Realfall 12.08.:
-                    # "none unidentified" stand direkt unter "16 unknown persons today"):
-                    # neben der Pool-Zeile erscheint die Pass-Zeile nur, wenn sie selbst
-                    # etwas meldet — ein leeres unbek_echt schweigt dann, statt der
-                    # Pool-Zahl zu widersprechen. Ohne Pool-Zeile alte Anzeige.
-                    + (f'<div class="ts-meta">{html.escape(unbek_txt)}</div>'
-                       if unbek_echt or not (pool_unbek_n or pool_archiv_n) else '')
-                    # Widerleger MUSS-2 (U155): Archiv-Identitaeten mit frischem Fenster-
-                    # Mitglied als eigene Zeile — nie still verstecken (Stufe V1c: der
-                    # Satz zum Reorganize entfaellt, der Verbraucher belebt sie selbst).
-                    + (f'<div class="ts-meta">{pool_archiv_n} more in archived '
-                       f'cluster{"s" if pool_archiv_n != 1 else ""}</div>' if pool_archiv_n else '')
-                    # Der "normally the same people"-Satz war im Besuchsfall die Luege:
-                    # mit frischen Unbekannt-Stuetzen im Tag heisst es ehrlich, dass
-                    # mindestens ein Teil davon unbekannte Besucher sind.
-                    + ((f'<div class="ts-meta">plus {unbek_nebenbei} event'
-                        f'{"s" if unbek_nebenbei != 1 else ""} not matched inside '
-                        f'recognized passes — at least some belong to unknown visitors '
-                        f'(<a class="ts-link" href="/unbekannte">see Unknown</a>)</div>')
-                       if unbek_nebenbei and (pool_unbek_n or pool_archiv_n) else
-                       (f'<div class="ts-meta">plus {unbek_nebenbei} event'
-                        f'{"s" if unbek_nebenbei != 1 else ""} not matched inside '
-                        f'recognized passes — normally the same people</div>'
-                        if unbek_nebenbei else ''))
-                    + '</div>'
-                    # .412 (§3 Randspalte, §9.5 Nachtrag): Personen / Durchgaenge /
-                    # Events analysed / Gesichtsquote (seit TS1 und TS3, Bauplan
-                    # analysen/bauplan_today_statistik.md; Beschriftungen aus den
-                    # Schluesseln heute.rand.* der Sprache) — je Zahl ein Tooltip mit dem
-                    # Zaehl-Bezug. KEIN Live-Zaehler mehr, keine Pushover-Zeilen
-                    # (Mockup 02.09., von User abgenommen): Melde-Leistung steht
-                    # auf /live, /benachrichtigungen und in der Systemstatistik.
-                    f'<div class="ts-block"><div class="ts-zeile" title="{html.escape(_sprache.t("heute.rand.personen_title"), quote=True)}">'
-                    f'<span><a href="#recognized" class="ts-link">{html.escape(_sprache.t("heute.rand.personen"))}</a></span>'
-                    f'<span class="num">{len(pers_tag)}</span></div>'
-                    f'<div class="ts-zeile" title="{html.escape(_sprache.t("heute.rand.passes_title"), quote=True)}">'
-                    f'<span><a href="#passes" class="ts-link">{html.escape(_sprache.t("heute.rand.passes"))}</a></span>'
-                    f'<span class="num">{len(interessant)}</span></div>'
-                    f'<div class="ts-zeile" title="{html.escape(_sprache.t("heute.rand.events_title"), quote=True)}">'
-                    f'<span><a class="ts-link" '
-                    f'href="/ereignisse?tag={tag_dt.strftime("%Y-%m-%d")}{_aq}">'
-                    f'{html.escape(_sprache.t("heute.rand.events"))}</a></span>'
-                    f'<span class="num">{z_events}</span></div>'
-                    f'<div class="ts-zeile" title="{html.escape(_sprache.t("heute.rand.gesicht_title", n=z_gesicht, m=z_events), quote=True)}">'
-                    f'<span>{html.escape(_sprache.t("heute.rand.gesicht"))}</span>'
-                    f'<span class="num">{gesicht_txt}</span></div>'
-                    '</div></aside>')
+                if ist_heute and not _kanal_da and not _durch:
+                    band += (f'<p class="dim" style="margin-top:8px">{html.escape(_sprache.t("heute.kanal.satz"))} '
+                             f'<a href="/benachrichtigungen">{html.escape(_sprache.t("heute.kanal.link"))}</a></p>')
+                # TY2 Punkt 2: die Zahlen und der Satz zu Unbekannten stehen als Zeile ueber der Liste der Durchgaenge
+                # (frueher die Randspalte von Heute); gebaut nur fuer den Reiter Durchgaenge.
+                zahlen = (_durchgaenge_zahlen(len(pers_tag), len(interessant), z_events, z_gesicht,
+                                              f"/ereignisse?tag={_tag_s}{_aq}", _abfrage)
+                          + _durchgaenge_satz(pool_unbek_n, len(aeh_personen), len(unbek_echt), pool_archiv_n,
+                                              unbek_nebenbei, _abfrage, _ar_aktiv if _nk is not None else None)
+                          if _durch else "")
                 _dl = ('<datalist id="personen-liste">'
                        + "".join(f'<option value="{html.escape(p)}">'
                                  for p in _rt.step("persons")(master_persons)(cfg))   # SZ1 Punkt 6
                        + '</datalist>')
-                inhalt = (f'{_dl}{nav_tag}'
-                          f'<div class="tagraster"><div>'
-                          # .357 (Widerleger-Fund): an einem Tag NUR mit
-                          # Unbekannten stand hier eine Ueberschrift ohne Inhalt,
-                          # und darunter hingen Live-Plakette und Meldekanal-Hinweis
-                          # am falschen Platz. Die Seite begann mit einem toten Kopf.
-                          # ... ABER nur, wenn die Ueberschrift wirklich nichts
-                          # mehr traegt: die Live-Plakette "pass in progress"
-                          # steht INNERHALB dieses Kopfes, und die auszublenden
-                          # waere schlimmer als der leere Kopf — sie sagt, dass
-                          # noch analysiert wird und gleich mehr kommen kann.
-                          f'<div class="listhead'
-                          f'{"" if (pkarten or not (ukarten or akarten) or live_offen) else " leerkopf"}" '
-                          # .412 (§3): Block "People — N recognized · sorted by
-                          # last seen" (Worker UND Live-Namen); Anker bleibt.
-                          f'id="recognized"><h3>{html.escape(_sprache.t("heute.block.personen"))}</h3>'
-                          f'<span class="cnt">'
-                          f'{html.escape(_sprache.t_n("heute.block.personen_cnt", len(pers_tag)))}</span>'
-                          # .208 (User-Fund 16.08.: Live meldete in Sekunden, der
-                          # normale Weg brauchte 76 s — wer frueh schaute, sah
-                          # hier nichts): laeuft noch ein Durchgang, sagt die Zeile
-                          # das EHRLICH, statt leer zu wirken. Seite laedt bei
-                          # live_offen ohnehin alle 30 s neu (refresh unten).
-                          + ('<span class="badge live"><span class="ldot"></span>'
-                             'pass in progress — events are analyzed as they '
-                             'finish and show up here</span>'
-                             if live_offen else '')
-                          + f'</div>{band}'
-                          # .412 (§9.9/§9.5): die Live-Kartenreihe (.190/.195) ist
-                          # entfallen — Live-Namen sind Personenkarten (Vermerk
-                          # "live"), Reihenfolge Personen · Unbekannt · Durchgaenge.
-                          # .357: das Unbekannt-Band. Erscheint NUR, wenn etwas
-                          # drin ist — ein leerer Abschnitt an einem ruhigen Tag
-                          # stumpft ab, und dann uebersieht man ihn genau an dem
-                          # Tag, an dem er gefuellt ist.
-                          # Stufe V1c: je Identitaet eine Karte, die Zahl nennt die
-                          # Unbekannt-Identitaeten mit Sichtung am Tag (unter einer
-                          # Area nur die mit Sichtung in deren Durchgaengen).
-                          # Bauplan analysen/bauplan_aehnlich.md Entscheide 8, 9 und 16: der Block „Probably
-                          # recognized“ zwischen People und Unknown, nur mit Karten oder Fehler; scheiterte der letzte
-                          # Aufraeum-Schritt, steht unter seinem Kopf der rote Hinweis (die Merkmale sind dann die des
-                          # letzten gelungenen Laufs).
-                          + (f'<div class="listhead" id="similar">'
-                             f'<h3>{html.escape(_sprache.t("heute.aehnlich.titel"))}</h3>'
-                             + (f'<span class="cnt">{html.escape(_sprache.t_n("heute.aehnlich.cnt", len(akarten)))}'
-                                f'</span>' if akarten else '')
-                             + '</div>'
-                             + (f'<p class="hk-aeh-fehler">{html.escape(_sprache.t("heute.aehnlich.fehler"))}</p>'
-                                if aeh_fehler else '')
-                             + (f'<div class="pband">{"".join(akarten)}</div>' if akarten else '')
-                             if akarten or aeh_fehler else '')
-                          + (f'<div class="listhead" id="unknown"><h3>Unknown</h3>'
-                             f'<span class="cnt">'
-                             f'{html.escape(_sprache.t_n("heute.unbek.cnt", len(ukarten)))}</span></div>'
-                             f'<div class="pband">{"".join(ukarten)}</div>'
-                             if ukarten else '')
-                          + f'<div class="listhead" id="passes"><h3>{html.escape(_sprache.t("heute.rand.passes"))}</h3>'
-                          f'<span class="cnt">{cnt}</span></div>'
-                          f'{liste}{motiv}</div>{neben}</div>')
+                if _durch:
+                    # TY2 Punkt 2: Tagesnavigation und Bereiche, die Zahlen als Zeile, der Satz, dann die Liste mit
+                    # ihren Hinweisen; die Randspalte entfaellt.
+                    _titel = _sprache.t("nav.durchgaenge")
+                    inhalt = (f'{_dl}{nav_tag}{zahlen}'
+                              f'<div class="listhead" id="passes"><h3>{html.escape(_sprache.t("heute.rand.passes"))}</h3>'
+                              f'<span class="cnt">{html.escape(cnt)}</span></div>{liste}{motiv}')
+                else:
+                    inhalt = (
+                        f'{_dl}{nav_tag}'
+                        # .357 (Widerleger-Fund): an einem Tag NUR mit
+                        # Unbekannten stand hier eine Ueberschrift ohne Inhalt,
+                        # und darunter hingen Live-Plakette und Meldekanal-Hinweis
+                        # am falschen Platz. Die Seite begann mit einem toten Kopf.
+                        # ... ABER nur, wenn die Ueberschrift wirklich nichts
+                        # mehr traegt: die Live-Plakette "pass in progress"
+                        # steht INNERHALB dieses Kopfes, und die auszublenden
+                        # waere schlimmer als der leere Kopf — sie sagt, dass
+                        # noch analysiert wird und gleich mehr kommen kann.
+                        f'<div class="listhead'
+                        f'{"" if (pkarten or not (ukarten or akarten or wkarten) or live_offen) else " leerkopf"}" '
+                        # .412 (§3): Block "People — N recognized · sorted by
+                        # last seen" (Worker UND Live-Namen); Anker bleibt. TY2: der Kopf heisst „Erkannt“.
+                        f'id="recognized"><h3>{html.escape(_sprache.t("heute.block.personen"))}</h3>'
+                        f'<span class="cnt">'
+                        f'{html.escape(_sprache.t_n("heute.block.personen_cnt", len(pers_tag)))}</span>'
+                        # .208 (User-Fund 16.08.: Live meldete in Sekunden, der
+                        # normale Weg brauchte 76 s — wer frueh schaute, sah
+                        # hier nichts): laeuft noch ein Durchgang, sagt die Zeile
+                        # das EHRLICH, statt leer zu wirken. Seite laedt bei
+                        # live_offen ohnehin alle 30 s neu (refresh unten).
+                        + (f'<span class="badge live"><span class="ldot"></span>'
+                           f'{html.escape(_sprache.t("heute.block.laeuft"))}</span>' if live_offen else '')
+                        + f'</div>{band}'
+                        # .412 (§9.9/§9.5): die Live-Kartenreihe (.190/.195) ist
+                        # entfallen — Live-Namen sind Personenkarten (Vermerk
+                        # "live"), Reihenfolge Personen · Unbekannt.
+                        # .357: das Unbekannt-Band. Erscheint NUR, wenn etwas
+                        # drin ist — ein leerer Abschnitt an einem ruhigen Tag
+                        # stumpft ab, und dann uebersieht man ihn genau an dem
+                        # Tag, an dem er gefuellt ist.
+                        # Stufe V1c: je Identitaet eine Karte, die Zahl nennt die
+                        # Unbekannt-Identitaeten mit Sichtung am Tag (unter einer
+                        # Area nur die mit Sichtung in deren Durchgaengen).
+                        # Bauplan analysen/bauplan_aehnlich.md Entscheide 8, 9 und 16: der Block „Probably
+                        # recognized“ zwischen People und Unknown, nur mit Karten oder Fehler; scheiterte der letzte
+                        # Aufraeum-Schritt, steht unter seinem Kopf der rote Hinweis (die Merkmale sind dann die des
+                        # letzten gelungenen Laufs).
+                        + (f'<div class="listhead" id="similar">'
+                           f'<h3>{html.escape(_sprache.t("heute.aehnlich.titel"))}</h3>'
+                           + (f'<span class="cnt">{html.escape(_sprache.t_n("heute.aehnlich.cnt", len(akarten)))}'
+                              f'</span>' if akarten else '')
+                           + '</div>'
+                           + (f'<p class="hk-aeh-fehler">{html.escape(_sprache.t("heute.aehnlich.fehler"))}</p>'
+                              if aeh_fehler else '')
+                           + (f'<div class="pband">{"".join(akarten)}</div>' if akarten else '')
+                           if akarten or aeh_fehler else '')
+                        + (f'<div class="listhead" id="unknown"><h3>{html.escape(_sprache.t("heute.unbek.titel"))}</h3>'
+                           f'<span class="cnt">{html.escape(_ucnt)}</span></div>'
+                           f'<div class="pband">{"".join(ukarten + _wk_zeig)}</div>'
+                           # TY4 Punkt 4: die Kacheln des Waechters ab der dreizehnten hinter dem Aufklapper.
+                           + (f'<details class="hk-mehr"><summary>'
+                              f'{html.escape(_sprache.t("heute.waechter.mehr", n=len(wkarten), m=len(_wk_rest)))}'
+                              f'</summary><div class="pband">{"".join(_wk_rest)}</div></details>' if _wk_rest else '')
+                           if ukarten or wkarten else '')
+                        # TY2 Punkt 1: am Ende die Zahl der Durchgaenge und der Verweis auf den Reiter Durchgaenge,
+                        # mit Tag und Bereich.
+                        + f'<div class="hk-fuss"><span>{html.escape(_sprache.t_n("heute.fuss.passes", len(interessant)))}'
+                        f'</span> <a href="/durchgaenge{_abfrage}">{html.escape(_sprache.t("heute.fuss.link"))}</a></div>')
                 # Bauplan analysen/bauplan_render_cache.md, Stufe RC1 Punkt 3 (E3, E6): ablegen mit dem Titel, den die
                 # Huelle bekommt, und mit den Signalen von vor dem Bau; laeuft ein Durchgang, wird nichts abgelegt.
                 if _rc_griff is not None:
                     _rc.store(_rc_griff, _titel, inhalt, ist_heute, live_offen)
-                _log.debug(f"page /heute: {(time.monotonic() - _t0_seite) * 1000:.0f} ms total, deckung.jsonl view "
+                _log.debug(f"page {path}: {(time.monotonic() - _t0_seite) * 1000:.0f} ms total, deckung.jsonl view "
                            f"{_akte_s * 1000:.0f} ms ({len(by_h)} events of the day)")
-                return self._heute_senden(_titel, inhalt, live_offen, ist_heute)
+                return self._heute_senden(_titel, inhalt, live_offen, ist_heute, path)
             if path == "/lernlauf/anker":
                 # E3-Ansicht (read-only): Cluster mit Crops — der erste Blick vor
                 # der Benennung. Renderer im Modul (I1), hier nur Daten + Layout.
@@ -33160,8 +33206,13 @@ def make_handler(svc):
                     from core import refquelle as _rq_bild
                     _b = _rq_bild.read_image({"data_dir": cfg["data_dir"]}, m.group(1), "profil")
                     if _b and _b["daten"] is not None and _b["fehler"] is None:
-                        return self._send(200, _b["daten"],
-                                          "image/png" if _b["datei"].endswith(".png") else "image/jpeg")
+                        _daten = _b["daten"]
+                        _typ = "image/png" if _b["datei"].endswith(".png") else "image/jpeg"
+                        from core import kleinbild as _kleinbild
+                        if _kleinbild.verlangt(qs):    # TY1 Punkt 2: erst nach der Pruefsumme verkleinern
+                            _daten, _typ = _kleinbild.klein(_daten, _kleinbild.inhalt_schluessel(
+                                f"{m.group(1)}/{_b['datei']}", _daten), _typ)
+                        return self._send(200, _daten, _typ)
                 return self._send(404, "not found", "text/plain")
             if path.startswith("/lernlauf/crop/"):
                 # Lauf-Crops (Containment: realpath-Wache gegen Traversal).
@@ -33257,7 +33308,11 @@ def make_handler(svc):
                                                      "personlern", "treffer"))
                 p = os.path.realpath(os.path.join(base, m.group(1) + ".jpg"))
                 if p.startswith(base + os.sep) and os.path.isfile(p):
-                    return self._send(200, open(p, "rb").read(), "image/jpeg")
+                    _daten, _typ = open(p, "rb").read(), "image/jpeg"
+                    from core import kleinbild as _kleinbild
+                    if _kleinbild.verlangt(qs):        # TY1 Punkt 2: Koerper-Chip der Seite Today
+                        _daten, _typ = _kleinbild.klein(_daten, _kleinbild.datei_schluessel(p), _typ)
+                    return self._send(200, _daten, _typ)
                 return self._send(404, b"gone")
             if path == "/person/modell":
                 import webui
@@ -34054,7 +34109,11 @@ def make_handler(svc):
                     base = os.path.realpath(os.path.join(cfg["data_dir"], "learn", "crops"))
                     p = os.path.realpath(os.path.join(base, m.group(1)))
                     if p.startswith(base + os.sep) and os.path.isfile(p):
-                        return self._send(200, open(p, "rb").read(), "image/jpeg")
+                        _daten, _typ = open(p, "rb").read(), "image/jpeg"
+                        from core import kleinbild as _kleinbild
+                        if _kleinbild.verlangt(qs):    # TY1 Punkt 2: Unbekannt-Karte aus dem Altbestand
+                            _daten, _typ = _kleinbild.klein(_daten, _kleinbild.datei_schluessel(p), _typ)
+                        return self._send(200, _daten, _typ)
                 return self._send(404, "not found", "text/plain")
             if path in ("/qualitaet", "/pruefen"):      # Qualität: Verwechslung + Eignung (Unter-Tabs)
                 import webui, anlernen
@@ -34133,27 +34192,69 @@ def make_handler(svc):
                 inhalt = _r_benach.render(cfg, _kat_map(),
                                           pushover=_melden.pushover_zustand(cfg))
                 return self._send(200, webui.layout(_sprache.t("nav.benachrichtigungen"), "/benachrichtigungen", inhalt, self._banner()))
-            if path == "/live":                    # Live-Reiter (Phase 2)
+            if path == "/live" or path.startswith("/live/"):   # Live-Seite mit Plaetzen (LS2)
+                # Stufe LS2 (Bauplan analysen/bauplan_live_seite.md): /live und /live/<kamera> sind EINE Seite.
+                # Oben die Platz-Leiste, darunter der gewaehlte Platz (?platz=N; fuer /live/<kamera> der Platz dieser
+                # Kamera, sonst der erste freie mit ihr vorgewaehlt). Die Wahl rechnen routes/live.plaetze_ordnen und
+                # platz_waehlen, die Zahl der Plaetze kommt aus max_slots_lesen (eine Quelle mit der Engine).
                 import webui
                 from routes import live as _r_live
-                # _areas_mod ist der MODUL-Import (Z. 25) — ein lokaler
-                # Import hier wuerde ihn fuer den GANZEN Handler-Scope
-                # verschatten (UnboundLocalError-Klasse, Gate-Fang .186).
+                from core import livewache as _lwk
                 cams, err = frigate_cameras(cfg)
                 kacheln, engine_info, gesperrt = svc.live_lage(cams)
-                # .186: optionale Area-Gruppierung (?gruppe=area) — die
-                # Kamera->Area-Zuordnung kommt aus der EINEN Areas-Quelle.
-                nach_area = (qs.get("gruppe") or [""])[0] == "area"
-                _am = _areas_mod.normalisieren(cfg.get("areas"))
-                cam_area = {kd["name"]: (_areas_mod.kamera_area(_am, kd["name"])
-                                         or "") for kd in kacheln}
-                inhalt = _r_live.uebersicht(kacheln, engine_info, gesperrt, err,
-                                            cpu_begrenzt=svc._live_cpu_begrenzt(),
-                                            container_last=svc._container_cpu_last(),
-                                            nach_area=nach_area,
-                                            cam_area=cam_area)
-                return self._send(200, webui.layout(_sprache.t("nav.live"), "/live",
-                                                    inhalt, self._banner()))
+                belegung, anzahl, freie = _r_live.plaetze_ordnen(kacheln, _lwk.max_slots_lesen(cfg, _logbuch.NULL))
+                kamera = None
+                if path == "/live":
+                    try:
+                        wunsch = int((qs.get("platz") or [""])[0])
+                    except ValueError:
+                        wunsch = None
+                else:
+                    wunsch, kamera = None, urllib.parse.unquote(path[len("/live/"):])
+                    if not any(x["name"] == kamera for x in kacheln):
+                        # Eine Seite fuer eine (noch) unbekannte Kamera rendern duerfen wir NICHT — der Name
+                        # kaeme aus der URL, nicht aus Frigate/Store (keine zweite Kamera-Quelle).
+                        return self._send(404, webui.layout(
+                            _sprache.t("nav.live"), "/live",
+                            webui.leer(_sprache.t("leer.kamera_unbekannt"),
+                                       _sprache.t("leer.kamera_unbekannt_hinweis")),
+                            self._banner()))
+                nr, vorwahl, voll = _r_live.platz_waehlen(belegung, anzahl, wunsch, kamera)
+                kd = belegung.get(nr)
+                einstellungen = None
+                if kd is not None:
+                    _g = kd.get("guard")
+                    if not _g or _g.get("kanaele") is None:
+                        # .200 (Fix 3): Kanal-Vorbelegung eines NEUEN Waechters aus den
+                        # real konfigurierten Kanaelen (EINE Quelle statt hart pushover;
+                        # gespeicherte Waechter kommen normalisiert aus guards_lesen
+                        # und tragen kanaele immer selbst).
+                        _g = dict(_g or {}, kanaele=_melden.konfigurierte_kanaele(cfg))
+                    # Kalibrier-Vorrat + Erkannt-Regel als DATEN herein (Muster des
+                    # Moduls): der Stand des Rings kommt von der Platte, die
+                    # Auslegung der Regel aus der EINEN Rechnung der Engine.
+                    _vor = _lwk.kalib_lesen(cfg, kd["name"])
+                    einstellungen = _r_live.detail(
+                        kd["name"], _g, kd, gesperrt, vorrat=len(_vor),
+                        deckel=int(cfg.get("live_kalib_max") or 0),
+                        det_default=cfg["det_thresh"],
+                        # Welle 1, Etappe A: die Bewegungs-Vorgaben aus der EINEN
+                        # Quelle (Frigates Auslieferungswerte im Engine-Modul) —
+                        # die Seite zeigt sie als Platzhalter, traegt sie aber nie
+                        # selbst.
+                        beweg_vorgabe=(_lwk.BEWEG_SCHWELLE, _lwk.BEWEG_FLAECHE),
+                        # WS2 (Bauplan waechterseite): das echte Topic des Waechters und die zwei globalen
+                        # Werte, die die Seite nur anzeigt (E2) — aus derselben Quelle wie Versand und Config.
+                        mqtt_topic=_melden.topic(cfg, f"live/{kd['name']}"),
+                        global_werte=(cfg.get("fps_sample"), cfg.get("stapel_stimmen")),
+                        platz=nr, kamerawahl=freie)
+                inhalt = _r_live.seite(kacheln, engine_info, gesperrt, belegung, anzahl, nr,
+                                       einstellungen=einstellungen, vorwahl=vorwahl, voll=voll, freie=freie,
+                                       frigate_fehler=err, cpu_begrenzt=svc._live_cpu_begrenzt(),
+                                       container_last=svc._container_cpu_last())
+                titel = (_sprache.t("titel.live_kamera", kamera=kamera) if kamera
+                         else _sprache.t("nav.live"))
+                return self._send(200, webui.layout(titel, "/live", inhalt, self._banner()))
             if path == "/live_status":             # UI-Poll (Countdown/Quittung)
                 return self._send(200, json.dumps(svc.live_status_daten(),
                                                   ensure_ascii=False),
@@ -34179,7 +34280,7 @@ def make_handler(svc):
                 # .195 (User: "bei Recognized live sehe ich nur ein Bild, das
                 # ist nicht konsequent"): je Kamera-AUFTRITT eine Karte mit
                 # ALLEN gespeicherten Gesichts-Crops von der Platte (auch
-                # Karenz-Trigger ohne Meldezeile) + Rueckblick-Video — analog
+                # Karenz-Trigger ohne Meldezeile) + Video des Auftritts — analog
                 # der Pass-Ansicht unter Recognized.
                 auftritte = _lwz.auftritts_gruppen(gruppen)
                 # ME1: Karten-Render byte-treu in routes/live.py (alerts_tag,
@@ -34206,14 +34307,22 @@ def make_handler(svc):
                 if not _lw.ALARMBILD_RE.match(rel):
                     return self._send(404, "not found", "text/plain")
                 p = os.path.join(cfg.get("data_dir") or "", rel)
+                video = rel.endswith(".mp4")
                 try:
-                    roh_med = open(p, "rb").read()
+                    if video:
+                        open(p, "rb").close()   # lesbar? sonst 404, bevor ein Kopf rausgeht
+                    else:
+                        roh_med = open(p, "rb").read()
                 except OSError:
                     _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(404, 'not found', 'text/plain')")
                     return self._send(404, "not found", "text/plain")
-                return self._send(200, roh_med,
-                                  "video/mp4" if rel.endswith(".mp4")
-                                  else "image/jpeg")
+                if video:   # VT1: mit Teilabruf (Range) wie der Clip-Weg, sonst spielt Safari das Video nicht
+                    return self._send_file_ranged(p, "video/mp4")
+                _typ = "image/jpeg"
+                from core import kleinbild as _kleinbild
+                if _kleinbild.verlangt(qs):   # TY1 Punkt 2: nur Bilder, nie Videos
+                    roh_med, _typ = _kleinbild.klein(roh_med, _kleinbild.datei_schluessel(p), _typ)
+                return self._send(200, roh_med, _typ)
             if path.startswith("/live_bild/"):     # Kachel-Vorschau (User 13.08.)
                 # Das JPEG schreibt der DETEKTOR-Thread der Engine aus dem
                 # VERARBEITETEN Frame (Waechter-Skala) — der Reiter zeigt, was
@@ -34267,46 +34376,6 @@ def make_handler(svc):
                 return self._send(302, "", "text/plain",
                                   location="/kalibrierung/"
                                   + path[len("/live_kalibrierung/"):])
-            if path.startswith("/live/"):          # Detailseite /live/<kamera>
-                import webui
-                from routes import live as _r_live
-                kamera = urllib.parse.unquote(path[len("/live/"):])
-                cams, _err = frigate_cameras(cfg)
-                kacheln, engine_info, gesperrt = svc.live_lage(cams)
-                kd = next((x for x in kacheln if x["name"] == kamera), None)
-                if kd is None:
-                    # Kachel auch fuer eine (noch) unbekannte Kamera rendern
-                    # duerfen wir NICHT — der Name kaeme aus der URL, nicht
-                    # aus Frigate/Store (keine zweite Kamera-Quelle).
-                    return self._send(404, webui.layout(
-                        _sprache.t("nav.live"), "/live",
-                        webui.leer(_sprache.t("leer.kamera_unbekannt"),
-                                   _sprache.t("leer.kamera_unbekannt_hinweis")),
-                        self._banner()))
-                _g = kd.get("guard")
-                if not _g or _g.get("kanaele") is None:
-                    # .200 (Fix 3): Kanal-Vorbelegung eines NEUEN Waechters aus den
-                    # real konfigurierten Kanaelen (EINE Quelle statt hart pushover;
-                    # gespeicherte Waechter kommen normalisiert aus guards_lesen
-                    # und tragen kanaele immer selbst).
-                    _g = dict(_g or {},
-                              kanaele=_melden.konfigurierte_kanaele(cfg))
-                # Kalibrier-Vorrat + Erkannt-Regel als DATEN herein (Muster des
-                # Moduls): der Stand des Rings kommt von der Platte, die
-                # Auslegung der Regel aus der EINEN Rechnung der Engine.
-                from core import livewache as _lwk
-                _vor = _lwk.kalib_lesen(cfg, kamera)
-                inhalt = _r_live.detail(
-                    kamera, _g, kd, gesperrt, vorrat=len(_vor),
-                    deckel=int(cfg.get("live_kalib_max") or 0),
-                    det_default=cfg["det_thresh"],
-                    # Welle 1, Etappe A: die Bewegungs-Vorgaben aus der EINEN
-                    # Quelle (Frigates Auslieferungswerte im Engine-Modul) —
-                    # die Seite zeigt sie als Platzhalter, traegt sie aber nie
-                    # selbst.
-                    beweg_vorgabe=(_lwk.BEWEG_SCHWELLE, _lwk.BEWEG_FLAECHE))
-                return self._send(200, webui.layout(
-                    _sprache.t("titel.live_kamera", kamera=kamera), "/live", inhalt, self._banner()))
             if path == "/vision":                  # Vision detect (Reiter)
                 import webui
                 from core import vision as _vis
@@ -34968,7 +35037,11 @@ def make_handler(svc):
                 # realpath-Containment: der Regex laesst ".." als Segment durch ([\w.-] enthaelt Punkte)
                 if p.startswith(base + os.sep) and os.path.isfile(p):
                     ct = "image/jpeg" if p.endswith(".jpg") else "text/plain; charset=utf-8"
-                    return self._send(200, open(p, "rb").read(), ct)
+                    _daten = open(p, "rb").read()
+                    from core import kleinbild as _kleinbild
+                    if ct == "image/jpeg" and _kleinbild.verlangt(qs):   # TY1 Punkt 2: Kachel und Chip der Seite Today
+                        _daten, ct = _kleinbild.klein(_daten, _kleinbild.datei_schluessel(p), ct)
+                    return self._send(200, _daten, ct)
                 return self._send(404, "not found", "text/plain")
             if path.startswith("/support/"):
                 # Support-Zugriff (analysen/support_api.md, .362): benannte
@@ -35581,7 +35654,10 @@ def varianten_hinweis(variante, probe):
         if name.strip().lower().startswith("igpu"):
             igpu_da = not detail.startswith("not found")
             igpu_kaputt = "did NOT bind" in detail
-    nvidia_da = os.path.exists("/dev/nvidiactl") or os.path.exists("/dev/nvidia0")
+    # Bauplan nvidia_wsl2 NW1: NVIDIA entscheidet core/nvidia_lage (Knoten unter Linux, Treiber
+    # unter WSL2); der WSL2-Knoten allein ist kein NVIDIA-Zeichen.
+    from core.nvidia_lage import nvidia_da as _nvidia_da       # noqa: PLC0415
+    nvidia_da = _nvidia_da()[0]
     if variante == "cpu" and igpu_da:
         return ("Found an Intel GPU that this CPU-only image cannot use — the gpu image "
                 "(or gpu-legacy for Intel 6th–10th gen / UHD 6xx) would use it for recognition.")
@@ -36139,7 +36215,14 @@ def startup_selfcheck(svc):
                             _kdev, _kn = knoten_familie(kind)
                         else:
                             _kdev, _kn = dev, _gkm(dev)
-                        if _kn and not _sglob.glob(_kn):
+                        if kind == "cuda":
+                            # Bauplan nvidia_wsl2 NW1: die Karte fehlt nur, wenn core/nvidia_lage
+                            # keine findet (Knoten unter Linux, Treiber unter WSL2).
+                            from core.nvidia_lage import nvidia_da as _nvidia_da   # noqa: PLC0415
+                            _ohne_geraet = not _nvidia_da()[0]
+                        else:
+                            _ohne_geraet = bool(_kn) and not _sglob.glob(_kn)
+                        if _ohne_geraet:
                             erg("warn", f"requested {spec} but this host has no {_kdev} device "
                                         f"({_kn}) — running on CPU")
                         else:
@@ -36612,6 +36695,16 @@ def main():
     # `start_event_queue` (nach dem Selbsttest) — sonst lief es am Timer-Rueckweg
     # vorbei, rechnete parallel zum Start und bekam keinen zweiten Versuch.
     svc.event_queue_anlegen()
+    # Bauplan live_seite LS1 Punkt 3: die einmalige Uebernahme der Plaetze, vor dem Webserver, damit die Seite sie schon
+    # beim ersten Aufruf zeigt; unter dem Config-Lock und ueber den Schreibweg des Stores. Ein Fehler darf den Start
+    # nicht verhindern, er steht als ERROR im Log; der naechste Start versucht es wieder.
+    from core import livewache as _lw_plaetze
+    try:
+        with _cfg_lock:
+            _lw_plaetze.plaetze_uebernehmen(svc.cfg, log=svc.log, store_pfad=_config_store_pfad,
+                                            store_laden=_lade_config_store, store_schreiben=_store_schreiben)
+    except Exception as e:                        # noqa: BLE001
+        svc.log.error(f"live slots: assigning the slots at start failed ({type(e).__name__}: {e})")
     # Stufe LZ2b Fix-Stelle 1: Erzeugung und Start des Webservers stehen in Service.webserver_starten (Faden `webserver`,
     # der Dienst merkt sich Server und Faden), damit die Selbstwache ihn allein neu starten kann (Entscheid 12).
     svc.webserver_starten()

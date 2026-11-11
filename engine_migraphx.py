@@ -582,9 +582,11 @@ class ModellBestand:
         def dim(m, i):                                    # noqa: E306
             return ec._eingang(m).type.tensor_type.shape.dim[i].dim_value
         pw, ph = wk.pose_wache.INPUT_SIZE
+        # Der zweite Blick (ZB1) hat die feste Feldgroesse aus dem Kern; det_10g selbst hat offene Seiten.
         self.seiten = {wk.FD: (dim(mfd, 2), dim(mfd, 3)),
                        "e": (dim(me, 2), dim(me, 3)), "t": (dim(mt, 2), dim(mt, 3)),
-                       "p": (ph, pw), "r": (dim(mr, 2), dim(mr, 3))}
+                       "p": (ph, pw), "r": (dim(mr, 2), dim(mr, 3)),
+                       wk.ZB: (wk.ZB_FELD, wk.ZB_FELD)}
         self.typ = {k: ec._typ_datei(self.pfade[k]) for k in wk.STUFEN}
         # E2c-Naht: traegt dieser Erkennungs-Kopf den Divisor, aus dem die echte
         # Feature-Norm kommt? EINMAL am Modell abgelesen, damit Session und
@@ -609,7 +611,10 @@ class ModellBestand:
             "t": lambda n: ec._fest(self.pfade["t"], (n, 3, *self.seiten["t"])),
             "p": lambda n: ec._fest(self.pfade["p"], (n, 3, ph, pw)),
             "r": lambda n: ec._fest(self.pfade["r"], (n, 3, *self.seiten["r"]),
-                                    norm_aus=self.norm_naht)}
+                                    norm_aus=self.norm_naht),
+            # ZB1: der zweite Blick ist die echte Detektor-Datei in der festen Feldgroesse (keine selbst gebauten
+            # Knoten, s. modell_cache_vorbereiten)
+            wk.ZB: lambda n: ec._fest(self.pfade[wk.ZB], (n, 3, *self.seiten[wk.ZB]))}
         self._sessions = {}                               # Schluessel -> session
         self._det_typ = {}                                # det-Pfad -> numpy-Typ
         self.bindung = {}                                 # Marke -> Bind-Bericht
@@ -722,6 +727,13 @@ class Stufen:
         if k == "r":
             emb_n, norm = _rec_post(werte[0], paare.get("f_norm"))
             return [(emb_n[j], norm[j]) for j in range(n)]
+        if k == wk.ZB:
+            # ZB1: det_10g legt einen Stapel in seinen neun Ausgaengen verschraenkt ab; bei der Breite des zweiten
+            # Blicks (worker_kern.ZB_BREITE = 1) gehoeren alle Zeilen zu dem einen Gesicht. Eine andere Breite liesse
+            # sich so nicht aufteilen: laut, statt still falsch zu verteilen.
+            if n != 1:
+                raise RuntimeError(f"second look: stage {k} needs width 1, got {n}")
+            return [tuple(np.asarray(w, np.float32) for w in werte)]
         return [tuple(np.asarray(w, np.float32)[j] for w in werte) for j in range(n)]
 
     def stufe(self, k, X):
@@ -759,6 +771,7 @@ class Satz:
     def __init__(self, g):
         self.g = g
         self.stufen = Stufen(g.bestand, BREITE_VIDEO)
+        self.stufen_zb = Stufen(g.bestand, wk.ZB_BREITE)     # ZB1: der zweite Blick mit eigener Breite
         self.bgr = None
 
     # -------------------------------------------------- Zuschnitt (CPU)
@@ -799,6 +812,17 @@ class Satz:
         M = cv2.invertAffineTransform(self._minv(theta))
         return cv2.warpAffine(self.bgr, M, (w, h), borderValue=0.0)
 
+    def _crop_zb(self, zug):
+        """Der Ausschnitt des zweiten Blicks (ZB1) im Feld, auf der CPU: derselbe `_crop` (cv2.warpAffine) mit dem
+        theta aus dem Zug von `worker_kern.zb_lage`, ausserhalb des Feld-Rechtecks einfarbig `worker_kern.ZB_FUELL`
+        statt des echten Umfelds. -> BGR [h,w,3] uint8"""
+        z = np.asarray(zug, np.float64)
+        feld = self._crop(z[:, :3], self.g.seiten[wk.ZB])
+        drin = np.zeros(feld.shape[:2], bool)
+        drin[int(z[1, 3]):int(z[1, 4]), int(z[0, 3]):int(z[0, 4])] = True
+        feld[~drin] = wk.ZB_FUELL
+        return feld
+
     # -------------------------------------------------- Die Schnittstelle des Kerns
     def det(self, y, uv):
         """Vorverarbeitung + Detektor fuer EINEN Frame. -> die neun Detektor-Ausgaenge
@@ -824,6 +848,10 @@ class Satz:
             # davor), aber `bild_kern.norm_anwenden` wuerde an `np.stack([])`
             # sterben — und eine leere Stufe ist kein Fehler, sondern nichts zu tun.
             return []
+        if k == wk.ZB:
+            # ZB1: Ausschnitt in das einfarbige Feld, dann der Detektor mit der Breite des zweiten Blicks
+            crops = [self._crop_zb(z) for z in thetas]
+            return self.stufen_zb.stufe(k, bild_kern.norm_anwenden(crops, self.g.bestand.norm_vorschrift[k]))
         crops = [self._crop(t, self.g.seiten[k]) for t in thetas]
         X = bild_kern.norm_anwenden(crops, self.g.bestand.norm_vorschrift[k])
         return self.stufen.stufe(k, X)
@@ -886,6 +914,10 @@ class Satz:
         # `th0 = [[1,0,0],[0,1,0]]`): gewaermt wird die FORM, nicht der Inhalt.
         th0 = np.array([[1, 0, 0], [0, 1, 0]], np.float32)
         for k in wk.KASKADE:
+            if k == wk.ZB:
+                # ZB1: der zweite Blick mit einem gueltigen Zug (Form [2,5]) und seiner eigenen Breite
+                self.stufe(k, [wk.zb_lage([0, 0, 2, 2], g.W, g.H, g.nm)[0]] * wk.ZB_BREITE)
+                continue
             self.stufe(k, [th0] * BREITE_VIDEO)
         zug0 = wk.leinwand_zug([0, 0, min(wk.LEINWAND - 2, g.W), min(wk.LEINWAND - 2, g.H)],
                                g.W, g.H)

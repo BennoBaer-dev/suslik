@@ -47,6 +47,9 @@ from core import registry as _reg
 _log = _logbuch.logger(__name__)
 
 PAGE_TODAY = "/heute"
+# Bauplan analysen/bauplan_today_seite.md, Stufe TY2 Punkt 4: der Reiter Durchgaenge hat eine eigene Seitenkennung (der
+# Schluessel traegt sie vorn) und dieselben Quellen wie /heute.
+PAGE_PASSES = "/durchgaenge"
 PAGE_PRESENCE = "/anwesenheit"
 REASON_NEW = "new"
 REASON_EXPIRED = "expired"
@@ -154,7 +157,7 @@ def lookup(page, cfg, log_path, day, today, parts, gt_path=None):
     """Schluessel und Signale bilden (ohne Schloss) und im Speicher nachsehen; ein Fehler ist laut.
     -> Handle (Treffer in `hit`) oder None nach einem Fehler: dann baut die Seite direkt und legt nichts ab."""
     try:
-        if page == PAGE_TODAY:
+        if page in (PAGE_TODAY, PAGE_PASSES):
             names = _sources(cfg, log_path, day, gt_path)
         elif page == PAGE_PRESENCE:
             names = _sources_presence(cfg, log_path, day)

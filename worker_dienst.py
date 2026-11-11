@@ -890,7 +890,9 @@ def probe_vergleich(soll, ist):
         -> "siebend" (Bauplan analysen/bauplan_pose_kompilat.md, Stufe 1).
       * Die uebrigen Stufen werden als Fingerabdruck verglichen und eine Abweichung wird
         LAUT GEMELDET, aber nicht toedlich -> "hinweis". Das sind det und fd, die nicht in
-        der Kaskaden-Liste `wk.GPU_STUFEN_SIEBT` stehen.
+        der Kaskaden-Liste `wk.GPU_STUFEN_SIEBT` stehen, und seit Bauplan zweiter_blick Stufe ZB1
+        der zweite Blick (`wk.ZB`): er rechnet nur fuer Gesichter ohne Namensstimme unter der
+        Tuer-Schwelle und kann keinen Namen kosten.
         EHRLICHE GRENZE: auch fd laesst Gesichter aus der Kaskade austreten (Fehldetektion);
         ob eine fd-/det-Abweichung ebenfalls fatal sein soll, entscheidet der Bauplan, nicht
         diese Stelle.
@@ -901,7 +903,7 @@ def probe_vergleich(soll, ist):
     import math                                             # noqa: PLC0415
     befunde, hart = [], False
     siebend = False
-    for k in ("det", "fd", "e", "t", "p"):
+    for k in ("det", "fd", "e", "t", "p", wk.ZB):
         if soll.get(k) != ist.get(k):
             befunde.append(f"{k}: {soll.get(k)} -> {ist.get(k)}")
             siebend = siebend or k in wk.siebende_stufen()
@@ -1113,7 +1115,10 @@ def detektionen_bauen(zeilen, schritt, bild=None):
     des Clips, aus event_lauf) und einer Kernzeile mit `bb` (event_rechnen setzt es immer; Kernzeilen von
     Attrappen ohne das Feld bleiben ohne Rahmen) dazu `rahmen`, die Pixel-Lage als links, oben, Breite,
     Hoehe durch die Bildgroesse, vier Nachkommastellen, ohne Klemmen (am rechten oder unteren Rand kann
-    ein Wert knapp ueber 1 liegen, so wie gemessen). Leser alter Akten greifen per .get() zu."""
+    ein Wert knapp ueber 1 liegen, so wie gemessen). Leser alter Akten greifen per .get() zu.
+
+    ZWEITER BLICK (Bauplan analysen/bauplan_zweiter_blick.md, Stufe ZB1): wo der Kern den Wert gemessen hat, steht er
+    unter `zb` (drei Nachkommastellen wie die Guete-Werte); sonst fehlt das Feld, alte Akten bleiben lesbar."""
     aus = []
     for f in zeilen:
         d = {"t": round(f["zeit_s"], 1), "bw": f["bw"], "bh": f["bh"],
@@ -1127,6 +1132,8 @@ def detektionen_bauen(zeilen, schritt, bild=None):
             d["guete_e"] = None if f["e"] is None else round(float(f["e"]), 3)
             d["guete_t"] = None if f["t"] is None else round(float(f["t"]), 3)
             d["pkopf"] = None if f["p"] is None else round(float(f["p"]), 3)
+        if f.get(wk.ZB) is not None:                     # ZB1: zweiter Blick, nur wenn gemessen
+            d[wk.ZB] = round(float(f[wk.ZB]), 3)
         d["i"] = f["i"]
         bb = f.get("bb")                                  # NZ1: additives Kernfeld, Leser per .get()
         if bild is not None and bb is not None:
@@ -4900,9 +4907,10 @@ class Dienst:
                     unmessbar += 1
                 continue
             if ab not in (None, "p"):
-                # An Kante, Fehldetektion oder Norm-Sieb ausgeschieden: an Kante und
-                # Fehldetektion war der Fund nie ein Stimm-Kandidat, am Norm-Sieb hatte
-                # er seine Guete-Werte; fehlende Guete-Werte sind dort kein Verlust.
+                # An Kante, Fehldetektion, Norm-Sieb oder zweitem Blick (wk.ZB, Bauplan
+                # zweiter_blick Stufe ZB1) ausgeschieden: an Kante und Fehldetektion war der
+                # Fund nie ein Stimm-Kandidat, am Norm-Sieb und am zweiten Blick hatte er
+                # seine Guete-Werte; fehlende Guete-Werte sind dort kein Verlust.
                 continue
             # Eine nur MESSENDE Guete-Stufe (GPU_STUFEN_SIEBT False) laesst einen nicht
             # messbaren Fund ohne Abbruch weiterlaufen; er verliert die Stimme erst in

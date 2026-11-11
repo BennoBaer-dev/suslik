@@ -3,11 +3,11 @@
 ## Two paths
 
 suslik reacts on two independent paths. **Live watchers** read a camera stream
-directly and react while the person is still in frame, in two stages: a presence
-trigger (four spatially consistent face finds in about two seconds, pose-confirmed,
-alerted immediately with a picture) and a preliminary name stage (per-frame voting
-against the reference library across the whole appearance, fired once per appearance
-and person). Details: [live-watchers.md](live-watchers.md). The **verify layer**
+directly and react while the person is still in frame. They run the same recognition
+chain as the analysis on the stream: the first valid face of an appearance is reported
+over MQTT at once, a name is reported as soon as it has collected enough votes (once per
+appearance and person), and an appearance that ends without a name can be reported as an
+unknown person. Details: [live-watchers.md](live-watchers.md). The **verify layer**
 below delivers the confirmed verdict afterwards, from the finished recording.
 
 ## The verify layer
@@ -26,9 +26,16 @@ suslik is a second-opinion layer on top of Frigate. The verify pipeline for each
 4. **Recognize with a strong model.** The chosen face is aligned and embedded with an **AdaFace**
    model, then compared (nearest-neighbor cosine similarity) against your reference library.
    Detection/alignment stays on `buffalo_l`; only the recognition head is AdaFace.
-5. **Aggregate over time.** A person counts as recognized only when **enough frames within a
-   short sliding window agree** on the same identity. A single lucky frame is rejected. This is
-   the key to separating a real person (many consistent hits) from noise or a stranger (near
+   A face that resembles nobody in the library gets a second look before it can count as an
+   unknown person: the detector checks that spot once more at a fixed size and must find a
+   face there again (details in step 4 of [live-watchers.md](live-watchers.md), which uses the
+   same chain).
+5. **Aggregate over the event.** A person counts as recognized only when **enough valid faces
+   of an event vote for the same person** (`stapel_stimmen`, factory value 3). A face votes for
+   its best person when its recognition score reaches the vote bar and its best and second-best
+   person do not lie too close together (`stapel_abstand`); faces that fail the size, quality,
+   head-pose or feature-norm bars do not vote. A single lucky frame is rejected. This is the
+   key to separating a real person (many consistent hits) from noise or a stranger (near
    zero).
 6. **Group into scenarios.** Events that belong to the same walk (adjacent in time, across
    cameras) are grouped into one **scenario**, and the verdict is formed over the whole walk —

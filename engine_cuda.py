@@ -187,8 +187,9 @@ BUENDEL = tuple(n for n in face_audit.Embedder.BATCH_STUFEN
 # AUSSCHNITT-Graph ist die Ausnahme: er traegt zusaetzlich die Laplace-Leinwand und
 # braucht dafuer eine BEKANNTE Gesichterzahl (FD_BREITE).
 DYN_STUFEN = (wk.FD, "e", "t", "r")
-# v5/v8: welche Modell-Ketten prozessweit EINMAL gebaut werden statt je Geometrie.
-GETEILTE_STUFEN = (wk.FD, "e", "t", "p", "r")
+# v5/v8: welche Modell-Ketten prozessweit EINMAL gebaut werden statt je Geometrie. Der zweite Blick (ZB1) gehoert
+# dazu; er steht in keiner der beiden Formen-Listen, sondern hat seine eigene feste Breite (worker_kern.ZB_BREITE).
+GETEILTE_STUFEN = (wk.FD, "e", "t", "p", "r", wk.ZB)
 # v8: die Breite der fd-Stufe (immer eine Zahl, s. graph_crop_fd).
 FD_BREITE = wk.AUFRUF_BREITE or 2
 # v7: womit die dynamischen Ketten WIRKLICH gewaermt werden. Steht eine feste
@@ -663,6 +664,41 @@ def graph_crop(H, W, n, seite, norm, aus_typ=F32):
                     [("crop", aus_typ, [achse, 3, h, w])])
 
 
+def graph_crop_zb(H, W, n, seite, norm, aus_typ=F32):
+    """Ausschnitt des zweiten Blicks (Bauplan analysen/bauplan_zweiter_blick.md, Stufe ZB1) fuer n Gesichter (feste
+    Zahl, worker_kern.ZB_BREITE): dasselbe GridSample mit uint8-Rundung wie `graph_crop`, aber nur das Rechteck des
+    Ausschnitts traegt Bildinhalt; der Rest des Felds ist einfarbig `worker_kern.ZB_FUELL` (vor der Normierung), nicht
+    das echte Umfeld. Eingang 'th' [n,2,5] ist der Zug aus `worker_kern.zb_lage`: Spalten 0..2 theta, Spalten 3..4
+    die Feld-Pixel [von, bis) je Achse (Zeile 0 x, Zeile 1 y). Gerechnet wird fp32 wie bei `graph_crop`, der eine
+    Cast auf den Modell-Typ steht am Ende. -> ONNX-Bytes"""
+    h, w = seite
+    b = _Bau()
+    th = b.op("Slice", ["th", b.c([0], np.int64), b.c([3], np.int64), b.c([2], np.int64)])     # [n,2,3]
+    g = b.op("MatMul", [b.c(_raster(h, w)), b.op("Transpose", [th], perm=[0, 2, 1])])
+    g = b.op("Reshape", [g, b.c([1, n * h, w, 2], np.int64)])
+    s = b.op("GridSample", ["rgb", g], mode="bilinear", padding_mode="zeros", align_corners=0)
+    s = b.op("Transpose", [b.op("Reshape", [s, b.c([3, n, h, w], np.int64)])], perm=[1, 0, 2, 3])
+    s = _u8_rundung(b, s)
+
+    def achse(zeile, laenge):
+        von = b.op("Slice", ["th", b.c([zeile, 3], np.int64), b.c([zeile + 1, 4], np.int64),
+                             b.c([1, 2], np.int64)])                                           # [n,1,1]
+        bis = b.op("Slice", ["th", b.c([zeile, 4], np.int64), b.c([zeile + 1, 5], np.int64),
+                             b.c([1, 2], np.int64)])
+        pos = b.c(np.arange(laenge, dtype=np.float32).reshape(1, 1, laenge))
+        drin = b.op("And", [b.op("GreaterOrEqual", [pos, von]), b.op("Less", [pos, bis])])   # [n,1,laenge]
+        return b.op("Cast", [drin], to=F32)
+
+    maske = b.op("Mul", [b.op("Reshape", [achse(1, h), b.c([n, 1, h, 1], np.int64)]),
+                         b.op("Reshape", [achse(0, w), b.c([n, 1, 1, w], np.int64)])])       # [n,1,h,w]
+    feld = b.op("Add", [b.op("Mul", [b.op("Sub", [s, b.c(float(wk.ZB_FUELL))]), maske]),
+                        b.c(float(wk.ZB_FUELL))])
+    c = norm(b, feld)
+    b.raus("crop", c if aus_typ == F32 else b.op("Cast", [c], to=aus_typ))
+    return b.modell([("rgb", F32, [1, 3, H, W]), ("th", F32, [n, 2, 5])],
+                    [("crop", aus_typ, [n, 3, h, w])])
+
+
 def _grau(b, s):
     """RGB [n,3,h,w] -> Graustufen [n,1,h,w] im OpenCV-Festkomma, mit derselben Rundung
     wie cv2.cvtColor(BGR2GRAY) (CV_DESCALE: +halbe Einheit, dann abschneiden)."""
@@ -945,6 +981,27 @@ def quantisiert(stufe, rgb, thetas):
     return aus
 
 
+def zweiter_blick(stufe, rgb, zuege):
+    """Der zweite Blick (ZB1) je Gesicht, ein Aufruf je Zug (feste Breite worker_kern.ZB_BREITE = 1): Ausschnitt in
+    das Feld auf der GPU, per IO-Binding in die Detektor-Session; zur CPU kommen nur die neun Ausgaenge, auf float32
+    gehoben wie in `Satz.det`. det_10g legt einen Stapel in seinen Ausgaengen verschraenkt ab, deshalb gehoeren bei
+    Breite 1 alle Zeilen zu diesem Gesicht.
+    -> je Gesicht ein Tupel der neun Detektor-Ausgaenge"""
+    s_aus, kette = stufe
+    aus = []
+    for zug in zuege:
+        b = s_aus.io_binding()
+        b.bind_ortvalue_input("rgb", rgb)
+        b.bind_cpu_input("th", np.asarray(zug, np.float32)[None])
+        b.bind_output("crop", "cuda")
+        s_aus.run_with_iobinding(b)
+        namen, werte = ["crop"], b.get_outputs()
+        for k, s in enumerate(kette):
+            namen, werte = _weiter(s, werte, namen, k == len(kette) - 1)
+        aus.append(tuple(np.asarray(w, np.float32) for w in werte))
+    return aus
+
+
 def dynamisch_fd(stufe, rgb, thetas, zuege, punkte):
     """EIN Aufruf der fd-Stufe (v8) mit GENAU so vielen Gesichtern, wie ihr Graph gebaut
     ist (FD_BREITE). Wie dynamisch(), nur mit vier Eingaengen und zwei Ausgaengen mehr:
@@ -1025,12 +1082,15 @@ class ModellBestand:
         mr = onnx.load(self.pfade["r"], load_external_data=False)
         dim = lambda m, i: _eingang(m).type.tensor_type.shape.dim[i].dim_value  # noqa: E731
         pw, ph = wk.pose_wache.INPUT_SIZE
-        # v6: Rechentyp je Stufe, aus der Modell-Datei gelesen.
+        # v6: Rechentyp je Stufe, aus der Modell-Datei gelesen. Der zweite Blick (ZB1) rechnet mit der Detektor-Datei,
+        # die WIRKLICH geladen wird (Engine: gebackene fp16-Fassung oder --det-onnx), seine Seiten sind die feste
+        # Feldgroesse aus dem Kern (det_10g hat offene Seiten).
         self.typ = {wk.FD: _typ(mfd), "e": _typ(me), "t": _typ(mt), "p": _typ(mp),
-                    "r": _typ(mr)}
+                    "r": _typ(mr), wk.ZB: _typ_datei(self.pfade[wk.ZB])}
         self.seiten = {wk.FD: (dim(mfd, 2), dim(mfd, 3)),
                        "e": (dim(me, 2), dim(me, 3)), "t": (dim(mt, 2), dim(mt, 3)),
-                       "p": (ph, pw), "r": (dim(mr, 2), dim(mr, 3))}
+                       "p": (ph, pw), "r": (dim(mr, 2), dim(mr, 3)),
+                       wk.ZB: (wk.ZB_FELD, wk.ZB_FELD)}
         # E1: die Laenge des Embeddings kommt aus dem Erkennungs-Modell selbst (bis v8 kam
         # sie aus der Referenz-Matrix, die es im Graphen nicht mehr gibt). Steht sie dort
         # nicht als Zahl, bleibt die Achse offen — geraten wird sie nicht.
@@ -1069,7 +1129,8 @@ class ModellBestand:
             "r": lambda n: [_sitzung(_fest(self.pfade["r"], (n, 3, *self.seiten["r"]),
                                            norm_aus=self.norm_naht)),
                             _sitzung(graph_rec_post(n, self.emb_dim, self.typ["r"],
-                                                    norm_eingang=self.norm_naht))]}
+                                                    norm_eingang=self.norm_naht))],
+            wk.ZB: lambda n: [_sitzung(_fest(self.pfade[wk.ZB], (n, 3, *self.seiten[wk.ZB])))]}
         self._ketten = {}
         self._schloss = threading.Lock()
         self.bau_s = 0.0                                 # Summe der geteilten Bauzeit
@@ -1161,6 +1222,8 @@ class Satz:
         -> je Gesicht ein Tupel seiner Ausgabezeilen"""
         if self.rgb is None:
             raise RuntimeError("stufe() vor det()")
+        if k == wk.ZB:
+            return zweiter_blick(self.g.stufe_zb, self.rgb, thetas)     # ZB1: eigene feste Breite
         if k in self.g.stufen_dyn:
             return quantisiert(self.g.stufen_dyn[k], self.rgb, thetas)
         return buendelweise(self.g.stufen[k], self.rgb, thetas)
@@ -1199,6 +1262,8 @@ class Satz:
         zug0 = wk.leinwand_zug([0, 0, wk.LEINWAND - 2, wk.LEINWAND - 2], g.W, g.H)
         quantisiert_fd(g.stufen_dyn[wk.FD], rgb, [th0] * FD_BREITE, [zug0] * FD_BREITE,
                        g.bestand.lm_punkte)
+        # ZB1: der zweite Blick mit einem gueltigen Zug (Form [2,5], Feld-Rechteck im Feld)
+        zweiter_blick(g.stufe_zb, rgb, [wk.zb_lage([0, 0, 2, 2], g.W, g.H, g.nm)[0]])
 
 
 class Geometrie:
@@ -1251,6 +1316,11 @@ class Geometrie:
                 self.stufen_dyn[k] = (_sitzung(graph_crop_fd(H, W, FD_BREITE, self.seiten[k],
                                                              best.norm[k], best.typ[k])),
                                       hol(k, None))
+            elif k == wk.ZB:
+                # ZB1: der zweite Blick hat seine eigene feste Breite und gehoert in keine der beiden Formen-Listen
+                self.stufe_zb = (_sitzung(graph_crop_zb(H, W, wk.ZB_BREITE, self.seiten[k], best.norm[k],
+                                                        best.typ[k])),
+                                 hol(k, wk.ZB_BREITE))
             elif k in DYN_STUFEN:
                 self.stufen_dyn[k] = (_sitzung(graph_crop(H, W, None, self.seiten[k],
                                                           best.norm[k], best.typ[k])),
@@ -1293,7 +1363,7 @@ class Geometrie:
         for je_n in self.stufen.values():
             for _s_aus, kette in je_n.values():
                 n += 1 + len(kette)
-        return n
+        return n + 1 + len(self.stufe_zb[1])             # ZB1: Ausschnitt + Detektor des zweiten Blicks
 
     def sessions_eigen(self):
         """Wie viele Sessions NUR dieser Geometrie gehoeren (v5)."""
@@ -1303,7 +1373,7 @@ class Geometrie:
         for k, je_n in self.stufen.items():
             for _s_aus, kette in je_n.values():
                 n += 1 + (0 if k in self.geteilt else len(kette))
-        return n
+        return n + 1 + (0 if wk.ZB in self.geteilt else len(self.stufe_zb[1]))   # ZB1
 
     def cuda_optionen_ist(self):
         """Was ORT fuer die gebaute Detektor-Session als CUDA-Optionen ZURUECKMELDET,
@@ -1434,6 +1504,7 @@ def _crop_sessions(g):
     for k, je_n in g.stufen.items():
         n0 = sorted(je_n)[0]
         aus[f"{k}[n={n0}]"] = je_n[n0][0]
+    aus[f"{wk.ZB}[n={wk.ZB_BREITE}]"] = g.stufe_zb[0]   # ZB1: der zweite Blick
     return aus
 
 
@@ -1470,6 +1541,10 @@ class Engine:
         for k, p in self.fp16_pfade.items():
             if k != "det":
                 self.pfade.setdefault(k, p)
+        # ZB1: der zweite Blick rechnet mit dem Detektor, den der erste Blick WIRKLICH nimmt (fp16 aus dem Manifest
+        # oder --det-onnx); ohne beide bleibt es bei der Vorgabe des Hauses (worker_kern.vorgabe_pfade).
+        if self.det_onnx:
+            self.pfade.setdefault(wk.ZB, self.det_onnx)
         if EP not in ort.get_available_providers():
             raise SystemExit("kein CUDA-Provider, kein Rueckfall")
         # .531: HIER, nicht in `geometrie_bauen`. Diese Stelle laeuft in

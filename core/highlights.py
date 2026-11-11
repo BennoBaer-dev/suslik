@@ -12,7 +12,15 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.057"   # 0.1.1.057: EIN neuer Box-Eintrag (Bauplan analysen/bauplan_stapel_abstand.md, Stufe SA1); CHANGELOG-Satz und Box-Zeile vom Eigentuemer 08.11.2026 09:26:05 abgenommen ("Changelog und What's New passen."); 0.1.1.056: EIN neuer Box-Eintrag (Kette Lebenszeichen, Bauplan analysen/bauplan_lebenszeichen.md, Stufen LZ1, LZ2, LZ4, LZ5, LZ2b, LZ6); CHANGELOG-Satz vom Eigentuemer 07.11.2026 17:41:46 abgenommen ("Ja, so"), Box-Zeile 17:42:32 ("ok"); 0.1.1.055: EIN neuer Box-Eintrag, Inhalt vom Eigentuemer 05.11.2026 20:4x ("text für waths new: weniger deuteifunktion, speziell für große installationen und cache für die beiden seiten"), Kurzfassung abgenommen 20:5x ("Ja, passt"); 0.1.1.054: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 15:5x "Wir lassen uns mit Small", CHANGELOG nur "Small fixes."); 0.1.1.053: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 07:2x "What's new packen wir nichts rein"); 0.1.1.052: kein neuer Box-Eintrag (Eigentuemer 04.11.2026 17:32:17 "Changelog wuerde ich jetzt nicht
+STAND = "0.1.1.101"   # 0.1.1.101: Box-Text unveraendert, der Eintrag traegt nur die neue Nummer; 0.1.1.100 wurde nie
+                      # veroeffentlicht (Eigentuemer 11.11.2026 09:05:30: "als wenn die 100 gar nicht da ist, sondern
+                      # nur die 101 in dem Textfeld"). Neu im CHANGELOG ist allein der Satz zum Video der
+                      # Live-Meldungen in Safari (Bauplan analysen/bauplan_video_teilabruf.md, Stufe VT1).
+                      # Davor 0.1.1.100: neuer Box-Eintrag mit drei Zeilen, die erste mit dem roten, fetten Kopf
+                      # „Testversion“ (Wunsch des Eigentuemers 10.11.2026; Wortlaut DE abgenommen 22:16:06 "Passt so",
+                      # Nummer 22:16:47 "0.1.1.100", CHANGELOG abgenommen 22:18:07 "Passt so"). 0.1.1.058 wurde nie
+                      # veroeffentlicht und geht hier auf, ihr Box-Satz steckt in der zweiten Zeile.
+                      # Davor 0.1.1.058: EIN neuer Box-Eintrag mit einem Satz (Eigentuemer 09.11.2026 21:16:59 "What's-new-Box, kurz und knapp, im Live-Wächter MQTT, Pushover und Telegram geändert", CHANGELOG mit vier Saetzen abgenommen 21:17:43 "Ja, Rest so"); Bauplaene mqtt_melden (MM1 bis MM5), push_melden (PW1 bis PW5), waechterseite (WS1, WS2, WS4), nvidia_wsl2 (NW1, NW2); 0.1.1.057: EIN neuer Box-Eintrag (Bauplan analysen/bauplan_stapel_abstand.md, Stufe SA1); CHANGELOG-Satz und Box-Zeile vom Eigentuemer 08.11.2026 09:26:05 abgenommen ("Changelog und What's New passen."); 0.1.1.056: EIN neuer Box-Eintrag (Kette Lebenszeichen, Bauplan analysen/bauplan_lebenszeichen.md, Stufen LZ1, LZ2, LZ4, LZ5, LZ2b, LZ6); CHANGELOG-Satz vom Eigentuemer 07.11.2026 17:41:46 abgenommen ("Ja, so"), Box-Zeile 17:42:32 ("ok"); 0.1.1.055: EIN neuer Box-Eintrag, Inhalt vom Eigentuemer 05.11.2026 20:4x ("text für waths new: weniger deuteifunktion, speziell für große installationen und cache für die beiden seiten"), Kurzfassung abgenommen 20:5x ("Ja, passt"); 0.1.1.054: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 15:5x "Wir lassen uns mit Small", CHANGELOG nur "Small fixes."); 0.1.1.053: kein neuer Box-Eintrag (Eigentuemer 05.11.2026 07:2x "What's new packen wir nichts rein"); 0.1.1.052: kein neuer Box-Eintrag (Eigentuemer 04.11.2026 17:32:17 "Changelog wuerde ich jetzt nicht
                       # gross was reinpacken. What's new? Auch nichts. Weil das sind ja nur Fixes von Dingen, die wir schon
                       # gedacht haetten, haetten wir schon lange gefixt."). Box unveraendert: nur STAND geht hoch; Stufen D1
                       # bis D4 des Bauplans analysen/bauplan_lesen_drei_dateien.md, der CHANGELOG-Abschnitt hat einen Satz.
@@ -878,6 +886,47 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.1.100 — DREI Zeilen, MIT DEM EIGENTUEMER ABGESTIMMT 10.11.2026 (Vorschlag der Hauptsession auf seinen Wunsch
+    # nach einem kurzen Text mit rotem, fettem „Testversion“ davor; Wortlaut DE abgenommen 22:16:06 „Passt so“). Die
+    # erste Zeile traegt `betont`: der Teil vor dem Gedankenstrich wird rot und fett gesetzt (webui.whatsnew_block).
+    # Der Eintrag 0.1.1.058 (nie veroeffentlicht) geht in der zweiten Zeile auf. EN von der Hauptsession, ES, IT, FR
+    # und FI nach EN. Was dahinter steht: die Bauplaene der 058 (mqtt_melden, push_melden, waechterseite,
+    # nvidia_wsl2), dazu analysen/bauplan_abruffenster.md, bauplan_live_seite.md, bauplan_messwerte_speichern.md,
+    # bauplan_zweiter_blick.md und bauplan_today_seite.md; der CHANGELOG-Abschnitt nennt alles.
+    # Seit 11.11.2026 traegt der Eintrag die Nummer 0.1.1.101, der Text ist derselbe (0.1.1.100 nie veroeffentlicht).
+    ("0.1.1.101", (
+        {"de": "Testversion — Heute zeigt die Personen als Kacheln, die Durchgänge stehen im eigenen Reiter. "
+               "Unbekannte des Live-Wächters erscheinen dort jetzt auch.",
+         "en": "Test release — Today shows people as cards, passes have their own tab. "
+               "Unknown people seen by a live watcher now appear there too.",
+         "es": "Versión de prueba — Hoy muestra a las personas como tarjetas, los pasos tienen su propia pestaña. "
+               "Los desconocidos vistos por una vigilancia en vivo ahora también aparecen allí.",
+         "it": "Versione di prova — Oggi mostra le persone come schede, i passaggi hanno una scheda propria. "
+               "Ora vi compaiono anche gli sconosciuti visti da una sentinella live.",
+         "fr": "Version de test — Aujourd'hui affiche les personnes sous forme de cartes, les passages ont leur "
+               "propre onglet. Les inconnus vus par une surveillance en direct y apparaissent désormais aussi.",
+         "fi": "Testiversio — Tänään näyttää henkilöt kortteina, käynnit ovat omalla välilehdellään. "
+               "Live-vahdin näkemät tuntemattomat näkyvät nyt myös siellä.",
+         "betont": True},
+        {"de": "Live-Wächter: eine Seite mit Plätzen; MQTT, Pushover und Telegram melden anders "
+               "(siehe „Bitte zuerst lesen“).",
+         "en": "Live watchers: one page with slots; MQTT, Pushover and Telegram report differently "
+               "(see “Read me first”).",
+         "es": "Vigilancia en vivo: una página con plazas; MQTT, Pushover y Telegram avisan de otra forma "
+               "(véase «Léeme primero»).",
+         "it": "Sentinelle live: una pagina con posti; MQTT, Pushover e Telegram segnalano in modo diverso "
+               "(vedi «Leggimi prima»).",
+         "fr": "Surveillance en direct : une page avec des emplacements ; MQTT, Pushover et Telegram signalent "
+               "autrement (voir « À lire d'abord »).",
+         "fi": "Live-vahdit: yksi sivu, jolla on paikat; MQTT, Pushover ja Telegram ilmoittavat toisin "
+               "(katso ”Lue tämä ensin”)."},
+        {"de": "Neuer Filter gegen Fehlalarme durch Blätter und Büsche.",
+         "en": "New filter against false alarms from leaves and bushes.",
+         "es": "Nuevo filtro contra falsas alarmas por hojas y arbustos.",
+         "it": "Nuovo filtro contro i falsi allarmi dovuti a foglie e cespugli.",
+         "fr": "Nouveau filtre contre les fausses alertes dues aux feuilles et aux buissons.",
+         "fi": "Uusi suodatin lehtien ja pensaiden aiheuttamia vääriä hälytyksiä vastaan."},
+    )),
     # 0.1.1.057 — EIN Punkt, INHALT VOM EIGENTUEMER 08.11.2026 09:2x (kurz und knapp: Abstandsregel eingebaut,
     # wie das Feld heisst, welcher Wert, ueber die Config aenderbar); Box-Zeile EN und DE von der Hauptsession
     # vorgeschlagen, abgenommen 09:26:05 („Changelog und What's New passen.“). ES, IT, FR und FI nach EN uebersetzt.

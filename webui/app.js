@@ -759,6 +759,20 @@ function qsFortschritt() {
 }
 document.addEventListener('DOMContentLoaded', function () { if (document.getElementById('qs-lauf')) qsFortschritt(); });
 
+/* Bauplan analysen/bauplan_today_seite.md, Stufe TY2 Punkt 2: Tag und Bereich bleiben beim Umschalten zwischen den
+   Reitern Heute und Durchgaenge erhalten. Die Unterreiter kommen aus dem Seitenrahmen ohne Abfrage; auf diesen zwei
+   Seiten bekommen ihre Verweise tag und area der aktuellen Adresse. */
+document.addEventListener('DOMContentLoaded', function () {
+  if (location.pathname !== '/heute' && location.pathname !== '/durchgaenge') return;
+  var q = new URLSearchParams(location.search), mit = new URLSearchParams();
+  ['tag', 'area'].forEach(function (k) { if (q.get(k)) mit.set(k, q.get(k)); });
+  var s = mit.toString();
+  if (!s) return;
+  document.querySelectorAll('.subnav a[href="/heute"], .subnav a[href="/durchgaenge"]').forEach(function (a) {
+    a.setAttribute('href', a.getAttribute('href') + '?' + s);
+  });
+});
+
 function qsStart(btn) {
   /* .273 Bestands-QS-Popup (Faces-Karte): Start mit Personen-Wahl; laeuft
      ueber denselben Hintergrund-Runner wie der automatische Re-Check. */
@@ -1789,7 +1803,19 @@ function _liveFelder() {
              Dieselbe Halte-Regel — fehlt die Checkbox im DOM, geht das Feld
              nicht mit und der Server behaelt den gespeicherten Wunsch. */
           worker_aus: (document.getElementById('lv-worker-aus') || {}).checked,
-          eigene_pruefen: (document.getElementById('lv-eigene-pruefen') || {}).checked};
+          eigene_pruefen: (document.getElementById('lv-eigene-pruefen') || {}).checked,
+          /* WS1 (Bauplan waechterseite, WV1): die Push-Schalter je Waechter.
+             Dieselbe Halte-Regel — fehlt ein Element, geht das Feld nicht mit
+             und der Server behaelt den gespeicherten Wert. */
+          pushover_image: (document.getElementById('lv-pushover-image') || {}).checked,
+          telegram_image: (document.getElementById('lv-telegram-image') || {}).checked,
+          telegram_video: (document.getElementById('lv-telegram-video') || {}).checked,
+          pushover_known: (document.getElementById('lv-pushover-known') || {}).checked,
+          pushover_unknown: (document.getElementById('lv-pushover-unknown') || {}).checked,
+          telegram_known: (document.getElementById('lv-telegram-known') || {}).checked,
+          telegram_unknown: (document.getElementById('lv-telegram-unknown') || {}).checked,
+          unknown_with_known: (document.getElementById('lv-unknown-with-known') || {}).checked,
+          video_s: (document.getElementById('lv-video-s') || {}).value};
 }
 
 /* Kalibrier-Vorrat EINER Kamera wegwerfen (User-Auftrag 31.08.: nachkalibrieren
@@ -1871,13 +1897,19 @@ function kalibFuellstand(kamera, btn) {
     .catch(function () { btn.disabled = false; });
 }
 
+/* Speichern gibt seit LS2 (Bauplan live_seite, Punkt 7 und Codex-Vermerk) ein Versprechen zurueck: true nur bei
+   erfolgreicher Antwort. "Speichern und wechseln" wartet darauf, und erst dann gilt die Seite als ungeaendert. */
 function liveSpeichern(btn) {
   var s = document.getElementById('lv-status');
   btn.disabled = true; if (s) s.textContent = TT('js.status.speichern', 'saving …');
-  fetch('/live_speichern', {method: 'POST', body: JSON.stringify(_liveFelder())})
+  return fetch('/live_speichern', {method: 'POST', body: JSON.stringify(_liveFelder())})
     .then(function (r) { return r.json(); })
-    .then(function (d) { if (s) s.textContent = d.msg; btn.disabled = false; })
-    .catch(function () { if (s) s.textContent = TT('js.status.fehler', 'error'); btn.disabled = false; });
+    .then(function (d) {
+      if (s) s.textContent = d.msg; btn.disabled = false;
+      if (d.ok) _liveMarke(false);
+      return !!d.ok;
+    })
+    .catch(function () { if (s) s.textContent = TT('js.status.fehler', 'error'); btn.disabled = false; return false; });
 }
 
 function liveSchalter(kamera, an, btn) {
@@ -1991,7 +2023,9 @@ function _livePoll() {
       kern.push('engine:' + !!(d.engine || {}).frisch);
       var schnapp = kern.join('|');
       if (window._liveSnap === undefined) { window._liveSnap = schnapp; return; }
-      if (schnapp !== window._liveSnap && !a) location.reload();
+      /* Nachtrag zu LS2 (offene Liste O1250): mit ungespeicherten Feldern kein Neuladen, sonst waere die Eingabe
+         weg. _liveSnap behaelt den alten Stand, das Neuladen folgt also nach dem Speichern oder Verwerfen. */
+      if (schnapp !== window._liveSnap && !a && !_liveGeaendert) location.reload();
     })
     .catch(function () {});
 }
@@ -2009,29 +2043,83 @@ if (window._livePage) setInterval(function () {
   });
 }, 2000);
 
-/* Hide/Show je Kachel (.186, User 13.08.): reine Anzeige-Praeferenz im Store,
-   danach Reload (die Kachel wandert in die Hidden-Gruppe bzw. zurueck). */
-function liveVerstecken(kamera, an, btn) {
-  btn.disabled = true;
-  fetch('/live_verstecken', {method: 'POST',
-                             body: JSON.stringify({kamera: kamera, versteckt: an})})
+/* ---- Plaetze der Live-Seite (LS2, Bauplan analysen/bauplan_live_seite.md, Punkt 7): der Platzwechsel ist ein
+   Seitenaufruf. Sind Felder der Einstellungen geaendert, haelt livePlatzWechsel ihn an und zeigt die Warnleiste
+   (Speichern und wechseln, Verwerfen, Hier bleiben). Die Kamerawahl im Kopf zaehlt nicht als Aenderung. */
+var _liveGeaendert = false, _liveZiel = null;
+function _liveMarke(an) {
+  _liveGeaendert = an;
+  var m = document.getElementById('lv-ungespeichert');
+  if (m) m.hidden = !an;
+}
+function _liveAenderung(e) {
+  var z = e.target;
+  if (z && z.closest && z.closest('.lvs-einstellungen') && z.id !== 'lv-kamerawahl') _liveMarke(true);
+}
+if (window._livePage) {
+  document.addEventListener('change', _liveAenderung);
+  document.addEventListener('input', _liveAenderung);
+}
+function livePlatzWechsel(a) {
+  if (!_liveGeaendert) return true;
+  _liveZiel = a.href;
+  var w = document.getElementById('lv-warnung');
+  if (w) w.hidden = false;
+  return false;
+}
+function liveWarnAntwort(wahl) {
+  var w = document.getElementById('lv-warnung'), ziel = _liveZiel;
+  if (w) w.hidden = true;
+  _liveZiel = null;
+  if (wahl === 'bleiben' || !ziel) return;
+  if (wahl === 'verwerfen') { location.href = ziel; return; }
+  var knopf = document.getElementById('lv-speichern');
+  if (!knopf) return;
+  liveSpeichern(knopf).then(function (ok) { if (ok) location.href = ziel; });
+}
+/* Zuweisen und Leeren ueber POST /live_platz (Stufe LS1); platz null leert. Danach zeigt die Seite den Platz neu. */
+function _livePlatz(kamera, platz) {
+  return fetch('/live_platz', {method: 'POST', body: JSON.stringify({kamera: kamera, platz: platz})})
     .then(function (r) { return r.json(); })
-    .then(function () { location.reload(); })
-    .catch(function () { btn.disabled = false; });
+    .catch(function () { return {ok: false, msg: TT('js.status.fehler', 'error')}; });
 }
-
-/* Area-Gruppier-Schalter (.186): Wahl in localStorage, beim Seitenaufruf ohne
-   Parameter einmalig angewandt (replace, keine History-Muellzeile). */
-function liveAreaMerken(an) {
-  try { localStorage.setItem('vd-live-area', an ? '1' : '0'); } catch (e) {}
+function liveZuweisen(nr, btn) {
+  var sel = document.getElementById('lv-neu');
+  if (!sel || !sel.value) return;
+  btn.disabled = true;
+  _livePlatz(sel.value, nr).then(function (d) {
+    if (d.ok) { location.href = '/live?platz=' + nr; return; }
+    var s = document.getElementById('lv-frei-status');
+    if (s) s.textContent = d.msg;
+    btn.disabled = false;
+  });
 }
-if (window._livePage) (function () {
-  try {
-    var will = localStorage.getItem('vd-live-area') === '1';
-    var hat = location.search.indexOf('gruppe=area') !== -1;
-    if (will && !hat) location.replace('/live?gruppe=area');
-  } catch (e) {}
-})();
+function liveLeeren(btn) {
+  var nr = document.getElementById('lv-platz').value;
+  btn.disabled = true;
+  _livePlatz(document.getElementById('lv-kamera').value, null).then(function (d) {
+    if (d.ok) { location.href = '/live?platz=' + nr; return; }
+    var s = document.getElementById('lv-status');
+    if (s) s.textContent = d.msg;
+    btn.disabled = false;
+  });
+}
+/* Kamerawechsel auf dem Platz: erst leeren (geht nur bei ausgeschaltetem Waechter), dann die neue Kamera zuweisen.
+   Ist der Platz geleert, zeigt die Seite ihn neu, auch wenn das Zuweisen scheitert. */
+function liveKameraWechsel(sel) {
+  var alt = document.getElementById('lv-kamera').value, nr = document.getElementById('lv-platz').value;
+  if (sel.value === alt) return;
+  sel.disabled = true;
+  _livePlatz(alt, null).then(function (d) {
+    if (!d.ok) {
+      var s = document.getElementById('lv-status');
+      if (s) s.textContent = d.msg;
+      sel.value = alt; sel.disabled = false;
+      return;
+    }
+    _livePlatz(sel.value, Number(nr)).then(function () { location.href = '/live?platz=' + nr; });
+  });
+}
 
 /* Easy/Expert-Schalter (.204): NUR der Schalter — Modus in localStorage (analog Theme),
    body-Klasse "easy" als Anker; die Seiten ziehen ihre Easy-Ansichten schrittweise nach. */

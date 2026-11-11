@@ -89,6 +89,8 @@ T = {
     "readme.aktuell.text": 'Riconoscimento quando in un evento ci sono più persone. Il sistema deve capire dove si trova ogni persona nell’immagine ed eseguire il riconoscimento facciale separatamente per l’area di ciascuna — così due persone vicine non si fondono più in un unico verdetto.',
     "readme.lernen.titel": 'Come gli insegno volti nuovi?',
     "readme.lernen.text": "Al mio sistema insegno i volti così:\n\nApprendimento dei volti. Su un sistema nuovo è la prima cosa. A seconda dell'hardware gli ultimi 500 eventi, con margine 1000. Il programma prende gli eventi persona, li raggruppa e mette insieme le immagini. I conosciuti li assegna da solo. Gli sconosciuti li raccoglie come gruppo, e al gruppo do un nome. Questo dà la base. Vale solo per i volti rilevati in modo pulito.\n\nOggi. Con la base pronta, il nuovo si aggiunge da qui: cliccare sull'evento o sulla persona, acquisire il volto.\n\nConosciuti. Scegliere la persona, poi trova volti corrispondenti. Qui rinomino anche una persona, quando nel nome c'è un errore di battitura. Il programma riporta il nome nuovo nei dati archiviati, anche negli eventi vecchi. Registri e backup mantengono il nome vecchio.\n\nApprendimento della persona. Esiste anche questo, per le persone senza un volto leggibile. Ne scriverò più avanti.\n\nQualità. Questa scheda la uso regolarmente. Mostra quanto sono buone davvero le immagini di una persona, quali sono troppo deboli e quali si sovrappongono a un'altra persona. Quelle troppo simili le tolgo.\n\nLa scheda Sconosciuti è rimasta da una versione precedente. Io non la uso.",
+    "readme.mqtt.titel": "Messaggi MQTT",
+    "readme.mqtt.text": "Dalla 0.1.1.058 ogni messaggio della sentinella live ha il campo event. Le automazioni filtrano su di esso. faces_recognized e appearance_ended sono nuovi, i campi vecchi restano.\n\nTopic [prefisso]/live/[telecamera], QoS 0, senza retain. Ciò che il broker perde non viene reinviato.\n\nPer apparizione arrivano in quest'ordine:\n\nface_found: primo volto valido. Con score e, se c'è già, un nome provvisorio in schnell_urteil.\n\nface_recognized: un nome ha abbastanza voti. Una volta per nome, con stufe in schnell_urteil.\n\nfaces_recognized: subito dopo. faces contiene tutti i nomi dell'apparizione finora, ciascuno con name e stufe.\n\nappearance_ended: l'apparizione è finita. reason è no_face quando il tempo di \"La visita finisce dopo\" è scaduto, o stopped quando si ferma la sentinella o il motore. In più faces e duration_s dal primo all'ultimo volto.\n\ndisturbance: sentinella disturbata con state disturbed, ritorno alla normalità con state recovered. Al massimo uno per sentinella e 10 minuti, l'ultimo stato arriva dopo.\n\nstufe: clear ben sopra la soglia, narrow appena sopra, below appena sotto, none molto sotto o non misurabile.\n\n\"Pausa push\" frena Pushover e Telegram, mai MQTT.",
     "readme.persoenlich.titel": 'Personale',
     "readme.persoenlich.text": "Questo è puro hobby. Da architetto IT senior, mi diverte sviluppare qualcosa con l'IA. È sviluppato interamente con Claude Code, soprattutto con Fable 5, e con Opus 5 per gli agenti.\n\nQuello che desidero sono i riscontri, e mi fa piacere se qualcuno usa il sistema. Questa è la mia paga.",
     "kameras.titel": "Telecamere",
@@ -776,18 +778,14 @@ T = {
     # ---------------------------------------------------- routes/live ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): drei Saetze mit
     # <b>Measure load</b> bzw. <a>-Link mitten im Satz (Messung-fehlt-
-    # Zeile, CPU-Sperrkarten-Rest, Aufloesungs-Absatz, Credentials-Zeile,
-    # Erklaer-Satz 2) bleiben literal; die Kanal-Haekchen pushover/
-    # telegram/mqtt und "(detect)" sind Anzeige==Kennung (Vergleichs-/
-    # Ersetzungs-Token) und bleiben literal; LIVE_ZUSTAENDE-Labels kommen
-    # aus core/registry (zentrale Quelle, eigene Tranche); GRUPPEN behaelt
-    # seine EN-Literale als Kennungs-Kontrakt (harnisch_live1), die
-    # Anzeige laeuft ueber die live.gruppe.*-Schluessel; die unbenutzte
-    # Modul-Konstante _PHASEN bleibt unberuehrt. Zahlen wie 199–801 ms
-    # und {tage}/{mb}/{kerne} kommen vorformatiert aus der Route (§8.8).
-    "live.hinweis_gpu":
-        "Per ora funziona solo con una GPU — stiamo lavorando a "
-        "un’opzione CPU ma non possiamo prometterla.",
+    # Zeile, CPU-Sperrkarten-Rest, Aufloesungs-Absatz, Credentials-Zeile)
+    # bleiben literal; die Kanal-Haekchen pushover/telegram/mqtt sind
+    # Anzeige==Kennung und bleiben literal; LIVE_ZUSTAENDE-Labels kommen
+    # aus core/registry (zentrale Quelle, eigene Tranche); die unbenutzte
+    # Modul-Konstante _PHASEN bleibt unberuehrt. {tage}/{mb}/{kerne}
+    # kommen vorformatiert aus der Route (§8.8). Seit LS2 (Bauplan
+    # live_seite) gibt es keine Kachel-Uebersicht, keine Gruppen und keinen
+    # Erklaer-Kasten mehr; deren Schluessel sind entfallen.
     "live.hinweis_cpu":
         "Modalità CPU: qui le sentinelle costano caro — il controllo "
         "rapido richiede in genere 1–2 s (una build GPU reagisce in "
@@ -813,19 +811,14 @@ T = {
         "misura di nuovo",
     "live.messung.fehlgeschlagen":
         "ultima misurazione del carico FALLITA ({wann}): {fehler}",
-    "live.zaehler.auftritte": "{n} apparizioni",
-    "live.zaehler.funde": "{n} volti trovati",
+    "live.zaehler.auftritte": "{n} visite",
+    "live.zaehler.funde": "{n} volti",
     "live.zaehler.trigger": "{n} trigger",
-    "live.zaehler.alerts": "{n} avvisi",
-    "live.zaehler.letzter": "ultimo trigger {zeit}",
-    "live.zaehler.kopf": "dall’avvio del motore:",
+    "live.zaehler.alerts": "{n} segnalati",
+    "live.zaehler.letzter": "ultimo {zeit}",
+    "live.zaehler.kopf": "Dall’avvio:",
     "live.engine.titel_aus": "Motore live: fermo",
-    "live.engine.satz_aus":
-        "Nessun heartbeat dal processo del motore. I riquadri mostrano "
-        "le impostazioni salvate; attivazione, prova contro una "
-        "sentinella in funzione e misurazioni del carico richiedono il "
-        "motore — il servizio lo avvia automaticamente appena almeno "
-        "una sentinella è attivata.",
+    "live.engine.satz_aus": "Nessun heartbeat dal processo del motore. I posti mostrano le impostazioni salvate; attivazione, prova contro una sentinella in funzione e misurazioni del carico richiedono il motore — il servizio lo avvia automaticamente appena almeno una sentinella è attivata.",
     "live.engine.cpu_mit_limit":
         "CPU di suslik adesso: {kerne} di {limit} core consentiti "
         "(intero container: sentinelle, analisi, servizio)",
@@ -853,29 +846,14 @@ T = {
     "live.engine.titel_standalone":
         "Motore live: in funzione (rilevato motore autonomo)",
     "live.engine.titel_an": "Motore live: in funzione",
-    "live.gruppe.laufend": "In funzione",
-    "live.gruppe.bereit": "Pronte",
-    "live.gruppe.rest": "Non impostate",
-    "live.gruppe.versteckt": "Nascoste",
-    "live.gruppe.ohne_area": "Senza area",
     "live.kachel.attr_fremd":
         "impostata qui, ma questa telecamera al momento non è in Frigate",
     "live.kachel.pill_fremd": "non in Frigate",
-    "live.kachel.attr_detect":
-        "stream detect di Frigate — la risoluzione reale dello stream "
-        "compare dopo che il servizio lo ha sondato o dopo un test "
-        "sorgente",
-    "live.knopf_konfigurieren": "Configura",
     "live.knopf_test": "Esegui test sorgente",
-    "live.knopf_messung": "Misura il carico",
     "live.knopf_enable": "Attiva",
     "live.knopf_disable": "Disattiva",
-    "live.knopf_zeigen": "Mostra",
-    "live.knopf_verstecken": "Nascondi",
     "live.banner.kameraliste":
         "Impossibile leggere l’elenco telecamere di Frigate: {fehler}",
-    "live.schalter.ungruppiert": "vista non raggruppata",
-    "live.schalter.area": "raggruppa per area",
     "live.sperre.cpu_titel": "Modalità CPU",
     "live.sperre.titel": "Non disponibile su questa build",
     "live.sperre.satz":
@@ -885,38 +863,36 @@ T = {
         "rocm).",
     "live.sperre.cpu_only":
         "Non sono disponibili sull’immagine solo CPU.",
-    "live.erklaer.titel":
-        "Sentinelle live — reazione immediata sullo stream della "
-        "telecamera",
-    "live.erklaer.satz1":
-        "Una sentinella live si collega direttamente allo stream di una "
-        "telecamera e reagisce mentre la persona è ancora "
-        "nell’inquadratura: il primo volto avvia un controllo e, dopo "
-        "il numero impostato di rilevamenti coerenti, parte un segnale "
-        "verificato — l’obiettivo è sotto il secondo (misurati 199–801 "
-        "ms sul sistema di riferimento). Usala per attivare le "
-        "automazioni di casa, ad es. via MQTT.",
-    "live.erklaer.link": "Scopri di più: come funzionano le sentinelle live",
     "live.titel": "Sentinelle live",
+    "live.intro": "Una sentinella guarda una telecamera dal vivo e segnala un volto mentre la persona è ancora nell’immagine.",
+    "live.intro_link": "Come funzionano le sentinelle",
+    "live.marke.aktiv": "{n} attive",
+    "live.platz.name": "Live {n}",
+    "live.platz.frei": "libero",
+    "live.frei.titel": "Live {n} è libero",
+    "live.frei.satz": "Assegna una telecamera a questo posto. Poi imposti qui cosa segnala e la accendi.",
+    "live.frei.keine": "Ogni telecamera ha già un posto.",
+    "live.knopf_zuweisen": "Assegna telecamera",
+    "live.knopf_leeren": "Svuota posto",
+    "live.kopf.kamera": "Telecamera",
+    "live.ungespeichert": "modifiche non salvate",
+    "live.warnung.satz": "Live {n} ha modifiche non salvate.",
+    "live.warnung.speichern": "Salva e cambia",
+    "live.warnung.verwerfen": "Scarta",
+    "live.warnung.bleiben": "Resta qui",
+    "live.kein_platz": "{kamera} non ha un posto e tutti i posti sono occupati. Svuota prima un posto.",
+    "live.abschnitt.engine": "Motore e carico",
     "live.leer.titel": "Nessuna telecamera trovata.",
-    "live.leer.hinweis":
-        "Imposta prima la connessione a Frigate — i riquadri compaiono "
-        "per ogni telecamera.",
+    "live.leer.hinweis": "Imposta prima la connessione a Frigate.",
     "live.knopf_speichern": "Salva",
-    "live.detail.titel": "Sentinella live — {name}",
-    "live.abschnitt.quelle": "Sorgente",
+    "live.abschnitt.quelle": "Connessione",
     "live.quelle.proxy":
         "restream go2rtc tramite Frigate (predefinito, consigliato)",
     "live.quelle.direct": "URL producer della telecamera scoperto via go2rtc",
     "live.quelle.url": "un URL di stream che inserisci tu",
-    "live.detail.url_label": "URL dello stream (solo sorgente 'url'):",
-    "live.detail.url_hinweis":
-        "le credenziali nell’URL sono mascherate ovunque vengano "
-        "mostrate — lascia il campo com’è per mantenere l’URL salvato, "
-        "oppure incollane uno nuovo",
-    "live.detail.quelle_hinweis":
-        "Cambiare la sorgente invalida il test sorgente — rieseguilo "
-        "prima di attivare.",
+    "live.detail.url_label": "URL dello stream",
+    "live.detail.url_hinweis": "Solo per url; le credenziali salvate restano mascherate.",
+    "live.detail.quelle_hinweis": "Cambiare sorgente richiede un nuovo test sorgente.",
     "live.abschnitt.aufloesung": "Risoluzione di elaborazione",
     "live.hoehe.default": "predefinita (1080p)",
     "live.hoehe.h360":
@@ -930,21 +906,14 @@ T = {
         "guadagno rispetto a {jetzt}p) — questa sentinella lavora a {jetzt}p. "
         "Il valore salvato e il test della sorgente restano validi; scegli "
         "uno dei livelli qui sopra per cambiare.",
-    "live.abschnitt.alarm": "Catena di avviso",
-    "live.detail.ende_label": "Fine dopo assenza di volto (s):",
-    "live.detail.ende_hinweis":
-        "un’apparizione termina dopo questi secondi senza volto (3–120)",
-    "live.detail.scharf_label": "Riarmo dopo (s):",
-    "live.detail.scharf_hinweis":
-        "secondi minimi tra gli avvisi — con qualcuno presente avvisa "
-        "di nuovo dopo questo tempo; 0 = ogni trigger avvisa (0–3600)",
-    "live.abschnitt.kanaele": "Canali di notifica",
-    "live.detail.namensschaetzung":
-        "Gli avvisi includono una stima preliminare del nome "
-        "(\"probabilmente X\") quando il volto corrisponde a una "
-        "persona conosciuta — mai salvata, mai usata per "
-        "l’apprendimento.",
-    "live.abschnitt.test": "Prova &amp; misura",
+    "live.detail.ende_label": "La visita finisce dopo",
+    "live.detail.ende_hinweis": "Secondi senza volto.",
+    "live.detail.scharf_label": "Pausa push",
+    "live.pause.kopf": "Dal primo volto di una visita segnalata c’è silenzio per questo tempo:",
+    "live.pause.besuche": "Le visite che iniziano in questo tempo non ricevono video né «Persona sconosciuta».",
+    "live.pause.name": "Lo stesso nome torna al più presto dopo lo stesso numero di secondi.",
+    "live.detail.scharf_hinweis": "Home Assistant (MQTT) non va mai in pausa.",
+    "live.abschnitt.test": "Test sorgente",
     "live.detail.gesperrt_hinweis":
         "prova e misurazione non sono disponibili finché le sentinelle "
         "live sono bloccate su questa macchina — la nota in cima a "
@@ -953,41 +922,22 @@ T = {
     "live.detail.messung_hinweis":
         "durante la misurazione del carico le altre sentinelle vengono "
         "messe in pausa",
-    "live.detail.link_zurueck": "torna alla panoramica",
     # --- Live-Umbau 31.08. (s. en.py)
     "live.detail.kein_bild": "Nessuna immagine dal vivo — questa sentinella non è in funzione.",
     "live.detail.kein_bild_test":
         "L\u2019ultimo test della sorgente ha visto {aufloesung}, elaborato come {skala}.",
-    "live.detail.kein_bild_ohne_test":
-        "Non è ancora stato fatto nessun test della sorgente, quindi di questo "
-        "flusso non si sa niente.",
-    "live.abschnitt.erkennung": "Riconoscimento",
-    "live.abschnitt.melden": "Avvisi",
-    "live.abschnitt.frigate": "Eventi Frigate",
-    "live.abschnitt.erweitert": "Impostazioni avanzate",
-    "live.abschnitt.abtastung": "Campionamento",
-    "live.abtastung.schalter": "Guardare da vicino solo quando qualcosa si muove",
-    "live.abtastung.erklaerung":
-        "Il riconoscimento dei volti è la parte cara — un controllo di "
-        "movimento economico sul piano di luminanza decide se un fotogramma "
-        "vale la pena. Finché una persona viene seguita, la sentinella va "
-        "sempre a ritmo pieno; solo una scena tranquilla viene campionata "
-        "meno spesso.",
+    "live.detail.kein_bild_ohne_test": "Nessun test della sorgente è ancora riuscito, quindi di questo flusso non si sa niente.",
+    "live.abschnitt.frigate": "Frigate (facoltativo)",
+    "live.abschnitt.erweitert": "Avanzate",
+    "live.abschnitt.abtastung": "Risparmio",
+    "live.abtastung.schalter": "Guardare solo col movimento",
+    "live.abtastung.erklaerung": "Le scene tranquille vengono controllate meno spesso, una persona seguita sempre a pieno ritmo.",
     "live.abtastung.ruhe_label": "Guardare comunque ogni",
-    "live.abtastung.ruhe_einheit": "s",
-    "live.abtastung.ruhe_hinweis":
-        "Lascia vuoto per usare il tempo di fine comparsa di questa "
-        "telecamera — chi sta fermo non crea movimento, quindi la sentinella "
-        "dà un\u2019occhiata ogni tanto (1–600 s).",
-    "live.abtastung.schwelle_label": "Sensibilità (variazione di grigio):",
-    "live.abtastung.flaeche_label": "area minima:",
-    "live.abtastung.eich_hinweis":
-        "Lascia entrambi vuoti per i valori di fabbrica di Frigate. Numeri "
-        "più bassi fanno guardare la sentinella più spesso; più alti la "
-        "tengono tranquilla davanti a una siepe nel vento. Ogni posto è "
-        "diverso — questi valori sono di QUESTA telecamera, non di tutto il "
-        "sistema.",
-    "live.abschnitt.guete": "Soglie di qualità dell\u2019immagine",
+    "live.abtastung.ruhe_hinweis": "Vuoto significa il tempo di «La visita finisce dopo».",
+    "live.abtastung.schwelle_label": "Sensibilità al movimento",
+    "live.abtastung.flaeche_label": "Area minima in movimento",
+    "live.abtastung.eich_hinweis": "Vuoto significa il valore di Frigate; numeri più piccoli guardano più spesso.",
+    "live.abschnitt.guete": "Valori di calibrazione",
     "live.abschnitt.last": "Misura del carico",
     "live.erkennung.det_zeile":
         "Da un punteggio di rilevamento di {wert} in su una trovata conta "
@@ -1007,48 +957,75 @@ T = {
     "live.erkennung.vorrat_zeile":
         "Campioni di calibrazione: {n} di {deckel} \u2014 un\u2019immagine "
         "per comparsa, le più vecchie escono.",
-    "live.erkennung.vorrat_aus":
-        "La raccolta è spenta, quindi la pagina di calibrazione non ha nulla "
-        "da mostrare (pagina di sistema, \"live_kalib_max\").",
+    "live.erkennung.vorrat_aus": "La raccolta è spenta (pagina di sistema, \"live_kalib_max\").",
     "live.erkennung.latte_e": "impressione dell\u2019immagine da {wert}",
     "live.erkennung.latte_t": "riconoscibilità da {wert}",
     "live.erkennung.latte_aus": "non impostato",
-    "live.erkennung.latte_hinweis":
-        "Questi due non decidono mai CHI viene riconosciuto: costerebbe "
-        "conferme. Decidono quale immagine finisce nell\u2019avviso e quali "
-        "volti restano come campioni di calibrazione. Si regolano nella "
-        "pagina di calibrazione, dove le immagini si vedono.",
+    "live.erkennung.latte_hinweis": "Un volto sotto uno di questi due valori non dà voto per un nome e non resta come campione di calibrazione. Si regolano nella pagina di calibrazione, dove le immagini si vedono.",
     "live.knopf_kalibrieren": "Calibra",
     "live.knopf_vorrat_leeren": "Cancella campioni",
-    "live.workeraus.schalter":
-        "Questo guardiano sostituisce l'analisi degli eventi di questa telecamera",
-    "live.eigenepruefen.schalter":
-        "Ricontrolla anche gli eventi Frigate creati da questo guardiano nell'analisi degli eventi",
-    "live.eigenepruefen.erklaerung":
-        "Spento per impostazione predefinita. Gli eventi creati da questo guardiano in Frigate (opzione "
-        "'Crea un evento Frigate quando qualcuno viene riconosciuto') non vengono quindi analizzati una "
-        "seconda volta. Attivalo se l'analisi degli eventi deve verificare i nomi del guardiano. Ha effetto "
-        "solo mentre il guardiano sostituisce l'analisi degli eventi.",
-    "live.workeraus.erklaerung":
-        "Spento per impostazione predefinita. Acceso, gli eventi Frigate di "
-        "questa telecamera non vengono più analizzati una seconda volta: il "
-        "guardiano guarda comunque lo stesso flusso e il lavoro si farebbe due "
-        "volte. Vale solo finché il guardiano è acceso E davvero in funzione; "
-        "se il motore si ferma o il guardiano cade, gli eventi tornano a "
-        "essere analizzati normalmente. Un nome che Frigate stessa afferma "
-        "viene sempre verificato, qualunque cosa dica questa impostazione.",
-    "live.frigate.schalter": "Crea un evento Frigate quando qualcuno viene riconosciuto",
-    "live.frigate.erklaerung":
-        "Spento per impostazione predefinita. Acceso, questo guardiano scrive "
-        "un proprio evento in Frigate con il nome nella sotto-etichetta "
-        "\u2014 una registrazione propria, indipendente dal rilevamento di "
-        "Frigate. La scrittura avviene in background: il guardiano non aspetta "
-        "mai Frigate. In modalità sola lettura non viene scritto nulla.",
-    "live.frigate.abstand_label": "Al massimo un evento per persona ogni (s):",
-    "live.frigate.abstand_hinweis":
-        "Vuoto significa: la stessa distanza impostata sopra per gli avvisi. "
-        "Il limite vale per persona, quindi due persone diverse possono "
-        "essere scritte insieme.",
+    "live.workeraus.schalter": "Sostituisce l'analisi degli eventi",
+    "live.eigenepruefen.schalter": "Ricontrollare i propri eventi Frigate",
+    "live.eigenepruefen.erklaerung": "Analizzare anche gli eventi che questa sentinella crea in Frigate.",
+    "live.workeraus.erklaerung": "Mentre la sentinella è attiva, l'analisi degli eventi salta gli eventi di questa telecamera, tranne quando Frigate stesso nomina una persona.",
+    "live.frigate.schalter": "Crea evento in Frigate",
+    "live.frigate.erklaerung": "Con un nome riconosciuto, un evento proprio con quel nome.",
+    "live.frigate.abstand_label": "Intervallo per persona",
+    "live.frigate.abstand_hinweis": "Vuoto significa la pausa push.",
+    # --- WS2 (Bauplan analysen/bauplan_waechterseite.md): die Einstellseite eines Waechters nach der
+    # Vorlage vom 07.11.2026 — Zustaende, Kopf, Abschnitte und Kopfzeilen der eingeklappten Teile.
+    "live.zustand.unconfigured": "non configurata",
+    "live.zustand.untested": "test necessario",
+    "live.zustand.checking": "controllo sorgente",
+    "live.zustand.tested": "pronta da attivare",
+    "live.zustand.active": "attiva",
+    "live.zustand.disturbed": "disturbata",
+    "live.zustand.unsupported": "non disponibile qui",
+    "live.kopf.zustand_fps": "{zustand}, {fps} frame/s",
+    "live.kopf.test": "Test sorgente {wann}",
+    "live.kopf.kein_test": "Ancora nessun test sorgente riuscito",
+    "live.kopf.erneut": "ricontrolla",
+    "live.kopf.jetzt": "prova ora",
+    "live.kopf.test_fehler": "ultimo test fallito",
+    "live.alter.heute": "oggi",
+    "live.alter.tage.eins": "{n} giorno fa",
+    "live.alter.tage.viele": "{n} giorni fa",
+    "live.einheit.s": "s",
+    "live.abschnitt.mqtt": "Home Assistant (MQTT)",
+    "live.mqtt.zweck": "Per le automazioni di casa. Esce prima di tutti gli altri canali, sempre in inglese, senza pausa push.",
+    "live.mqtt.topic": "Topic",
+    "live.mqtt.nutzen": "Invia a Home Assistant",
+    "live.mqtt.broker": "Broker e accesso sono nella pagina",
+    "live.mqtt.meldungen": "I {n} messaggi",
+    "live.abschnitt.push": "Messaggi push",
+    "live.push.zweck": "Cosa ricevono Pushover e Telegram da questa telecamera.",
+    "live.push.zugang": "Credenziali",
+    "live.push.bekannte": "Persona riconosciuta",
+    "live.push.bekannte_hinweis": "Subito con il nome, appena un volto è riconosciuto.",
+    "live.push.unbekannte": "Persona sconosciuta",
+    "live.push.unbekannte_hinweis": "Alla fine della visita, se nessuno è stato riconosciuto.",
+    "live.push.bild": "Allega immagine",
+    "live.push.bild_hinweis": "L’immagine della telecamera con il volto incorniciato.",
+    "live.push.video": "Allega video",
+    "live.push.video_hinweis": "Un video per ogni visita segnalata, dal primo volto.",
+    "live.push.nur_telegram": "solo Telegram",
+    "live.push.videolaenge": "Durata del video",
+    "live.push.neben": "Segnala gli sconosciuti anche accanto ai riconosciuti",
+    "live.push.neben_hinweis": "«Persona sconosciuta» arriva allora anche quando nella stessa visita qualcuno è stato riconosciuto, senza immagine.",
+    "live.abschnitt.besuch": "Visita",
+    "live.besuch.zweck": "Una visita inizia con il primo volto e finisce quando per questo tempo non se ne vede nessuno. Dopo, la stessa persona può essere riconosciuta di nuovo.",
+    "live.besuch.global": "Uguale per tutte le telecamere: {fps} frame al secondo, {stimmen} voti minimi.",
+    "live.wert.an": "attivo",
+    "live.wert.aus": "spento",
+    "live.erweitert.kopf": "Sorgente {quelle} · risparmio {spar} · sostituisce l'analisi degli eventi {ersetzt}",
+    "live.abschnitt.zusatz": "Analisi aggiuntiva",
+    "live.abschnitt.diagnose": "Diagnostica",
+    "live.diagnose.kopf": "Misura del carico {messung} · campioni di calibrazione {vorrat}",
+    "live.diagnose.messung_fehlt": "mancante",
+    "live.diagnose.messung_fehler": "fallita",
+    "live.diagnose.messung_entwertet": "annullata dal cambio di sorgente",
+    "live.diagnose.vorrat": "{n} di {deckel}",
+    "live.abschnitt.vorrat": "Campioni di calibrazione",
     "livekalib.titel": "Calibrazione della telecamera — {name}",
     "livekalib.erklaerung":
         "Questi sono volti veri raccolti da questa telecamera \u2014 "
@@ -1733,6 +1710,7 @@ T = {
     "nav.bereich.erkennungstest": "Test di riconoscimento",
     "nav.bereich.system": "Sistema",
     "nav.heute": "Oggi",
+    "nav.durchgaenge": "Passaggi",
     "nav.ereignisse": "Eventi",
     "nav.faces": "Volti",
     "nav.gesichter": "Conosciuti",
@@ -3558,9 +3536,11 @@ T = {
     # vorbei).
     "hilfe.live.titel": "Le sentinelle live, spiegate",
     "hilfe.live.satz1": """<p>Le sentinelle live guardano le tue telecamere nel momento in cui qualcosa
-si muove. Quando una persona mette piede nella proprietà, ricevi un avviso
-entro pochi secondi, e se il sistema conosce già il volto, l’avviso porta
-con sé un nome.</p>""",
+si muove. Quando una persona mette piede nella proprietà e il sistema conosce
+già il volto, ricevi entro pochi secondi un avviso con il nome. Chi non viene
+riconosciuto è segnalato come «Persona sconosciuta» quando per alcuni secondi
+non si è più visto alcun volto. MQTT segnala subito il primo volto in
+entrambi i casi.</p>""",
     "hilfe.live.satz2": """<p>Il nome in questa fase è una prima ipotesi. Il controllo approfondito
 parte subito dopo, sulla registrazione, e ha l’ultima parola.</p>""",
     "hilfe.live.satz3": """<p>Le sentinelle live non dipendono da Frigate: non vengono attivate dagli
@@ -3956,16 +3936,86 @@ vista del giorno integri le persone conosciute.</p>""",
     "meldung.vision.einig":
         "visione: {name} — esito unanime, {voten} confronto/i su {bilder}",
     "meldung.vision.kein_urteil": "visione: nessun esito — {grund}",
-    "meldung.wache.titel_person": "{wache} {kamera}: persona rilevata",
+    "meldung.wache.titel_unbekannt": "Persona sconosciuta su {kamera}",
     "meldung.wache.titel_stoerung": "{wache} {kamera}: anomalia",
     "meldung.wache.caption": "{wache} {kamera}: {text}",
-    # .412: Kongruenz mit "persona" aus dem Trigger-Titel (feminin).
-    "meldung.wache.titel_erkannt": "{wache} {kamera}: persona riconosciuta",
+    # PW2 (Bauplan push_melden, E13): Zeilen fuer Pushover-Titel und Telegram-Beschriftung des Waechters.
+    "meldung.wache.titel_erkannt": "Volto di {name} riconosciuto su {kamera}",
+    "meldung.wache.titel_namen": "Volti di {erste} e {letzter} riconosciuti su {kamera}",
     "meldung.wache.nicht_erkannt": "non riconosciuta",
     # ---- Today .412 (T1) ----
-    "heute.block.personen": "Persone",
-    "heute.block.personen_cnt.eins": "{n} riconosciuta · ordinate per ultimo avvistamento",
-    "heute.block.personen_cnt.viele": "{n} riconosciute · ordinate per ultimo avvistamento",
+    "heute.nav.gestern": "ieri",
+    "heute.nav.zurueck": "giorno precedente",
+    "heute.nav.vor": "giorno successivo",
+    "heute.nav.keine_zukunft": "nessun giorno futuro",
+    "heute.nav.heute": "torna a oggi",
+    "heute.laeuft": "in corso",
+    "heute.block.laeuft": "passaggio in corso — gli eventi vengono analizzati alla fine e compaiono qui",
+    "heute.unbek.titel": "Sconosciuti",
+    "heute.unbek.vorher": "vista {n}× prima",
+    "heute.unbek.erstmals": "prima volta qui",
+    "heute.unbek.fremder": "estraneo confermato",
+    "heute.unbek.link_title": "Apri questo passaggio",
+    "heute.akt.aendern": "Modifica",
+    "heute.akt.pruefen": "Verifica",
+    "heute.akt.benennen": "Assegna nome",
+    "heute.akt.ansehen": "Vedi",
+    "heute.kanal.satz": "Nessun canale di avviso ancora configurato — i riconoscimenti compaiono qui, ma nulla ti avviserà.",
+    "heute.kanal.link": "Configurane uno in Notifiche.",
+    "heute.fuss.passes.eins": "{n} passaggio in questo giorno.",
+    "heute.fuss.passes.viele": "{n} passaggi in questo giorno.",
+    "heute.fuss.link": "Vedi passaggi e numeri",
+    "heute.neben.area": "Vista area {area}: passaggi che hanno toccato quest'area (ciascuno mostrato per intero); i conteggi degli eventi coprono solo le sue telecamere",
+    "heute.neben.unbek.eins": "{n} persona sconosciuta",
+    "heute.neben.unbek.viele": "{n} persone sconosciute",
+    "heute.neben.aehnlich.eins": "{n} persona probabilmente riconosciuta",
+    "heute.neben.aehnlich.viele": "{n} persone probabilmente riconosciute",
+    "heute.neben.ohne.eins": "{n} passaggio senza nessuno riconosciuto",
+    "heute.neben.ohne.viele": "{n} passaggi senza nessuno riconosciuto",
+    "heute.neben.keine": "nessuno sconosciuto",
+    "heute.neben.archiv.eins": "{n} in più in un gruppo archiviato",
+    "heute.neben.archiv.viele": "{n} in più in gruppi archiviati",
+    "heute.neben.nebenbei.eins": "{n} evento senza corrispondenza in passaggi riconosciuti",
+    "heute.neben.nebenbei.viele": "{n} eventi senza corrispondenza in passaggi riconosciuti",
+    "heute.liste.cnt": "prima i più recenti · un clic apre le telecamere",
+    "heute.liste.cnt_laeuft": "prima i più recenti · un passaggio in corso si aggiorna da solo",
+    "heute.pass.seit": "da {zeit}",
+    "heute.pass.bisher.eins": "{n} evento finora",
+    "heute.pass.bisher.viele": "{n} eventi finora",
+    "heute.pass.events.eins": "{n} evento",
+    "heute.pass.events.viele": "{n} eventi",
+    "heute.pass.dauer": "{m} min · {ev}",
+    "heute.pass.erkennt": "identificazione…",
+    "heute.pass.kein_gesicht.eins": "nessun volto utilizzabile in questo passaggio ({n} evento)",
+    "heute.pass.kein_gesicht.viele": "nessun volto utilizzabile in questo passaggio ({n} eventi)",
+    "heute.pass.niemand": "nessuna persona nota",
+    "heute.pass.ohne.eins": "{n} senza corrispondenza",
+    "heute.pass.ohne.viele": "{n} senza corrispondenza",
+    "heute.pass.plus_ohne": "+{n} senza corrispondenza",
+    "heute.pass.alle": "tutti riconosciuti",
+    "heute.pass.via_koerper_vision": "tramite persona + visione, senza volto",
+    "heute.pass.via_koerper": "tramite riconoscimento della persona, senza volto",
+    "heute.pass.via_beides": "tramite volto + persona",
+    "heute.pass.via_gesicht": "tramite volto",
+    "heute.pass.hinweis_koerper": "indizio del riconoscimento della persona (sotto la regola dei supporti)",
+    "heute.pass.vision": "visione: {person}",
+    "heute.pass.vision_kein": "visione: nessun verdetto — {grund}",
+    "heute.pass.vision_details": "dettagli",
+    "heute.pass.vision_title": "come la visione è arrivata al risultato: turni, gallerie confrontate, tempi",
+    "heute.pass.kameras.eins": "{n} telecamera",
+    "heute.pass.kameras.viele": "{n} telecamere",
+    "heute.pass.nur_bewegung": "solo movimento, nessun volto",
+    "heute.pass.video": "video",
+    "heute.pass.video_title": "miglior clip di questa telecamera",
+    "heute.notiz.bewegung.eins": "{n} passaggio di solo movimento senza volto è nascosto; tutti sono elencati in Eventi.",
+    "heute.notiz.bewegung.viele": "{n} passaggi di solo movimento senza volto sono nascosti; tutti sono elencati in Eventi.",
+    "heute.notiz.fehldetektion.eins": "{n} rilevamento filtrato come non volto (firma di oggetto statico) — giudizi invariati.",
+    "heute.notiz.fehldetektion.viele": "{n} rilevamenti filtrati come non volti (firma di oggetto statico) — giudizi invariati.",
+    "heute.notiz.fehltrigger.eins": "{n} evento classificato come probabile falso allarme (nessuna persona trovata): {je}.",
+    "heute.notiz.fehltrigger.viele": "{n} eventi classificati come probabili falsi allarmi (nessuna persona trovata): {je}.",
+    "heute.block.personen": "Riconosciuti",
+    "heute.block.personen_cnt.eins": "{n} persona · per ultimo avvistamento",
+    "heute.block.personen_cnt.viele": "{n} persone · per ultimo avvistamento",
     "heute.person.bestaetigt": "prima–ultima conferma {von}–{bis}",
     "heute.person.bestaetigt_einmal": "confermata {zeit}",
     "heute.person.seit": "confermata dalle {zeit}",
@@ -3978,17 +4028,22 @@ vista del giorno integri le persone conosciute.</p>""",
     "heute.person.live_title": "nominata solo da un osservatore in diretta (avviso con nome dopo più riscontri) — nessun passaggio confermato",
     "heute.person.live_link": "vai all'avviso in diretta {zeit} · {kamera}",
     "heute.person.mehr": "tutte le {n} persone ({m} in più)",
-    "heute.unbek.cnt.eins": "{n} persona sconosciuta · ordinata per ultimo avvistamento",
-    "heute.unbek.cnt.viele": "{n} persone sconosciute · ordinate per ultimo avvistamento",
+    "heute.unbek.cnt.eins": "{n} persona · per ultimo avvistamento",
+    "heute.unbek.cnt.viele": "{n} persone · per ultimo avvistamento",
     "heute.unbek.gesehen": "vista {von}–{bis}",
     "heute.unbek.gesehen_einmal": "vista {zeit}",
+    "heute.waechter.name": "Persona sconosciuta",
+    "heute.waechter.live_title": "segnalata da un osservatore in diretta come persona sconosciuta — senza identità, qui non si può assegnare un nome",
+    "heute.waechter.cnt.eins": "{n} avviso dell'osservatore in diretta",
+    "heute.waechter.cnt.viele": "{n} avvisi dell'osservatore in diretta",
+    "heute.waechter.mehr": "tutti i {n} avvisi ({m} in più)",
     "heute.anw.dauer": "presente circa {h} h",
     "heute.anw.title": "presenza per ora, tutte le telecamere — rosso: presenza confermata, verde: sistema attivo, nessuno visto",
     "heute.anw.title_gesamt": "presenza per ora — tutte le telecamere, senza il filtro della vista per area",
     "heute.pass.mehr_kameras": "tutte le {n} telecamere ({m} in più)",
     "heute.pass.live": "in diretta",
     "heute.pass.live_title": "un osservatore in diretta ha segnalato un nome durante questo passaggio",
-    "heute.rand.personen": "Persone",
+    "heute.rand.personen": "Persone riconosciute",
     "heute.rand.personen_title": "persone con almeno una conferma in questo giorno — giudizi del worker e nomi dell'osservatore in diretta",
     "heute.rand.passes": "Passaggi",
     "heute.rand.passes_title": "passaggi: eventi raggruppati per tempo e luogo; i passaggi di solo movimento non contano",
@@ -3998,12 +4053,10 @@ vista del giorno integri le persone conosciute.</p>""",
     "heute.rand.gesicht_title": "{n} di {m} eventi analizzati con almeno un volto verificato (rilevamenti errati filtrati), telecamere della vista attuale",
     "heute.rand.unbek_title": "identità sconosciute del pool con supporto in questo giorno; senza dati del pool: passaggi senza nessun riconoscimento",
     "heute.aehnlich.titel": "Probabilmente riconosciuti",
-    "heute.aehnlich.cnt.eins": "{n} persona nota, non confermata · ordinata per ultimo avvistamento",
-    "heute.aehnlich.cnt.viele": "{n} persone note, non confermate · ordinate per ultimo avvistamento",
+    "heute.aehnlich.cnt.eins": "{n} persona",
+    "heute.aehnlich.cnt.viele": "{n} persone",
     "heute.aehnlich.zu": "probabilmente {person}",
     "heute.aehnlich.ident": "{uid} · mediana {median} · distacco {abstand}",
-    "heute.aehnlich.rand.eins": "{n} persona probabilmente riconosciuta — vedi Probabilmente riconosciuti",
-    "heute.aehnlich.rand.viele": "{n} persone probabilmente riconosciute — vedi Probabilmente riconosciuti",
     "heute.aehnlich.fehler": "L'ultimo controllo delle persone probabilmente riconosciute non è riuscito (errore) — i gruppi mostrati qui possono essere non aggiornati. Dettagli nel log e in /health.",
     "heute.aehnlich.nein": "non {person}",
     "heute.aehnlich.nein_zurueck": "annulla",

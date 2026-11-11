@@ -21,8 +21,8 @@ ist ungesetzt gleichbedeutend mit 'auto' — h264/hevc gehen dann ueber die
 HW-Pipe, Intel (VAAPI) zuerst, sonst NVIDIA (NVDEC). Werte: 'auto' (Default)
 · 'vaapi'/'nvdec' = erzwingen · 'aus'/'off'/'0'/'nein' = nie. In JEDEM Modus
 greifen dieselben harten Gates (s. _hwdec): nur 8-bit yuv420p/yuvj420p und
-nur mit validierter Quelle (VA-Treiber + SUSLIK_HWDEC_DEVICE, Default
-/dev/dri/renderD128, bzw. /dev/nvidiactl); faellt ein Gate, laeuft es
+nur mit validierter Quelle (VA-Treiber + SUSLIK_HWDEC_DEVICE, Default /dev/dri/renderD128,
+bzw. /dev/nvidiactl oder unter WSL2 der NVIDIA-Treiber); faellt ein Gate, laeuft es
 lautlos in Software. Scheitert die angeforderte HW-Pipe erst beim Decode,
 faellt der Iterator LAUT (Flag .hwdec_fallback) auf Software zurueck —
 gleiche Bytes, nur langsamer. Preis der Migration: einmalige Soll-Neueinfrierung (E3);
@@ -432,8 +432,13 @@ def va_da():
 
 def nv_da():
     """NVIDIA-Runtime im Container: /dev/nvidiactl (Kriterium unveraendert
-    aus der _hwdec-Historie; NVDEC-Byte-Beweis am NB 05.08.)."""
-    return os.path.exists("/dev/nvidiactl")
+    aus der _hwdec-Historie; NVDEC-Byte-Beweis am NB 05.08.) oder unter WSL2
+    der NVIDIA-Treiber nach core/nvidia_lage (Bauplan nvidia_wsl2, E2; dort
+    fehlt der Byte-Beweis, ein Scheitern faengt der Iterator wie bei VAAPI)."""
+    if os.path.exists("/dev/nvidiactl"):
+        return True
+    from core.nvidia_lage import GRUND_WSL2, nvidia_da   # noqa: PLC0415
+    return nvidia_da() == (True, GRUND_WSL2)
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +592,11 @@ def hw_geraet():
         return "vaapi", (f"{node}, VA drivers: "
                          + (", ".join(treiber) if treiber else "none found"))
     if nv_da():
-        return "nvdec", "/dev/nvidiactl (NVIDIA runtime)"
+        if os.path.exists("/dev/nvidiactl"):
+            return "nvdec", "/dev/nvidiactl (NVIDIA runtime)"
+        # Bauplan nvidia_wsl2 E2: unter WSL2 kommt die Karte ueber den WSL2-Knoten der Registry.
+        from core.registry import knoten_von as _knoten_von   # noqa: PLC0415
+        return "nvdec", f"{_knoten_von('WSL2')} (NVIDIA driver under WSL2)"
     return None, (f"no usable hardware decode device "
                   f"(neither {node} nor /dev/nvidiactl)")
 

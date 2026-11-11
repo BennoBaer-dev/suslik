@@ -99,6 +99,8 @@ T = {
         "yhdeksi päätelmäksi.",
     "readme.lernen.titel": "Miten opetan uusia kasvoja?",
     "readme.lernen.text": "Näin teen sen omassa järjestelmässäni:\n\nKasvojen oppimisajo. Uudessa järjestelmässä ensimmäinen asia. Laitteiston mukaan viimeiset 500 tapahtumaa, 1000 jos tehoa on varalla. Ohjelma hakee tapahtumat, joissa on henkilö, ryhmittelee ne ja kokoaa kuvat yhteen. Tunnetut se liittää itse. Tuntemattomat se kerää ryhmäksi, ja minä annan ryhmälle nimen. Siitä syntyy alkujoukko. Toimii vain kasvoilla, jotka tunnistettiin siististi.\n\nTänään. Kun alkujoukko on koossa, kaikki uusi tulee täältä: napsauta tapahtumaa tai henkilöä, ota kasvot käyttöön.\n\nTunnetut henkilöt. Valitse henkilö, sitten etsi sopivia kasvoja. Täällä myös nimeän henkilön uudelleen, jos nimessä on kirjoitusvirhe. Ohjelma vie uuden nimen tallennettuihin tietoihin, myös vanhoihin tapahtumiin. Lokit ja varmuuskopiot säilyttävät vanhan nimen.\n\nHenkilöiden oppimisajo. Sellainen on vieressä, niitä varten, joiden kasvot eivät ole luettavissa. Kirjoitan siitä myöhemmin enemmän.\n\nLaatu. Käytän tuota välilehteä säännöllisesti. Se näyttää, kuinka hyviä henkilön kuvat todella ovat, mitkä ovat liian heikkoja ja mitkä menevät päällekkäin toisen henkilön kanssa. Liian samanlaiset otan pois.\n\nVälilehti Tuntemattomat on jäänne aiemmasta versiosta. Minä en käytä sitä.",
+    "readme.mqtt.titel": "MQTT-viestit",
+    "readme.mqtt.text": "Versiosta 0.1.1.058 alkaen jokaisessa live-vahdin viestissä on kenttä event. Automaatiot suodattavat sen mukaan. faces_recognized ja appearance_ended ovat uusia, vanhat kentät säilyvät.\n\nAihe [etuliite]/live/[kamera], QoS 0, ilman retain-lippua. Mitä broker ei saa, sitä ei lähetetä uudelleen.\n\nEsiintymää kohden ne tulevat tässä järjestyksessä:\n\nface_found: ensimmäiset kelvolliset kasvot. Mukana score ja, jos sellainen jo on, alustava nimi kentässä schnell_urteil.\n\nface_recognized: nimellä on tarpeeksi ääniä. Kerran nimeä kohden, stufe kentässä schnell_urteil.\n\nfaces_recognized: heti perään. faces sisältää kaikki esiintymän nimet tähän asti, kukin kentillä name ja stufe.\n\nappearance_ended: esiintymä on ohi. reason on no_face, kun kohdan \"Käynti päättyy\" aika on kulunut, tai stopped, kun vahti tai moottori pysähtyy. Lisäksi faces ja duration_s ensimmäisistä viimeisiin kasvoihin.\n\ndisturbance: häiriintynyt vahti arvolla state disturbed, häiriön päättyminen arvolla state recovered. Enintään yksi vahtia ja 10 minuuttia kohden, viimeisin tila tulee perässä.\n\nstufe: clear selvästi rajan yläpuolella, narrow juuri yläpuolella, below juuri alapuolella, none kaukana alapuolella tai ei mitattavissa.\n\n\"Push-tauko\" hidastaa Pushoveria ja Telegramia, ei koskaan MQTT:tä.",
     "readme.persoenlich.titel": "Henkilökohtaista",
     "readme.persoenlich.text": "Tämä on puhdasta harrastusta. Senior IT-arkkitehtina minulla on hauskaa rakentaa jotain tekoälyn kanssa. Se on tehty kokonaan Claude Codella, pääosin Fable 5:llä, agentteihin Opus 5:llä.\n\nToivoisin palautetta, ja minua ilahduttaa, kun joku ottaa järjestelmän käyttöön. Se on minun palkkani.",
     "kameras.titel": "Kamerat",
@@ -729,9 +731,6 @@ T = {
     "syncauswahl.ergebnis.auswahl": "{n} valitusta",
     "syncauswahl.ergebnis.uebersprungen": "{n} valinta poistettu (ohitettu)",
     "syncauswahl.ergebnis.dauer": "kesti {n} s",
-    "live.hinweis_gpu":
-        "Toimii toistaiseksi vain GPU:lla — työstämme CPU-vaihtoehtoa, "
-        "mutta emme voi luvata sitä.",
     "live.hinweis_cpu":
         "CPU-tila: vahdit ovat täällä kalliita — nopea tarkistus kestää "
         "tyypillisesti 1–2 s (GPU-build vastaa alle sekunnissa), ja "
@@ -758,19 +757,14 @@ T = {
         "mittaa uudelleen",
     "live.messung.fehlgeschlagen":
         "viimeisin kuormamittaus EPÄONNISTUI ({wann}): {fehler}",
-    "live.zaehler.auftritte": "{n} esiintymistä",
-    "live.zaehler.funde": "{n} kasvoa löydetty",
+    "live.zaehler.auftritte": "{n} käyntiä",
+    "live.zaehler.funde": "{n} kasvoa",
     "live.zaehler.trigger": "{n} triggeriä",
-    "live.zaehler.alerts": "{n} ilmoitusta",
-    "live.zaehler.letzter": "viimeisin trigger {zeit}",
-    "live.zaehler.kopf": "enginen käynnistyksen jälkeen:",
+    "live.zaehler.alerts": "{n} ilmoitettu",
+    "live.zaehler.letzter": "viimeksi {zeit}",
+    "live.zaehler.kopf": "Käynnistyksen jälkeen:",
     "live.engine.titel_aus": "Live-engine: ei käynnissä",
-    "live.engine.satz_aus":
-        "Engine-prosessilta ei tule heartbeatia. Ruudut näyttävät "
-        "tallennetut asetukset; käyttöönotto, testit käynnissä olevaa "
-        "vahtia vasten ja kuormamittaukset vaativat enginen — palvelu "
-        "käynnistää sen automaattisesti heti, kun vähintään yksi vahti on "
-        "päällä.",
+    "live.engine.satz_aus": "Engine-prosessilta ei tule heartbeatia. Paikat näyttävät tallennetut asetukset; käyttöönotto, testit käynnissä olevaa vahtia vasten ja kuormamittaukset vaativat enginen — palvelu käynnistää sen automaattisesti heti, kun vähintään yksi vahti on päällä.",
     "live.engine.cpu_mit_limit":
         "suslikin CPU juuri nyt: {kerne}/{limit} sallittua ydintä (koko "
         "kontti: vahdit, analyysi, palvelu)",
@@ -797,28 +791,14 @@ T = {
     "live.engine.titel_standalone":
         "Live-engine: käynnissä (havaittu erillinen engine)",
     "live.engine.titel_an": "Live-engine: käynnissä",
-    "live.gruppe.laufend": "Käynnissä",
-    "live.gruppe.bereit": "Valmiina",
-    "live.gruppe.rest": "Ei asetettu",
-    "live.gruppe.versteckt": "Piilotetut",
-    "live.gruppe.ohne_area": "Ei aluetta",
     "live.kachel.attr_fremd":
         "asetettu täällä, mutta tätä kameraa ei ole juuri nyt Frigatessa",
     "live.kachel.pill_fremd": "ei Frigatessa",
-    "live.kachel.attr_detect":
-        "Frigaten detect-stream — todellinen streamin tarkkuus ilmestyy, "
-        "kun palvelu luotaa streamin tai lähdetesti ajetaan",
-    "live.knopf_konfigurieren": "Aseta",
     "live.knopf_test": "Aja lähdetesti",
-    "live.knopf_messung": "Mittaa kuorma",
     "live.knopf_enable": "Ota käyttöön",
     "live.knopf_disable": "Poista käytöstä",
-    "live.knopf_zeigen": "Näytä",
-    "live.knopf_verstecken": "Piilota",
     "live.banner.kameraliste":
         "Frigaten kameralistaa ei voitu lukea: {fehler}",
-    "live.schalter.ungruppiert": "ryhmittelemätön näkymä",
-    "live.schalter.area": "ryhmittele alueen mukaan",
     "live.sperre.cpu_titel": "CPU-tila",
     "live.sperre.titel": "Ei käytettävissä tässä buildissa",
     "live.sperre.satz":
@@ -827,34 +807,36 @@ T = {
         "(cuda-image) tai AMD-kortti (rocm-image) kelpaavat kaikki.",
     "live.sperre.cpu_only":
         "Pelkässä CPU-imagessa niitä ei ole käytettävissä.",
-    "live.erklaer.titel": "Live-vahdit — välitön reaktio kamerastreamissa",
-    "live.erklaer.satz1":
-        "Live-vahti yhdistyy suoraan yhteen kamerastreamiin ja reagoi, "
-        "kun henkilö on vielä kuvassa: ensimmäiset kasvot käynnistävät "
-        "tarkistuksen, ja asetetun yhtäpitävien havaintojen määrän "
-        "jälkeen lähtee varmennettu signaali — tavoite on alle sekunti "
-        "(viitekokoonpanolla mitattu 199–801 ms). Käytä sitä kodin "
-        "automaatioiden laukaisuun, esim. MQTT:n kautta.",
-    "live.erklaer.link": "Lue lisää: miten live-vahdit toimivat",
     "live.titel": "Live-vahdit",
+    "live.intro": "Vahti katsoo yhtä kameraa livenä ja ilmoittaa kasvoista, kun henkilö on vielä kuvassa.",
+    "live.intro_link": "Näin vahdit toimivat",
+    "live.marke.aktiv": "aktiivisia: {n}",
+    "live.platz.name": "Live {n}",
+    "live.platz.frei": "vapaa",
+    "live.frei.titel": "Live {n} on vapaa",
+    "live.frei.satz": "Liitä paikkaan kamera. Sen jälkeen asetat tässä, mistä se ilmoittaa, ja kytket sen päälle.",
+    "live.frei.keine": "Jokaisella kameralla on jo paikka.",
+    "live.knopf_zuweisen": "Liitä kamera",
+    "live.knopf_leeren": "Tyhjennä paikka",
+    "live.kopf.kamera": "Kamera",
+    "live.ungespeichert": "tallentamattomia muutoksia",
+    "live.warnung.satz": "Paikassa Live {n} on tallentamattomia muutoksia.",
+    "live.warnung.speichern": "Tallenna ja vaihda",
+    "live.warnung.verwerfen": "Hylkää",
+    "live.warnung.bleiben": "Pysy tässä",
+    "live.kein_platz": "Kameralla {kamera} ei ole paikkaa, ja kaikki paikat ovat varattuja. Tyhjennä ensin jokin paikka.",
+    "live.abschnitt.engine": "Engine ja kuorma",
     "live.leer.titel": "Kameroita ei löytynyt.",
-    "live.leer.hinweis":
-        "Aseta ensin Frigaten yhteys — ruudut ilmestyvät kameraa kohti.",
+    "live.leer.hinweis": "Aseta ensin Frigaten yhteys.",
     "live.knopf_speichern": "Tallenna",
-    "live.detail.titel": "Live-vahti — {name}",
-    "live.abschnitt.quelle": "Lähde",
+    "live.abschnitt.quelle": "Yhteys",
     "live.quelle.proxy":
         "go2rtc-restream Frigaten kautta (oletus, suositeltu)",
     "live.quelle.direct": "go2rtc:n löytämä kameran producer-URL",
     "live.quelle.url": "stream-URL, jonka syötät itse",
-    "live.detail.url_label": "Stream-URL (vain lähteellä 'url'):",
-    "live.detail.url_hinweis":
-        "URL:ssä olevat tunnukset näytetään kaikkialla maskattuina — jätä "
-        "kenttä näytetyn kaltaiseksi, jos haluat säilyttää tallennetun "
-        "URL:n, tai liitä uusi",
-    "live.detail.quelle_hinweis":
-        "Lähteen vaihto mitätöi lähdetestin — aja se uudelleen ennen "
-        "käyttöönottoa.",
+    "live.detail.url_label": "Striimin URL",
+    "live.detail.url_hinweis": "Vain lähteelle url; tallennetut tunnukset pysyvät peitettyinä.",
+    "live.detail.quelle_hinweis": "Lähteen vaihto vaatii uuden lähdetestin.",
     "live.abschnitt.aufloesung": "Käsittelytarkkuus",
     "live.hoehe.default": "oletus (1080p)",
     "live.hoehe.h360":
@@ -869,22 +851,14 @@ T = {
         "{jetzt}p:hen verrattuna) — tämä vahti ajaa tarkkuudella "
         "{jetzt}p. Tallennettu arvo ja lähdetesti pysyvät voimassa; "
         "valitse uusi porras, jos haluat muuttaa sitä.",
-    "live.abschnitt.alarm": "Ilmoitusketju",
-    "live.detail.ende_label": "Päättyy ilman kasvoja (s):",
-    "live.detail.ende_hinweis":
-        "esiintyminen päättyy näin monen kasvottoman sekunnin jälkeen "
-        "(3–120)",
-    "live.detail.scharf_label": "Uudelleen valmiina (s):",
-    "live.detail.scharf_hinweis":
-        "vähimmäissekunnit ilmoitusten välillä — jos joku on paikalla, se "
-        "ilmoittaa uudelleen tämän ajan jälkeen; 0 = jokainen trigger "
-        "ilmoittaa (0–3600)",
-    "live.abschnitt.kanaele": "Ilmoituskanavat",
-    "live.detail.namensschaetzung":
-        'Ilmoitukset sisältävät alustavan nimiarvauksen ("todennäköisesti '
-        'X"), kun kasvot täsmäävät tunnettuun henkilöön — ei koskaan '
-        'tallenneta, ei koskaan käytetä opetukseen.',
-    "live.abschnitt.test": "Testaa &amp; mittaa",
+    "live.detail.ende_label": "Käynti päättyy",
+    "live.detail.ende_hinweis": "Sekunteja ilman kasvoja.",
+    "live.detail.scharf_label": "Push-tauko",
+    "live.pause.kopf": "Ilmoitetun käynnin ensimmäisistä kasvoista alkaen on näin kauan hiljaista:",
+    "live.pause.besuche": "Tänä aikana alkavat käynnit eivät saa videota eivätkä ”Tuntematon henkilö” -viestiä.",
+    "live.pause.name": "Sama nimi tulee uudelleen aikaisintaan yhtä monen sekunnin jälkeen.",
+    "live.detail.scharf_hinweis": "Home Assistant (MQTT) ei pidä koskaan taukoa.",
+    "live.abschnitt.test": "Lähdetesti",
     "live.detail.gesperrt_hinweis":
         "testaaminen ja mittaaminen eivät ole käytettävissä, kun "
         "live-vahdit on lukittu tällä koneella — tämän sivun ylälaidan "
@@ -892,40 +866,22 @@ T = {
     "live.knopf_messung_lang": "Mittaa kuorma (15–30 s)",
     "live.detail.messung_hinweis":
         "kuormamittaus pysäyttää muut vahdit siksi ajaksi",
-    "live.detail.link_zurueck": "takaisin yleisnäkymään",
     "live.detail.kein_bild": "Ei livekuvaa — tämä vahti ei ole käynnissä.",
     "live.detail.kein_bild_test":
         "Viimeisin lähdetesti näki {aufloesung}, käsiteltiin muodossa "
         "{skala}.",
-    "live.detail.kein_bild_ohne_test":
-        "Lähdetestiä ei ole vielä ajettu, joten tästä syötteestä ei "
-        "tiedetä mitään.",
-    "live.abschnitt.erkennung": "Tunnistus",
-    "live.abschnitt.melden": "Ilmoittaminen",
-    "live.abschnitt.frigate": "Frigate-tapahtumat",
+    "live.detail.kein_bild_ohne_test": "Yksikään lähdetesti ei ole vielä onnistunut, joten tästä syötteestä ei tiedetä mitään.",
+    "live.abschnitt.frigate": "Frigate (valinnainen)",
     "live.abschnitt.erweitert": "Lisäasetukset",
-    "live.abschnitt.abtastung": "Näytteistys",
-    "live.abtastung.schalter": "Katso tarkasti vain, kun jokin liikkuu",
-    "live.abtastung.erklaerung":
-        "Kasvojen havaitseminen on se kallis osa — halpa liiketarkistus "
-        "kirkkaustasolla päättää, kannattaako kuva sen. Niin kauan kuin "
-        "henkilöä seurataan, vahti ajaa aina täydellä tahdilla; vain "
-        "rauhallista näkymää näytteistetään harvemmin.",
+    "live.abschnitt.abtastung": "Säästötila",
+    "live.abtastung.schalter": "Katso vain liikkeen aikana",
+    "live.abtastung.erklaerung": "Rauhallisia näkymiä tarkistetaan harvemmin, seurattua henkilöä aina täydellä tahdilla.",
     "live.abtastung.ruhe_label": "Katso silti joka",
-    "live.abtastung.ruhe_einheit": "s",
-    "live.abtastung.ruhe_hinweis":
-        "Jätä tyhjäksi, niin käytetään tämän kameran esiintymisen "
-        "päättymisaikaa — täysin liikkumatta seisova ei tuota liikettä, "
-        "joten vahti vilkaisee silti aika ajoin (1–600 s).",
-    "live.abtastung.schwelle_label": "Herkkyys (harmaasävyn muutos):",
-    "live.abtastung.flaeche_label": "pienin pinta-ala:",
-    "live.abtastung.eich_hinweis":
-        "Jätä molemmat tyhjiksi, niin käytetään Frigaten toimitusarvoja. "
-        "Pienempi herkkyysluku tai pienempi pinta-ala saa vahdin "
-        "katsomaan useammin; suuremmat arvot pitävät sen rauhallisena "
-        "tuulisen pensasaidan äärellä. Jokainen paikka on erilainen — "
-        "nämä kuuluvat TÄLLE kameralle, eivät koko järjestelmälle.",
-    "live.abschnitt.guete": "Kuvanlaadun kynnykset",
+    "live.abtastung.ruhe_hinweis": "Tyhjä tarkoittaa kohdan ”Käynti päättyy” aikaa.",
+    "live.abtastung.schwelle_label": "Liikeherkkyys",
+    "live.abtastung.flaeche_label": "Pienin liikkuva alue",
+    "live.abtastung.eich_hinweis": "Tyhjä tarkoittaa Frigaten arvoa; pienemmillä luvuilla katsotaan useammin.",
+    "live.abschnitt.guete": "Kalibrointiarvot",
     "live.abschnitt.last": "Kuormamittaus",
     "live.erkennung.det_zeile":
         "Löydös lasketaan kasvoiksi havaintoarvosta {wert} "
@@ -950,48 +906,75 @@ T = {
     "live.erkennung.vorrat_zeile":
         "Kalibrointikuvia: {n}/{deckel} säilytetty — yksi kuva "
         "esiintymistä kohti, vanhimmat putoavat pois.",
-    "live.erkennung.vorrat_aus":
-        'Kuvien kerääminen on pois päältä, joten kalibrointisivulla ei '
-        'ole mitään näytettävää (Järjestelmä-sivu, "live_kalib_max").',
+    "live.erkennung.vorrat_aus": "Kuvien kerääminen on pois päältä (Järjestelmä-sivu, \"live_kalib_max\").",
     "live.erkennung.latte_e": "kuvan vaikutelma arvosta {wert}",
     "live.erkennung.latte_t": "tunnistettavuus arvosta {wert}",
     "live.erkennung.latte_aus": "ei asetettu",
-    "live.erkennung.latte_hinweis":
-        "Nämä kaksi eivät koskaan päätä, KUKA tunnistetaan — se "
-        "kustantaisi vahvistuksia. Ne päättävät, mikä kuva menee "
-        "ilmoitukseen ja mitkä kasvot säilytetään kalibrointikuvina. "
-        "Aseta ne kalibrointisivulla, jossa näet kuvat.",
+    "live.erkennung.latte_hinweis": "Kasvot, jotka jäävät jommankumman arvon alle, eivät anna ääntä nimelle eivätkä jää kalibrointikuvaksi. Aseta ne kalibrointisivulla, jossa näet kuvat.",
     "live.knopf_kalibrieren": "Kalibroi",
     "live.knopf_vorrat_leeren": "Hylkää kuvat",
-    "live.workeraus.schalter":
-        "Tämä vahti korvaa tämän kameran tapahtuma-analyysin",
-    "live.eigenepruefen.schalter":
-        "Tarkista myös tämän vahdin omat Frigate-tapahtumat uudelleen tapahtuma-analyysissä",
-    "live.eigenepruefen.erklaerung":
-        "Oletuksena pois. Tämän vahdin Frigateen luomia tapahtumia (valinta 'Luo Frigate-tapahtuma, "
-        "kun joku tunnistetaan') ei tällöin analysoida toista kertaa. Ota käyttöön, jos tapahtuma-analyysin "
-        "pitää tarkistaa vahdin antamat nimet. Vaikuttaa vain, kun vahti korvaa tapahtuma-analyysin.",
-    "live.workeraus.erklaerung":
-        "Oletuksena pois. Päällä ollessaan tämän kameran "
-        "Frigate-tapahtumia ei analysoida toista kertaa — vahti katsoo jo "
-        "samaa syötettä, joten työ tehtäisiin kahdesti. Tämä vaikuttaa "
-        "vain niin kauan kuin vahti on päällä JA todella käynnissä: jos "
-        "engine pysähtyy tai vahti kaatuu, tapahtumat analysoidaan taas "
-        "normaalisti. Nimen, jonka Frigate itse väittää, tarkistamme "
-        "aina, tästä asetuksesta riippumatta.",
-    "live.frigate.schalter": "Luo Frigate-tapahtuma, kun joku tunnistetaan",
-    "live.frigate.erklaerung":
-        "Oletuksena pois. Päällä ollessaan tämä vahti kirjoittaa "
-        "Frigateen oman tapahtumansa, jossa nimi on sub label -kentässä — "
-        "oma tallenne, riippumaton Frigaten havainnoista. Kirjoitus "
-        "tapahtuu taustalla: vahti ei koskaan odota Frigatea. Vain luku "
-        "-tilassa ei kirjoiteta mitään.",
-    "live.frigate.abstand_label":
-        "Enintään yksi tapahtuma henkilöä kohti joka (s):",
-    "live.frigate.abstand_hinweis":
-        "Tyhjä tarkoittaa: sama väli kuin yllä ilmoituksille. Raja "
-        "lasketaan henkilöä kohti, joten kaksi eri ihmistä voidaan "
-        "kirjoittaa samaan aikaan.",
+    "live.workeraus.schalter": "Korvaa tapahtuma-analyysin",
+    "live.eigenepruefen.schalter": "Tarkista omat Frigate-tapahtumat",
+    "live.eigenepruefen.erklaerung": "Analysoi myös tapahtumat, jotka tämä vahti luo Frigateen.",
+    "live.workeraus.erklaerung": "Kun vahti on käynnissä, tapahtuma-analyysi ohittaa tämän kameran tapahtumat, paitsi kun Frigate itse nimeää henkilön.",
+    "live.frigate.schalter": "Luo tapahtuma Frigateen",
+    "live.frigate.erklaerung": "Tunnistetulle nimelle oma tapahtuma, jossa on nimi.",
+    "live.frigate.abstand_label": "Väli henkilöä kohden",
+    "live.frigate.abstand_hinweis": "Tyhjä tarkoittaa push-taukoa.",
+    # --- WS2 (Bauplan analysen/bauplan_waechterseite.md): die Einstellseite eines Waechters nach der
+    # Vorlage vom 07.11.2026 — Zustaende, Kopf, Abschnitte und Kopfzeilen der eingeklappten Teile.
+    "live.zustand.unconfigured": "ei määritetty",
+    "live.zustand.untested": "testi tarvitaan",
+    "live.zustand.checking": "lähdettä tarkistetaan",
+    "live.zustand.tested": "valmis käynnistettäväksi",
+    "live.zustand.active": "aktiivinen",
+    "live.zustand.disturbed": "häiriintynyt",
+    "live.zustand.unsupported": "ei saatavilla täällä",
+    "live.kopf.zustand_fps": "{zustand}, {fps} kuvaa/s",
+    "live.kopf.test": "Lähdetesti {wann}",
+    "live.kopf.kein_test": "Ei vielä onnistunutta lähdetestiä",
+    "live.kopf.erneut": "tarkista uudelleen",
+    "live.kopf.jetzt": "testaa nyt",
+    "live.kopf.test_fehler": "viimeisin testi epäonnistui",
+    "live.alter.heute": "tänään",
+    "live.alter.tage.eins": "{n} päivä sitten",
+    "live.alter.tage.viele": "{n} päivää sitten",
+    "live.einheit.s": "s",
+    "live.abschnitt.mqtt": "Home Assistant (MQTT)",
+    "live.mqtt.zweck": "Kodin automaatioita varten. Lähtee ennen kaikkia muita kanavia, aina englanniksi, ilman push-taukoa.",
+    "live.mqtt.topic": "Aihe",
+    "live.mqtt.nutzen": "Lähetä Home Assistantiin",
+    "live.mqtt.broker": "Broker ja tunnukset ovat sivulla",
+    "live.mqtt.meldungen": "{n} viestiä",
+    "live.abschnitt.push": "Push-viestit",
+    "live.push.zweck": "Mitä Pushover ja Telegram saavat tältä kameralta.",
+    "live.push.zugang": "Tunnukset",
+    "live.push.bekannte": "Tunnistettu henkilö",
+    "live.push.bekannte_hinweis": "Heti nimen kanssa, kun kasvot tunnistetaan.",
+    "live.push.unbekannte": "Tuntematon henkilö",
+    "live.push.unbekannte_hinweis": "Käynnin lopussa, jos ketään ei tunnistettu.",
+    "live.push.bild": "Liitä kuva",
+    "live.push.bild_hinweis": "Kameran kuva, jossa kasvot on kehystetty.",
+    "live.push.video": "Liitä video",
+    "live.push.video_hinweis": "Yksi video ilmoitettua käyntiä kohti, ensimmäisistä kasvoista alkaen.",
+    "live.push.nur_telegram": "vain Telegram",
+    "live.push.videolaenge": "Videon pituus",
+    "live.push.neben": "Ilmoita tuntemattomat myös tunnistettujen rinnalla",
+    "live.push.neben_hinweis": "”Tuntematon henkilö” tulee silloin myös, kun samalla käynnillä joku tunnistettiin, ilman kuvaa.",
+    "live.abschnitt.besuch": "Käynti",
+    "live.besuch.zweck": "Käynti alkaa ensimmäisistä kasvoista ja päättyy, kun kasvoja ei ole näkynyt näin pitkään aikaan. Sen jälkeen sama henkilö voidaan tunnistaa uudelleen.",
+    "live.besuch.global": "Sama kaikille kameroille: {fps} kuvaa sekunnissa, {stimmen} vähimmäisääntä.",
+    "live.wert.an": "päällä",
+    "live.wert.aus": "pois",
+    "live.erweitert.kopf": "Lähde {quelle} · säästötila {spar} · korvaa tapahtuma-analyysin {ersetzt}",
+    "live.abschnitt.zusatz": "Lisäanalyysi",
+    "live.abschnitt.diagnose": "Diagnostiikka",
+    "live.diagnose.kopf": "Kuormamittaus {messung} · kalibrointikuvat {vorrat}",
+    "live.diagnose.messung_fehlt": "puuttuu",
+    "live.diagnose.messung_fehler": "epäonnistui",
+    "live.diagnose.messung_entwertet": "mitätöity lähteen vaihdon vuoksi",
+    "live.diagnose.vorrat": "{n}/{deckel}",
+    "live.abschnitt.vorrat": "Kalibrointikuvat",
     "livekalib.titel": "Kameran kalibrointi — {name}",
     "livekalib.erklaerung":
         "Nämä ovat oikeita kasvoja, jotka tämä kamera on kerännyt — yksi "
@@ -1724,6 +1707,7 @@ T = {
     "nav.bereich.erkennungstest": "Tunnistustesti",
     "nav.bereich.system": "Järjestelmä",
     "nav.heute": "Tänään",
+    "nav.durchgaenge": "Käynnit",
     "nav.ereignisse": "Tapahtumat",
     "nav.faces": "Kasvot",
     "nav.gesichter": "Tunnetut",
@@ -3445,7 +3429,7 @@ T = {
     "baustein.stufe.below": "rajan alla",
     "baustein.stufe.none": "ei osumaa",
     "hilfe.live.titel": "Live-vahti selitettynä",
-    "hilfe.live.satz1": "<p>Live-vahti katsoo kameroitasi heti, kun jokin liikkuu. Kun\nhenkilö astuu tontille, saat ilmoituksen sekunneissa — ja\njos järjestelmä tuntee kasvot jo, ilmoituksessa on nimi.</p>",
+    "hilfe.live.satz1": "<p>Live-vahti katsoo kameroitasi heti, kun jokin liikkuu. Kun\nhenkilö astuu tontille ja järjestelmä tuntee kasvot jo, saat\nsekunneissa ilmoituksen, jossa on nimi. Jos se ei tunnista henkilöä,\nse ilmoittaa hänet nimellä ”Tuntematon henkilö”, kun kasvoja ei ole\nnäkynyt muutamaan sekuntiin. MQTT ilmoittaa ensimmäisistä kasvoista\nheti kummassakin tapauksessa.</p>",
     "hilfe.live.satz2": "<p>Nimi on tässä vaiheessa ensimmäinen arvio. Perusteellinen tarkistus\najetaan heti sen jälkeen tallenteelle, ja sillä on viimeinen sana.</p>",
     "hilfe.live.satz3": "<p>Live-vahti ei riipu Frigatesta: sitä eivät käynnistä\nFrigaten tapahtumat, ja se toimii täysin omillaan. Se katsoo\nsuoraan videostreamia, joko Frigaten proxy-streamia\ntai kameran omaa streamia; sen valitset kameraa kohti.</p>",
     "hilfe.live.satz4": "<p>Painikkeella <b>Valitse kamerat</b> päätät, mitkä kamerat saavat vahdin. Jokainen\ntarkkailtu kamera kuluttaa laskentatehoa vuorokauden ympäri, joten aloita sieltä, mistä\nihmiset todella saapuvat: piha-alue, ovi, portti. Lisää voi aina ottaa myöhemmin.</p>",
@@ -3689,16 +3673,85 @@ T = {
     "meldung.vision.einig":
         "Vision: {name} — yksimielinen, {voten}/{bilder} vertailua",
     "meldung.vision.kein_urteil": "Vision: ei päätelmää — {grund}",
-    "meldung.wache.titel_person": "{wache} {kamera}: henkilö havaittu",
+    "meldung.wache.titel_unbekannt": "Tuntematon henkilö kamerassa {kamera}",
     "meldung.wache.titel_stoerung": "{wache} {kamera}: häiriö",
     "meldung.wache.caption": "{wache} {kamera}: {text}",
-    "meldung.wache.titel_erkannt": "{wache} {kamera}: tunnistettu",
+    # PW2 (Bauplan push_melden, E13): Zeilen fuer Pushover-Titel und Telegram-Beschriftung des Waechters.
+    "meldung.wache.titel_erkannt": "Henkilön {name} kasvot tunnistettu kamerassa {kamera}",
+    "meldung.wache.titel_namen": "Henkilöiden {erste} ja {letzter} kasvot tunnistettu kamerassa {kamera}",
     "meldung.wache.nicht_erkannt": "ei tunnistettu",
-    "heute.block.personen": "Henkilöt",
-    "heute.block.personen_cnt.eins":
-        "{n} tunnistettu · järjestetty viimeisen näkemisen mukaan",
-    "heute.block.personen_cnt.viele":
-        "{n} tunnistettu · järjestetty viimeisen näkemisen mukaan",
+    "heute.nav.gestern": "eilen",
+    "heute.nav.zurueck": "edellinen päivä",
+    "heute.nav.vor": "seuraava päivä",
+    "heute.nav.keine_zukunft": "ei tulevia päiviä",
+    "heute.nav.heute": "takaisin tähän päivään",
+    "heute.laeuft": "käynnissä",
+    "heute.block.laeuft": "käynti käynnissä — tapahtumat analysoidaan niiden päätyttyä ja ne näkyvät tässä",
+    "heute.unbek.titel": "Tuntemattomat",
+    "heute.unbek.vorher": "nähty {n}× aiemmin",
+    "heute.unbek.erstmals": "ensimmäistä kertaa täällä",
+    "heute.unbek.fremder": "vahvistettu vieras",
+    "heute.unbek.link_title": "Avaa tämä käynti",
+    "heute.akt.aendern": "Muuta",
+    "heute.akt.pruefen": "Tarkista",
+    "heute.akt.benennen": "Nimeä",
+    "heute.akt.ansehen": "Näytä",
+    "heute.kanal.satz": "Hälytyskanavaa ei ole vielä määritetty — tunnistukset näkyvät tässä, mutta mikään ei ilmoita sinulle.",
+    "heute.kanal.link": "Määritä se Ilmoitukset-sivulla.",
+    "heute.fuss.passes.eins": "{n} käynti tänä päivänä.",
+    "heute.fuss.passes.viele": "{n} käyntiä tänä päivänä.",
+    "heute.fuss.link": "Näytä käynnit ja luvut",
+    "heute.neben.area": "Aluenäkymä {area}: käynnit, jotka koskivat tätä aluetta (kukin näytetään kokonaan); tapahtumamäärät koskevat vain sen kameroita",
+    "heute.neben.unbek.eins": "{n} tuntematon henkilö",
+    "heute.neben.unbek.viele": "{n} tuntematonta henkilöä",
+    "heute.neben.aehnlich.eins": "{n} henkilö todennäköisesti tunnistettu",
+    "heute.neben.aehnlich.viele": "{n} henkilöä todennäköisesti tunnistettu",
+    "heute.neben.ohne.eins": "{n} käynti ilman tunnistettua henkilöä",
+    "heute.neben.ohne.viele": "{n} käyntiä ilman tunnistettua henkilöä",
+    "heute.neben.keine": "ei tunnistamattomia",
+    "heute.neben.archiv.eins": "{n} lisää arkistoidussa ryhmässä",
+    "heute.neben.archiv.viele": "{n} lisää arkistoiduissa ryhmissä",
+    "heute.neben.nebenbei.eins": "{n} tapahtuma ilman vastaavuutta tunnistetuissa käynneissä",
+    "heute.neben.nebenbei.viele": "{n} tapahtumaa ilman vastaavuutta tunnistetuissa käynneissä",
+    "heute.liste.cnt": "uusimmat ensin · napsautus avaa kamerat",
+    "heute.liste.cnt_laeuft": "uusimmat ensin · käynnissä oleva käynti päivittyy itsestään",
+    "heute.pass.seit": "{zeit} alkaen",
+    "heute.pass.bisher.eins": "{n} tapahtuma tähän mennessä",
+    "heute.pass.bisher.viele": "{n} tapahtumaa tähän mennessä",
+    "heute.pass.events.eins": "{n} tapahtuma",
+    "heute.pass.events.viele": "{n} tapahtumaa",
+    "heute.pass.dauer": "{m} min · {ev}",
+    "heute.pass.erkennt": "tunnistetaan…",
+    "heute.pass.kein_gesicht.eins": "ei käyttökelpoisia kasvoja tässä käynnissä ({n} tapahtuma)",
+    "heute.pass.kein_gesicht.viele": "ei käyttökelpoisia kasvoja tässä käynnissä ({n} tapahtumaa)",
+    "heute.pass.niemand": "ei tunnettua henkilöä",
+    "heute.pass.ohne.eins": "{n} ilman vastaavuutta",
+    "heute.pass.ohne.viele": "{n} ilman vastaavuutta",
+    "heute.pass.plus_ohne": "+{n} ilman vastaavuutta",
+    "heute.pass.alle": "kaikki tunnistettu",
+    "heute.pass.via_koerper_vision": "henkilö + vision kautta, ei kasvoja",
+    "heute.pass.via_koerper": "henkilöntunnistuksen kautta, ei kasvoja",
+    "heute.pass.via_beides": "kasvojen + henkilön kautta",
+    "heute.pass.via_gesicht": "kasvojen kautta",
+    "heute.pass.hinweis_koerper": "henkilöntunnistuksen vihje (tukisäännön alapuolella)",
+    "heute.pass.vision": "vision: {person}",
+    "heute.pass.vision_kein": "vision: ei tuomiota — {grund}",
+    "heute.pass.vision_details": "tiedot",
+    "heute.pass.vision_title": "miten vision päätyi tulokseen: kierrokset, verratut galleriat, ajat",
+    "heute.pass.kameras.eins": "{n} kamera",
+    "heute.pass.kameras.viele": "{n} kameraa",
+    "heute.pass.nur_bewegung": "vain liikettä, ei kasvoja",
+    "heute.pass.video": "video",
+    "heute.pass.video_title": "tämän kameran paras leike",
+    "heute.notiz.bewegung.eins": "{n} pelkän liikkeen käynti ilman kasvoja on piilotettu; kaikki löytyvät Tapahtumat-sivulta.",
+    "heute.notiz.bewegung.viele": "{n} pelkän liikkeen käyntiä ilman kasvoja on piilotettu; kaikki löytyvät Tapahtumat-sivulta.",
+    "heute.notiz.fehldetektion.eins": "{n} havainto suodatettu ei-kasvoiksi (staattisen kohteen tunniste) — tuomiot ennallaan.",
+    "heute.notiz.fehldetektion.viele": "{n} havaintoa suodatettu ei-kasvoiksi (staattisen kohteen tunniste) — tuomiot ennallaan.",
+    "heute.notiz.fehltrigger.eins": "{n} tapahtuma luokiteltu todennäköiseksi virhelaukaisuksi (henkilöä ei löytynyt): {je}.",
+    "heute.notiz.fehltrigger.viele": "{n} tapahtumaa luokiteltu todennäköisiksi virhelaukaisuiksi (henkilöä ei löytynyt): {je}.",
+    "heute.block.personen": "Tunnistetut",
+    "heute.block.personen_cnt.eins": "{n} henkilö · viimeksi nähty ensin",
+    "heute.block.personen_cnt.viele": "{n} henkilöä · viimeksi nähty ensin",
     "heute.person.bestaetigt": "ensimmäinen–viimeinen vahvistus {von}–{bis}",
     "heute.person.bestaetigt_einmal": "vahvistettu {zeit}",
     "heute.person.seit": "vahvistettu klo {zeit} lähtien",
@@ -3713,10 +3766,15 @@ T = {
         "jälkeen) — ei vielä vahvistettua käyntiä",
     "heute.person.live_link": "siirry live-ilmoitukseen {zeit} · {kamera}",
     "heute.person.mehr": "kaikki {n} henkilöä ({m} lisää)",
-    "heute.unbek.cnt.eins": "{n} tuntematon henkilö · viimeksi nähty ensin",
-    "heute.unbek.cnt.viele": "{n} tuntematonta henkilöä · viimeksi nähty ensin",
+    "heute.unbek.cnt.eins": "{n} henkilö · viimeksi nähty ensin",
+    "heute.unbek.cnt.viele": "{n} henkilöä · viimeksi nähty ensin",
     "heute.unbek.gesehen": "nähty {von}–{bis}",
     "heute.unbek.gesehen_einmal": "nähty {zeit}",
+    "heute.waechter.name": "Tuntematon henkilö",
+    "heute.waechter.live_title": "live-vahti ilmoitti tuntemattomana henkilönä — ei tunnistetta, ei nimettävissä täällä",
+    "heute.waechter.cnt.eins": "{n} live-vahdin ilmoitus",
+    "heute.waechter.cnt.viele": "{n} live-vahdin ilmoitusta",
+    "heute.waechter.mehr": "kaikki {n} ilmoitusta ({m} lisää)",
     "heute.anw.dauer": "paikalla noin {h} h",
     "heute.anw.title":
         "läsnäolo tunneittain, kaikki kamerat — punainen: vahvistettu "
@@ -3727,7 +3785,7 @@ T = {
     "heute.pass.mehr_kameras": "kaikki {n} kameraa ({m} lisää)",
     "heute.pass.live": "live",
     "heute.pass.live_title": "live-vahti ilmoitti nimen tämän käynnin aikana",
-    "heute.rand.personen": "Henkilöt",
+    "heute.rand.personen": "Tunnistetut henkilöt",
     "heute.rand.personen_title":
         "henkilöt, joilla on vähintään yksi vahvistus tänä päivänä — "
         "workerin päätelmät ja live-vahtien nimet",
@@ -3746,12 +3804,10 @@ T = {
         "poolin tuntemattomat identiteetit, joilla on tukea tänä päivänä; "
         "ilman poolidataa: käynnit ilman yhtään tunnistusta",
     "heute.aehnlich.titel": "Todennäköisesti tunnistetut",
-    "heute.aehnlich.cnt.eins": "{n} tunnettu henkilö, vahvistamaton · viimeksi nähty ensin",
-    "heute.aehnlich.cnt.viele": "{n} tunnettua henkilöä, vahvistamaton · viimeksi nähty ensin",
+    "heute.aehnlich.cnt.eins": "{n} henkilö",
+    "heute.aehnlich.cnt.viele": "{n} henkilöä",
     "heute.aehnlich.zu": "todennäköisesti {person}",
     "heute.aehnlich.ident": "{uid} · mediaani {median} · ero {abstand}",
-    "heute.aehnlich.rand.eins": "{n} henkilö todennäköisesti tunnistettu — katso Todennäköisesti tunnistetut",
-    "heute.aehnlich.rand.viele": "{n} henkilöä todennäköisesti tunnistettu — katso Todennäköisesti tunnistetut",
     "heute.aehnlich.fehler": "Viimeisin todennäköisesti tunnistettujen henkilöiden tarkistus epäonnistui (virhe) — tässä näkyvät ryhmät voivat olla vanhentuneita. Lisätiedot lokissa ja kohdassa /health.",
     "heute.aehnlich.nein": "ei {person}",
     "heute.aehnlich.nein_zurueck": "peru",

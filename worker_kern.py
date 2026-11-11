@@ -179,10 +179,24 @@ AUFRUF_BREITE = 2
 # v8: der Name der fd-Stufe. Er steht hier EINMAL, weil er an fuenf Stellen
 # zusammenpassen muss: Bau-Vorschrift, Stufenfolge, Satz, Kaskaden-Sprung, Zeitnehmer.
 FD = "fd"
+# ZWEITER BLICK (Bauplan analysen/bauplan_zweiter_blick.md, Stufe ZB1): der Name der Stufe und ihres
+# Abbruch-Zeichens, und die festen Masse des Verfahrens, alle an dieser einen Stelle. Herkunft der Masse:
+# Bauplan, Abschnitt „Ergebnis der Stufe ZB0" (Messung vom 10.11.2026). Der Rand ist ein eigenes Mass dieses
+# Verfahrens, keine Kopie von core/livewache.KALIB_RAND (gleicher Wert, andere Tatsache).
+ZB = "zb"
+ZB_RAND = 0.35           # Rand je Seite als Anteil der laengeren Rahmenkante; am Bildrand abgeschnitten
+ZB_KANTE = 160           # laengere Seite des Ausschnitts im Feld, in Pixeln
+ZB_FELD = 256            # Kante des einfarbigen Felds, in dem der Ausschnitt mittig liegt (Eingang des Detektors)
+ZB_FUELL = 127           # Fuellwert des Felds im Wertebereich 0..255, vor der Normierung des Detektors
+ZB_UEBERDECKUNG = 0.2    # „an der Stelle": Schnitt durch Vereinigung mit dem erwarteten Rahmen mindestens so gross
+ZB_LESE = 0.02           # Lese-Schwelle fuer `detektor`, unter jeder Latte: der Wert steht auch, wenn er sie reisst
+# Breite je Aufruf der Stufe: 1. det_10g legt einen Stapel in seinen neun Ausgaengen verschraenkt ab (Zeile,
+# Spalte, Bild, Anker), und die Rechenzeit der Messung ZB0 ist bei Breite 1 gemessen (1,29 ms je Aufruf).
+ZB_BREITE = 1
 # Die Stufen in Bau- und Rechenreihenfolge. DIE zentrale Quelle dieser Aufzaehlung
 # (Hausregel aus qs_ebenen.md): Engine-Bau, Warmlauf und Kopfzeile lesen sie hier,
-# statt je ein eigenes Literal zu fuehren.
-STUFEN = (FD, "e", "t", "p", "r")
+# statt je ein eigenes Literal zu fuehren. ZB (zweiter Blick) rechnet hinter der Erkennung.
+STUFEN = (FD, "e", "t", "p", "r", ZB)
 # Die KASKADEN-Stufen, also die Folge ohne die fd-Vorstufe: fd entscheidet nicht ueber
 # Stimmen, es sortiert Fehldetektionen vor den teuren Stufen aus.
 KASKADE = tuple(k for k in STUFEN if k != FD)
@@ -577,7 +591,7 @@ def vorgabe_pfade(spec):
     (CUDA: die fp16-Fassungen ueber die CLI), rechnet aber immer mit der Datei, die sie
     WIRKLICH geladen hat."""
     return {FD: modell_pfad("1k3d68"), "e": guete.PFAD_E, "t": guete.PFAD_T,
-            "p": pose_wache.MODELL_STD[0], "r": spec["onnx"]}
+            "p": pose_wache.MODELL_STD[0], "r": spec["onnx"], ZB: modell_pfad("det_10g")}
 
 
 def norm_vorschriften(spec):
@@ -591,6 +605,7 @@ def norm_vorschriften(spec):
       p   prototyp/pose_wache.skelett (:112-113)   (RGB-MEAN)/STD je Kanal
       r   face_audit.MODELLE                       Kanalfolge (bgr), dann (x-mean)/std
       fd  MODELL_VERTRAG['1k3d68']['eingang']      ROHE 0..255 (mean 0, std 1)
+      zb  DET_MEAN/DET_STD (insightface SCRFD)     wie der Detektor des ersten Blicks
     REIHENFOLGE der Knoten, verbindlich fuer beide Engines und Zeile fuer Zeile die der
     Prototypen: erst /255, dann die Kanalfolge, dann -mean, dann /std. Ein Posten
     entsteht NUR, wenn die Vorschrift ihn verlangt — eine Subtraktion von 0 waere toter
@@ -607,6 +622,8 @@ def norm_vorschriften(spec):
         "p": {"div255": False, "bgr": False, "mean": pose_wache.MEAN, "std": pose_wache.STD},
         "r": {"div255": False, "bgr": bool(spec.get("bgr")),
               "mean": spec["mean"], "std": spec["std"]},
+        # zweiter Blick: derselbe Detektor wie beim ersten Blick, also dieselbe Normierung (DET_MEAN, DET_STD)
+        ZB: {"div255": False, "bgr": False, "mean": DET_MEAN, "std": DET_STD},
     }
 
 
@@ -706,6 +723,44 @@ def zentren_fuellen(det_wh, det_scale):
         raise SystemExit(f"zentren-Vorlauf unerwartet: {len(dets)} Kandidaten, "
                          f"{len(zentren)} Anker-Saetze")
     return zentren
+
+
+# Der Anker-Cache des zweiten Blicks: das Feld ist fuer jedes Gesicht dasselbe, also einmal je Prozess gefuellt
+# (danach nur gelesen, wie der Cache je Geometrie).
+_ZB_ZENTREN = zentren_fuellen((ZB_FELD, ZB_FELD), 1.0)
+
+
+def zb_lage(bb, W, H, nm):
+    """Lage des zweiten Blicks fuer EIN Gesicht: Ausschnitt = Rahmen plus ZB_RAND der laengeren Kante je Seite, am
+    Bildrand abgeschnitten, laengere Seite auf ZB_KANTE, mittig im Feld ZB_FELD x ZB_FELD (Abtastung wie cv2.resize).
+    -> (Zug [2,5] float32: je Zeile theta (Feld-Pixel -> Gitter-Koordinate) und die Feld-Pixel [von, bis) des
+       Ausschnitts auf der Achse x bzw. y; erwarteter Rahmen im Feld) oder None bei leerem Ausschnitt"""
+    x1, y1, x2, y2 = (float(v) for v in bb)
+    rand = ZB_RAND * max(x2 - x1, y2 - y1)
+    a1, b1 = max(0, int(round(x1 - rand))), max(0, int(round(y1 - rand)))
+    a2, b2 = min(int(W), int(round(x2 + rand))), min(int(H), int(round(y2 + rand)))
+    cw, ch = a2 - a1, b2 - b1
+    if cw <= 0 or ch <= 0:
+        return None
+    mass = ZB_KANTE / max(cw, ch)
+    nw, nh = max(1, int(round(cw * mass))), max(1, int(round(ch * mass)))
+    ox, oy = (ZB_FELD - nw) // 2, (ZB_FELD - nh) // 2
+    sx, sy = cw / nw, ch / nh
+    th = _theta(np.array([[sx, 0.0, a1 - ox * sx + 0.5 * sx - 0.5],
+                          [0.0, sy, b1 - oy * sy + 0.5 * sy - 0.5]]), nm)
+    zug = np.hstack([th, np.array([[ox, ox + nw], [oy, oy + nh]], np.float32)]).astype(np.float32)
+    erwartet = ((x1 - a1) / sx + ox, (y1 - b1) / sy + oy, (x2 - a1) / sx + ox, (y2 - b1) / sy + oy)
+    return zug, erwartet
+
+
+def ueberdeckung(a, b):
+    """Schnitt durch Vereinigung zweier Rahmen (x1, y1, x2, y2).
+    -> Zahl 0..1; 0 ohne Flaeche"""
+    iw = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    ih = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    schnitt = iw * ih
+    verein = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - schnitt
+    return float(schnitt / verein) if verein > 0 else 0.0
 
 
 # ------------------------------------------------------------------ Matrizen (nur Zahlen)
@@ -980,7 +1035,8 @@ def kompilat_probe(satz, roh=False):
     th = {"e": theta_e(box, g.W, g.H, g.seiten["e"], g.nm),
           "t": theta_t(kps, g.seiten["t"][0], g.nm),
           "p": theta_p(box, g.W, g.H, g.nm),
-          "r": theta_t(kps, g.seiten["r"][0], g.nm)}
+          "r": theta_t(kps, g.seiten["r"][0], g.nm),
+          ZB: zb_lage(box, g.W, g.H, g.nm)[0]}             # zweiter Blick: der Zug der Pruef-Box
     for k in KASKADE:
         if k in offen:
             continue
@@ -1555,6 +1611,7 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
       p     RTMPose-Kopf-Score >= urteil_pose                    GPU-Stufe p       SIEBT
       Erkennung, Scores je Person                                GPU-Stufe r + CPU-Matmul
       n     Feature-Norm >= urteil_norm_min (Norm-Sieb)          aus der Stufe r   SIEBT
+      zb    zweiter Blick >= det-Schwelle, nur unbekannte        Stufe zb          SIEBT (ZB1)
     SIEBT/misst steht in GPU_STUFEN_SIEBT (s. gpu_stufen unten). Seit Bauplan K3,
     Stufe KP1 sieben e, t und p die Kaskade (K3 aus L16); der Entscheid vom
     14.09.2026, nach dem e und t nur messen, ist damit gekippt. Wer an Kante, fd,
@@ -1650,7 +1707,7 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
                           "k": int(min(bb[2] - bb[0], bb[3] - bb[1])),
                           "bw": int(bb[2] - bb[0]), "bh": int(bb[3] - bb[1]),
                           "front": None, "sharp": None, "fd": None, "kand": False,
-                          "e": None, "t": None, "p": None, "norm": None, "sc": None,
+                          "e": None, "t": None, "p": None, "norm": None, "sc": None, ZB: None,
                           "abbruch": None, "_bb": bb, "_box": d[:4], "_kp": kp,
                           "_emb": None, "_winkel": None,
                           # NZ1 (analysen/bauplan_namenszuordnung.md): die Pixel-Lage ueberlebt das Loeschen unten
@@ -1754,6 +1811,32 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
                     f["abbruch"] = "n"
                 f["_emb"] = w[0]
             zeiten["r"] += time.monotonic() - t0
+        # --- ZWEITER BLICK (Bauplan analysen/bauplan_zweiter_blick.md, Stufe ZB1): nur fuer Gesichter mit
+        #     Erkennungswert, die fuer keinen Namen stimmen (core.stapel.stimme mit dem Abstand der Latten) und deren
+        #     bester Vergleichswert unter core.tuer.TUER_SCHWELLE liegt; ohne Vergleichswerte (keine Referenzen)
+        #     gilt ein Gesicht als unbekannt. Der Detektor sieht die Stelle ein zweites Mal im Feld (zb_lage); Wert
+        #     des Gesichts ist der hoechste Fund, der den erwarteten Rahmen zu ZB_UEBERDECKUNG ueberdeckt, sonst 0.
+        #     Unter der Latte der Kamera (`schwelle`) verliert es seinen Erkennungswert und verlaesst die Kette mit
+        #     Abbruch ZB; der Wert bleibt stehen. Nicht messbar (leerer Ausschnitt) heisst Abbruch ohne Wert, wie bei
+        #     den siebenden Stufen davor. Ein Engine-Fehler geht nach oben.
+        unbekannt = [f for f in weiter if f["sc"] is not None
+                     and stapel.stimme(f["sc"], lat["stapel_abstand"])[0] is None
+                     and (not f["sc"] or max(f["sc"].values()) < _tuer.TUER_SCHWELLE)]
+        if unbekannt:
+            t0 = time.monotonic()
+            lagen = [zb_lage(f["_bb"], g.W, g.H, g.nm) for f in unbekannt]
+            messbar = [(f, lage) for f, lage in zip(unbekannt, lagen) if lage is not None]
+            aus = satz.stufe(ZB, [lage[0] for _f, lage in messbar]) if messbar else []
+            for (f, (_zug, erwartet)), outs in zip(messbar, aus):
+                funde, _kpss = detektor(list(outs), (ZB_FELD, ZB_FELD), 1.0, ZB_LESE, _ZB_ZENTREN)
+                f[ZB] = max((float(fu[4]) for fu in funde if ueberdeckung(fu[:4], erwartet) >= ZB_UEBERDECKUNG),
+                            default=0.0)
+            for f in unbekannt:
+                if f[ZB] is None or f[ZB] < schwelle:
+                    f["sc"] = None
+                    f["abbruch"] = ZB
+            zaehler[ZB + "_ok"] += sum(1 for f in unbekannt if f["sc"] is not None)
+            zeiten[ZB] += time.monotonic() - t0
         # --- Kandidaten-Tor (v8): es markiert nur noch. Kandidat wird ein Gesicht erst mit
         #     Erkennungswert, also nach allen Sieben (Bauplan K3, KP1 Punkt 8; Eigentuemer
         #     04.10.: in Unbekannt- und Anlern-Pool nur Bilder, die durch die Filter kamen).
@@ -1781,12 +1864,16 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
 def bild_melden(clip, i, herkunft, faces):
     """Die Ausgabe je gepruefem Bild fuer den Abgleich gegen den Anker (Bauplan K3, KP2 Punkt 6;
     Konzept 3.8): Bildnummer, Herkunft, je Gesicht Box, Sieb-Grund und Erkennungswert, ungerundet, als
-    DEBUG-Zeile (nur bei eingeschaltetem Debug, Tuer-Konzept Abschnitt 5). -> None"""
+    DEBUG-Zeile (nur bei eingeschaltetem Debug, Tuer-Konzept Abschnitt 5). -> None
+    MW1: unter `messwerte` je Gesicht die gemessenen Werte der Kaskade (det, k, die GPU-Stufen, norm, seit ZB1 der
+    zweite Blick zb), nur Zahlen; ein ungemessener oder fehlender Wert fehlt auch hier."""
     if not _log.isEnabledFor(_logbuch.DEBUG):
         return
+    achsen = ("det", "k") + tuple(name for name, _siebt in GPU_STUFEN_SIEBT) + ("norm", ZB)
     _log.debug("frame " + json.dumps({
         "clip": os.path.basename(clip), "i": int(i), "herkunft": herkunft,
-        "gesichter": [{"box": f["_bb"], "abbruch": f["abbruch"], "erkennung": f["sc"]}
+        "gesichter": [{"box": f["_bb"], "abbruch": f["abbruch"], "erkennung": f["sc"],
+                       "messwerte": {a: f[a] for a in achsen if f.get(a) is not None}}
                       for f in faces]}))
 
 

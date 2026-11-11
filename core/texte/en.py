@@ -82,6 +82,8 @@ T = {
     "readme.aktuell.text": 'Recognition when several people are in one event. The system should work out where each person is in the picture and run face recognition separately for each person’s area — so two people close together no longer blur into a single verdict.',
     "readme.lernen.titel": 'How do I teach it new faces?',
     "readme.lernen.text": "This is how I do it on my system:\n\nFace learning run. The first thing on a new system. Depending on the hardware the last 500 events, 1000 if there is room to spare. The program fetches the events with a person, groups them and puts the pictures together. Known ones it assigns on its own. Unknown ones it collects as a group, and I give the group a name. That gives the starting set. Only works on faces that were recognised cleanly.\n\nToday. Once the starting set is there, anything new comes in from here: click an event or a person, adopt the face.\n\nKnown. Pick a person, have it find matching faces. This is also where I rename a person when the name has a typo in it. The program carries the new name through the stored data, old events included. Logs and backups keep the old name.\n\nPerson learning run. There is one next to it, for people whose face is not readable. More on that later.\n\nQuality. I use that tab regularly. It shows how good a person's pictures really are, which ones are too weak and which ones overlap with another person. Anything too similar I take out.\n\nThe Unknown tab is left over from an earlier version. I do not use it.",
+    "readme.mqtt.titel": "MQTT messages",
+    "readme.mqtt.text": "Since 0.1.1.058 every message of the live watcher has the field event. Automations filter on it. faces_recognized and appearance_ended are new, the old fields stay.\n\nTopic [prefix]/live/[camera], QoS 0, no retain. What the broker misses is not sent again.\n\nPer appearance they come in this order:\n\nface_found: first valid face. With score and, if there is one yet, a preliminary name in schnell_urteil.\n\nface_recognized: a name has enough votes. Once per name, with stufe in schnell_urteil.\n\nfaces_recognized: right after. faces holds all names of the appearance so far, each with name and stufe.\n\nappearance_ended: the appearance is over. reason is no_face when the time under \"Visit ends after\" has run out, or stopped when the watcher or the engine stops. Plus faces and duration_s from the first to the last face.\n\ndisturbance: disturbed watcher with state disturbed, all-clear with state recovered. At most one per watcher and 10 minutes, the latest state follows afterwards.\n\nstufe: clear well above the bar, narrow just above, below just below, none far below or not measurable.\n\n\"Push pause\" slows Pushover and Telegram, never MQTT.",
     "readme.persoenlich.titel": 'Personal',
     "readme.persoenlich.text": 'This is purely a hobby. As a senior IT architect, I enjoy building something with AI. It is built entirely with Claude Code, mostly on Fable 5, with Opus 5 for the agents.\n\nWhat I would like is feedback, and it makes me happy when someone puts the system to use. That is my reward.',
     "kameras.titel": "Cameras",
@@ -741,18 +743,14 @@ T = {
     # ---------------------------------------------------- routes/live ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): drei Saetze mit
     # <b>Measure load</b> bzw. <a>-Link mitten im Satz (Messung-fehlt-
-    # Zeile, CPU-Sperrkarten-Rest, Aufloesungs-Absatz, Credentials-Zeile,
-    # Erklaer-Satz 2) bleiben literal; die Kanal-Haekchen pushover/
-    # telegram/mqtt und "(detect)" sind Anzeige==Kennung (Vergleichs-/
-    # Ersetzungs-Token) und bleiben literal; LIVE_ZUSTAENDE-Labels kommen
-    # aus core/registry (zentrale Quelle, eigene Tranche); GRUPPEN behaelt
-    # seine EN-Literale als Kennungs-Kontrakt (harnisch_live1), die
-    # Anzeige laeuft ueber die live.gruppe.*-Schluessel; die unbenutzte
-    # Modul-Konstante _PHASEN bleibt unberuehrt. Zahlen wie 199–801 ms
-    # und {tage}/{mb}/{kerne} kommen vorformatiert aus der Route (§8.8).
-    "live.hinweis_gpu":
-        "Works with a GPU only for now — we are working on a CPU option "
-        "but can't promise it.",
+    # Zeile, CPU-Sperrkarten-Rest, Aufloesungs-Absatz, Credentials-Zeile)
+    # bleiben literal; die Kanal-Haekchen pushover/telegram/mqtt sind
+    # Anzeige==Kennung und bleiben literal; LIVE_ZUSTAENDE-Labels kommen
+    # aus core/registry (zentrale Quelle, eigene Tranche); die unbenutzte
+    # Modul-Konstante _PHASEN bleibt unberuehrt. {tage}/{mb}/{kerne}
+    # kommen vorformatiert aus der Route (§8.8). Seit LS2 (Bauplan
+    # live_seite) gibt es keine Kachel-Uebersicht, keine Gruppen und keinen
+    # Erklaer-Kasten mehr; deren Schluessel sind entfallen.
     "live.hinweis_cpu":
         "CPU mode: watchers are expensive here — the quick check "
         "typically takes 1–2 s (a GPU build reacts in under a second), "
@@ -776,18 +774,14 @@ T = {
         "— STALE: source changed since this measurement, measure again",
     "live.messung.fehlgeschlagen":
         "last load measurement FAILED ({wann}): {fehler}",
-    "live.zaehler.auftritte": "{n} appearances",
-    "live.zaehler.funde": "{n} faces found",
+    "live.zaehler.auftritte": "{n} visits",
+    "live.zaehler.funde": "{n} faces",
     "live.zaehler.trigger": "{n} triggers",
-    "live.zaehler.alerts": "{n} alerts",
-    "live.zaehler.letzter": "last trigger {zeit}",
-    "live.zaehler.kopf": "since engine start:",
+    "live.zaehler.alerts": "{n} reported",
+    "live.zaehler.letzter": "last {zeit}",
+    "live.zaehler.kopf": "Since the start:",
     "live.engine.titel_aus": "Live engine: not running",
-    "live.engine.satz_aus":
-        "No heartbeat from the engine process. Tiles show the saved "
-        "configuration; enabling, testing against a running watcher and "
-        "load measurements need the engine — the service starts it "
-        "automatically once at least one watcher is enabled.",
+    "live.engine.satz_aus": "No heartbeat from the engine process. The slots show the saved configuration; enabling, testing against a running watcher and load measurements need the engine — the service starts it automatically once at least one watcher is enabled.",
     "live.engine.cpu_mit_limit":
         "suslik CPU right now: {kerne} of {limit} allowed cores (whole "
         "container: watchers, analysis, service)",
@@ -815,28 +809,14 @@ T = {
     "live.engine.titel_standalone":
         "Live engine: running (standalone engine detected)",
     "live.engine.titel_an": "Live engine: running",
-    "live.gruppe.laufend": "Running",
-    "live.gruppe.bereit": "Ready",
-    "live.gruppe.rest": "Not set up",
-    "live.gruppe.versteckt": "Hidden",
-    "live.gruppe.ohne_area": "No area",
     "live.kachel.attr_fremd":
         "configured here, but this camera is not in Frigate right now",
     "live.kachel.pill_fremd": "not in Frigate",
-    "live.kachel.attr_detect":
-        "Frigate detect stream — the real stream resolution appears "
-        "after the service probes the stream or a source test runs",
-    "live.knopf_konfigurieren": "Configure",
     "live.knopf_test": "Run source test",
-    "live.knopf_messung": "Measure load",
     "live.knopf_enable": "Enable",
     "live.knopf_disable": "Disable",
-    "live.knopf_zeigen": "Show",
-    "live.knopf_verstecken": "Hide",
     "live.banner.kameraliste":
         "Could not read the Frigate camera list: {fehler}",
-    "live.schalter.ungruppiert": "ungrouped view",
-    "live.schalter.area": "group by area",
     "live.sperre.cpu_titel": "CPU mode",
     "live.sperre.titel": "Not available on this build",
     "live.sperre.satz":
@@ -845,35 +825,35 @@ T = {
         "AMD card (rocm image) all qualify.",
     "live.sperre.cpu_only":
         "They are not available on the CPU-only image.",
-    "live.erklaer.titel":
-        "Live watchers — instant reaction at the camera stream",
-    "live.erklaer.satz1":
-        "A live watcher connects straight to one camera stream and "
-        "reacts while the person is still in the picture: the first face "
-        "starts a check, and after the configured number of consistent "
-        "detections a verified signal goes out — the goal is under one "
-        "second (measured 199–801 ms on the reference setup). Use it to "
-        "trigger home automations, e.g. via MQTT.",
-    "live.erklaer.link": "Read more: how live watchers work",
     "live.titel": "Live watchers",
+    "live.intro": "A watcher looks at one camera live and reports a face while the person is still in the picture.",
+    "live.intro_link": "How watchers work",
+    "live.marke.aktiv": "{n} active",
+    "live.platz.name": "Live {n}",
+    "live.platz.frei": "free",
+    "live.frei.titel": "Live {n} is free",
+    "live.frei.satz": "Assign a camera to this slot. Then set here what it reports and switch it on.",
+    "live.frei.keine": "Every camera already has a slot.",
+    "live.knopf_zuweisen": "Assign camera",
+    "live.knopf_leeren": "Clear slot",
+    "live.kopf.kamera": "Camera",
+    "live.ungespeichert": "unsaved changes",
+    "live.warnung.satz": "Live {n} has unsaved changes.",
+    "live.warnung.speichern": "Save and switch",
+    "live.warnung.verwerfen": "Discard",
+    "live.warnung.bleiben": "Stay here",
+    "live.kein_platz": "{kamera} has no slot, and every slot is taken. Clear a slot first.",
+    "live.abschnitt.engine": "Engine and load",
     "live.leer.titel": "No cameras found.",
-    "live.leer.hinweis":
-        "Configure the Frigate connection first — tiles appear per "
-        "camera.",
+    "live.leer.hinweis": "Set up the Frigate connection first.",
     "live.knopf_speichern": "Save",
-    "live.detail.titel": "Live watcher — {name}",
-    "live.abschnitt.quelle": "Source",
+    "live.abschnitt.quelle": "Connection",
     "live.quelle.proxy": "go2rtc restream via Frigate (default, recommended)",
     "live.quelle.direct": "camera producer URL discovered via go2rtc",
     "live.quelle.url": "a stream URL you enter yourself",
-    "live.detail.url_label": "Stream URL (source 'url' only):",
-    "live.detail.url_hinweis":
-        "credentials in the URL are masked everywhere they are shown — "
-        "leave the field as shown to keep the saved URL, or paste a "
-        "new one",
-    "live.detail.quelle_hinweis":
-        "Changing the source invalidates the source test — run it again "
-        "before enabling.",
+    "live.detail.url_label": "Stream URL",
+    "live.detail.url_hinweis": "Only for url; saved credentials stay masked.",
+    "live.detail.quelle_hinweis": "Changing the source needs a new source test.",
     "live.abschnitt.aufloesung": "Processing resolution",
     "live.hoehe.default": "default (1080p)",
     "live.hoehe.h360": "360p — weak-GPU fallback, latest name fire (measured)",
@@ -884,21 +864,14 @@ T = {
         "Saved: {alt}p. That step was dropped (measured: no gain over "
         "{jetzt}p) — this watcher runs at {jetzt}p. The saved value and the "
         "source test stay valid; pick a new step to change it.",
-    "live.abschnitt.alarm": "Alarm chain",
-    "live.detail.ende_label": "End after no face (s):",
-    "live.detail.ende_hinweis":
-        "an appearance ends after this many seconds without a face "
-        "(3–120)",
-    "live.detail.scharf_label": "Re-armed after (s):",
-    "live.detail.scharf_hinweis":
-        "minimum seconds between alerts — with someone present it alerts "
-        "again after this time; 0 = every trigger alerts (0–3600)",
-    "live.abschnitt.kanaele": "Notification channels",
-    "live.detail.namensschaetzung":
-        "Alerts include a preliminary name guess (\"probably X\") when "
-        "the face matches a known person — never stored, never used for "
-        "learning.",
-    "live.abschnitt.test": "Test &amp; measure",
+    "live.detail.ende_label": "Visit ends after",
+    "live.detail.ende_hinweis": "Seconds without a face.",
+    "live.detail.scharf_label": "Push pause",
+    "live.pause.kopf": "From the first face of a reported visit, it stays quiet for this long:",
+    "live.pause.besuche": "Visits that start in this time get no video and no “Unknown person”.",
+    "live.pause.name": "The same name comes again after the same number of seconds at the earliest.",
+    "live.detail.scharf_hinweis": "Home Assistant (MQTT) never pauses.",
+    "live.abschnitt.test": "Source test",
     "live.detail.gesperrt_hinweis":
         "testing and measuring are unavailable while live watching is "
         "locked on this machine — the note at the top of this page "
@@ -906,40 +879,24 @@ T = {
     "live.knopf_messung_lang": "Measure load (15–30 s)",
     "live.detail.messung_hinweis":
         "the load measurement pauses the other watchers while it runs",
-    "live.detail.link_zurueck": "back to overview",
     "live.detail.kein_bild": "No live picture — this watcher is not running.",
     "live.detail.kein_bild_test":
         "Last source test saw {aufloesung}, processed as {skala}.",
-    "live.detail.kein_bild_ohne_test":
-        "No source test has run yet, so nothing is known about this feed.",
+    "live.detail.kein_bild_ohne_test": "No source test has passed yet, so nothing is known about this feed.",
     # --- Live-Umbau 31.08.: die Konfigseite eines Waechters traegt jetzt
     # Kacheln statt einer Kartenspalte, und alles Neue ist JE KAMERA
     # einstellbar (die Guete-Skalen sind kameraabhaengig — gemessen).
-    "live.abschnitt.erkennung": "Recognition",
-    "live.abschnitt.melden": "Alerting",
-    "live.abschnitt.frigate": "Frigate events",
-    "live.abschnitt.erweitert": "Advanced settings",
-    "live.abschnitt.abtastung": "Sampling",
-    "live.abtastung.schalter": "Only look closely when something moves",
-    "live.abtastung.erklaerung":
-        "Face detection is what costs — a cheap motion check on the "
-        "brightness plane decides whether a frame is worth it. While a "
-        "person is being tracked the watcher always runs at full rate; only "
-        "a quiet scene is sampled less often.",
+    "live.abschnitt.frigate": "Frigate (optional)",
+    "live.abschnitt.erweitert": "Advanced",
+    "live.abschnitt.abtastung": "Power saving",
+    "live.abtastung.schalter": "Only look when something moves",
+    "live.abtastung.erklaerung": "Quiet scenes are checked less often, a tracked person always at full rate.",
     "live.abtastung.ruhe_label": "Look anyway every",
-    "live.abtastung.ruhe_einheit": "s",
-    "live.abtastung.ruhe_hinweis":
-        "Leave empty to use this camera's appearance-end time — someone "
-        "standing perfectly still creates no motion, so the watcher takes a "
-        "look now and then anyway (1–600 s).",
-    "live.abtastung.schwelle_label": "Sensitivity (grey-level change):",
-    "live.abtastung.flaeche_label": "smallest area:",
-    "live.abtastung.eich_hinweis":
-        "Leave both empty for Frigate's shipping values. Lower sensitivity or "
-        "a smaller area makes the watcher look more often; higher values keep "
-        "it quiet on a windy hedge. Every site is different — these belong to "
-        "this camera, not to the whole system.",
-    "live.abschnitt.guete": "Picture quality thresholds",
+    "live.abtastung.ruhe_hinweis": "Empty means the time under “Visit ends after”.",
+    "live.abtastung.schwelle_label": "Motion sensitivity",
+    "live.abtastung.flaeche_label": "Smallest moving area",
+    "live.abtastung.eich_hinweis": "Empty means Frigate's value; smaller numbers look more often.",
+    "live.abschnitt.guete": "Calibration values",
     "live.abschnitt.last": "Load measurement",
     "live.erkennung.det_zeile":
         "A find counts as a face from a detection score of {wert} up{marke}.",
@@ -958,47 +915,75 @@ T = {
     "live.erkennung.vorrat_zeile":
         "Calibration samples: {n} of {deckel} kept — one picture per "
         "appearance, the oldest drop out.",
-    "live.erkennung.vorrat_aus":
-        "Sample collection is off, so the calibration page has nothing to "
-        "show (System page, \"live_kalib_max\").",
+    "live.erkennung.vorrat_aus": "Sample collection is off (System page, \"live_kalib_max\").",
     "live.erkennung.latte_e": "picture impression from {wert}",
     "live.erkennung.latte_t": "recognisability from {wert}",
     "live.erkennung.latte_aus": "not set",
-    "live.erkennung.latte_hinweis":
-        "These two never decide WHO is recognized — that would cost "
-        "confirmations. They decide which picture goes into the alert and "
-        "which faces are kept as calibration samples. Set them on the "
-        "calibration page, where you can see the pictures.",
+    "live.erkennung.latte_hinweis": "A face below either of these two values gives no vote for a name and is not kept as a calibration sample. Set them on the calibration page, where you can see the pictures.",
     "live.knopf_kalibrieren": "Calibrate",
     "live.knopf_vorrat_leeren": "Clear samples",
-    "live.workeraus.schalter":
-        "Let this watcher replace the event analysis for this camera",
-    "live.eigenepruefen.schalter":
-        "Also re-check this watcher's own Frigate events in the event analysis",
-    "live.eigenepruefen.erklaerung":
-        "Off by default. Events this watcher creates in Frigate (option 'Create a Frigate event when "
-        "someone is recognized') are then not analysed a second time. Turn it on if the event analysis "
-        "should double-check the watcher's names. Only matters while the watcher replaces the event analysis.",
-    "live.workeraus.erklaerung":
-        "Off by default. When on, Frigate events from this camera are no "
-        "longer analysed a second time — the watcher is already "
-        "looking at the same feed, so the work would be done twice. This "
-        "only takes effect while the watcher is enabled AND actually "
-        "running: if the engine stops or the watcher fails, the events are "
-        "analysed normally again. A name that Frigate itself claims is "
-        "always checked, whatever this setting says.",
-    "live.frigate.schalter": "Create a Frigate event when someone is recognized",
-    "live.frigate.erklaerung":
-        "Off by default. When on, this watcher writes its own event into "
-        "Frigate with the name in the sub label \u2014 your own recording, "
-        "independent of Frigate\u2019s detection. Writing runs in the "
-        "background: the watcher never waits for Frigate. Nothing is written "
-        "while read-only mode is on.",
-    "live.frigate.abstand_label": "At most one event per person every (s):",
-    "live.frigate.abstand_hinweis":
-        "Empty means: the same distance you set above for alerts. The limit "
-        "counts per person, so two different people can be written at the "
-        "same time.",
+    "live.workeraus.schalter": "Replaces the event analysis",
+    "live.eigenepruefen.schalter": "Re-check own Frigate events",
+    "live.eigenepruefen.erklaerung": "Also analyse the events this watcher creates in Frigate.",
+    "live.workeraus.erklaerung": "While the watcher runs, the event analysis skips this camera's events, except when Frigate itself names a person.",
+    "live.frigate.schalter": "Create event in Frigate",
+    "live.frigate.erklaerung": "With a recognized name, its own event carrying the name.",
+    "live.frigate.abstand_label": "Gap per person",
+    "live.frigate.abstand_hinweis": "Empty means the push pause.",
+    # --- WS2 (Bauplan analysen/bauplan_waechterseite.md): die Einstellseite eines Waechters nach der
+    # Vorlage vom 07.11.2026 — Zustaende, Kopf, Abschnitte und Kopfzeilen der eingeklappten Teile.
+    "live.zustand.unconfigured": "not set up",
+    "live.zustand.untested": "test required",
+    "live.zustand.checking": "checking source",
+    "live.zustand.tested": "ready to switch on",
+    "live.zustand.active": "active",
+    "live.zustand.disturbed": "disturbed",
+    "live.zustand.unsupported": "not available here",
+    "live.kopf.zustand_fps": "{zustand}, {fps} frames/s",
+    "live.kopf.test": "Source test {wann}",
+    "live.kopf.kein_test": "No successful source test yet",
+    "live.kopf.erneut": "check again",
+    "live.kopf.jetzt": "test now",
+    "live.kopf.test_fehler": "last test failed",
+    "live.alter.heute": "today",
+    "live.alter.tage.eins": "{n} day ago",
+    "live.alter.tage.viele": "{n} days ago",
+    "live.einheit.s": "s",
+    "live.abschnitt.mqtt": "Home Assistant (MQTT)",
+    "live.mqtt.zweck": "For home automations. Goes out before all other channels, always in English, with no push pause.",
+    "live.mqtt.topic": "Topic",
+    "live.mqtt.nutzen": "Send to Home Assistant",
+    "live.mqtt.broker": "Broker and login are on the page",
+    "live.mqtt.meldungen": "The {n} messages",
+    "live.abschnitt.push": "Push messages",
+    "live.push.zweck": "What Pushover and Telegram get from this camera.",
+    "live.push.zugang": "Credentials",
+    "live.push.bekannte": "Recognized person",
+    "live.push.bekannte_hinweis": "Right away with the name, as soon as a face is recognized.",
+    "live.push.unbekannte": "Unknown person",
+    "live.push.unbekannte_hinweis": "When the visit ends and nobody was recognized.",
+    "live.push.bild": "Attach picture",
+    "live.push.bild_hinweis": "The camera picture with the face framed.",
+    "live.push.video": "Attach video",
+    "live.push.video_hinweis": "One video per reported visit, from the first face.",
+    "live.push.nur_telegram": "Telegram only",
+    "live.push.videolaenge": "Video length",
+    "live.push.neben": "Also report unknown people next to recognized ones",
+    "live.push.neben_hinweis": "“Unknown person” then also comes when someone was recognized in the same visit, without a picture.",
+    "live.abschnitt.besuch": "Visit",
+    "live.besuch.zweck": "A visit begins with the first face and ends when none has been seen for this long. After that, the same person can be recognized again.",
+    "live.besuch.global": "Same for all cameras: {fps} frames per second, {stimmen} minimum votes.",
+    "live.wert.an": "on",
+    "live.wert.aus": "off",
+    "live.erweitert.kopf": "Source {quelle} · power saving {spar} · replaces event analysis {ersetzt}",
+    "live.abschnitt.zusatz": "Extra analysis",
+    "live.abschnitt.diagnose": "Diagnostics",
+    "live.diagnose.kopf": "Load measurement {messung} · calibration samples {vorrat}",
+    "live.diagnose.messung_fehlt": "missing",
+    "live.diagnose.messung_fehler": "failed",
+    "live.diagnose.messung_entwertet": "invalid after source change",
+    "live.diagnose.vorrat": "{n} of {deckel}",
+    "live.abschnitt.vorrat": "Calibration samples",
     "livekalib.titel": "Camera calibration — {name}",
     "livekalib.erklaerung":
         "These are real faces this camera collected \u2014 one picture per "
@@ -1665,6 +1650,7 @@ T = {
     "nav.bereich.erkennungstest": "Recognition test",
     "nav.bereich.system": "System",
     "nav.heute": "Today",
+    "nav.durchgaenge": "Passes",
     "nav.ereignisse": "Events",
     "nav.faces": "Faces",
     "nav.gesichter": "Known",
@@ -3383,8 +3369,10 @@ T = {
     #    erst mit Easy plus relevant).
     "hilfe.live.titel": "Live watch, explained",
     "hilfe.live.satz1": """<p>Live watch looks at your cameras the moment something moves. When a person
-steps onto the property, you get an alert within seconds, and if the system
-already knows the face, the alert carries a name.</p>""",
+steps onto the property and the system already knows the face, you get an alert
+with the name within seconds. Someone it does not recognize is reported as
+“Unknown person” once no face has been seen for a few seconds. MQTT reports the
+first face right away either way.</p>""",
     "hilfe.live.satz2": """<p>The name at this stage is a first guess. The thorough check runs right
 after, on the recording, and has the final word.</p>""",
     "hilfe.live.satz3": """<p>Live watch does not depend on Frigate: it is not triggered by Frigate
@@ -3779,20 +3767,88 @@ between.</p>""",
     # Live-Waechter (core/livewache). {wache} ist die KENNUNG des Waechters
     # (core.livewache.WATCHER_TITEL, EIN Literal, Invariante §6) — sie
     # bleibt in jeder Sprache wortgleich, uebersetzt wird der Rest.
-    "meldung.wache.titel_person": "{wache} {kamera}: person detected",
+    "meldung.wache.titel_unbekannt": "Unknown person on {kamera}",
     "meldung.wache.titel_stoerung": "{wache} {kamera}: disturbance",
     "meldung.wache.caption": "{wache} {kamera}: {text}",
-    # .412 (User 02.09.): Stil 'worte' meldet nur noch "erkannt oder nicht" —
-    # Stufe-2-Titel und der Stufe-1-Text ohne Name. Keine Zahlen, kein
-    # "preliminary", kein Kandidat (Gate prueft den Wortlaut je Sprache).
-    "meldung.wache.titel_erkannt": "{wache} {kamera}: recognized",
+    # PW2 (Bauplan push_melden, E13): Zeilen fuer Pushover-Titel und Telegram-Beschriftung des Waechters.
+    "meldung.wache.titel_erkannt": "Face of {name} recognized on {kamera}",
+    "meldung.wache.titel_namen": "Faces of {erste} and {letzter} recognized on {kamera}",
     "meldung.wache.nicht_erkannt": "not recognized",
     # ---- Today .412 (T1): Personenkarten, Miniatur, Deckel, Randspalten-Tooltips.
     # Erst-Uebersetzung des Today-Bandes = Teilzug T1b; hier nur die neuen/
     # geaenderten Texte (Konzept §6.7).
-    "heute.block.personen": "People",
-    "heute.block.personen_cnt.eins": "{n} recognized · sorted by last seen",
-    "heute.block.personen_cnt.viele": "{n} recognized · sorted by last seen",
+    "heute.nav.gestern": "yesterday",
+    "heute.nav.zurueck": "previous day",
+    "heute.nav.vor": "next day",
+    "heute.nav.keine_zukunft": "no future days",
+    "heute.nav.heute": "back to today",
+    "heute.laeuft": "in progress",
+    "heute.block.laeuft": "pass in progress — events are analyzed as they finish and show up here",
+    "heute.unbek.titel": "Unknown",
+    "heute.unbek.vorher": "seen {n}× before",
+    "heute.unbek.erstmals": "first time here",
+    "heute.unbek.fremder": "confirmed stranger",
+    "heute.unbek.link_title": "Open this walk-through",
+    "heute.akt.aendern": "Change",
+    "heute.akt.pruefen": "Check",
+    "heute.akt.benennen": "Name",
+    "heute.akt.ansehen": "View",
+    "heute.kanal.satz": "No alert channel configured yet — recognitions appear here, but nothing will notify you.",
+    "heute.kanal.link": "Set one up in Notifications.",
+    "heute.fuss.passes.eins": "{n} pass on this day.",
+    "heute.fuss.passes.viele": "{n} passes on this day.",
+    "heute.fuss.link": "View passes and numbers",
+    "heute.neben.area": "Area view {area}: passes that touched this area (each shown in full); event counts cover its cameras only",
+    "heute.neben.unbek.eins": "{n} unknown person",
+    "heute.neben.unbek.viele": "{n} unknown people",
+    "heute.neben.aehnlich.eins": "{n} person probably recognized",
+    "heute.neben.aehnlich.viele": "{n} people probably recognized",
+    "heute.neben.ohne.eins": "{n} pass with nobody recognized",
+    "heute.neben.ohne.viele": "{n} passes with nobody recognized",
+    "heute.neben.keine": "none unidentified",
+    "heute.neben.archiv.eins": "{n} more in an archived cluster",
+    "heute.neben.archiv.viele": "{n} more in archived clusters",
+    "heute.neben.nebenbei.eins": "{n} event without a match in recognized passes",
+    "heute.neben.nebenbei.viele": "{n} events without a match in recognized passes",
+    "heute.liste.cnt": "newest first · click opens the cameras",
+    "heute.liste.cnt_laeuft": "newest first · a pass in progress updates automatically",
+    "heute.pass.seit": "since {zeit}",
+    "heute.pass.bisher.eins": "{n} event so far",
+    "heute.pass.bisher.viele": "{n} events so far",
+    "heute.pass.events.eins": "{n} event",
+    "heute.pass.events.viele": "{n} events",
+    "heute.pass.dauer": "{m} min · {ev}",
+    "heute.pass.erkennt": "identifying…",
+    "heute.pass.kein_gesicht.eins": "no usable face in this pass ({n} event)",
+    "heute.pass.kein_gesicht.viele": "no usable face in this pass ({n} events)",
+    "heute.pass.niemand": "no known person",
+    "heute.pass.ohne.eins": "{n} unmatched",
+    "heute.pass.ohne.viele": "{n} unmatched",
+    "heute.pass.plus_ohne": "+{n} not matched",
+    "heute.pass.alle": "all recognized",
+    "heute.pass.via_koerper_vision": "via person + vision, no face",
+    "heute.pass.via_koerper": "via person recognition, no face",
+    "heute.pass.via_beides": "via face + person",
+    "heute.pass.via_gesicht": "via face",
+    "heute.pass.hinweis_koerper": "person recognition hint (below support rule)",
+    "heute.pass.vision": "vision: {person}",
+    "heute.pass.vision_kein": "vision: no verdict — {grund}",
+    "heute.pass.vision_details": "details",
+    "heute.pass.vision_title": "how vision got there: rounds, galleries compared, timings",
+    "heute.pass.kameras.eins": "{n} camera",
+    "heute.pass.kameras.viele": "{n} cameras",
+    "heute.pass.nur_bewegung": "motion only, no face",
+    "heute.pass.video": "video",
+    "heute.pass.video_title": "best clip of this camera",
+    "heute.notiz.bewegung.eins": "{n} motion-only pass without a face is hidden; all are listed under Events.",
+    "heute.notiz.bewegung.viele": "{n} motion-only passes without a face are hidden; all are listed under Events.",
+    "heute.notiz.fehldetektion.eins": "{n} detection filtered as non-face (static-object signature) — judgments untouched.",
+    "heute.notiz.fehldetektion.viele": "{n} detections filtered as non-faces (static-object signature) — judgments untouched.",
+    "heute.notiz.fehltrigger.eins": "{n} event classified as likely false trigger (no person found): {je}.",
+    "heute.notiz.fehltrigger.viele": "{n} events classified as likely false trigger (no person found): {je}.",
+    "heute.block.personen": "Recognized",
+    "heute.block.personen_cnt.eins": "{n} person · sorted by last seen",
+    "heute.block.personen_cnt.viele": "{n} people · sorted by last seen",
     "heute.person.bestaetigt": "first–last confirmed {von}–{bis}",
     "heute.person.bestaetigt_einmal": "confirmed {zeit}",
     "heute.person.seit": "confirmed since {zeit}",
@@ -3805,17 +3861,22 @@ between.</p>""",
     "heute.person.live_title": "named by a live watcher only (name alert after several matches) — no confirmed pass yet",
     "heute.person.live_link": "go to the live alert {zeit} · {kamera}",
     "heute.person.mehr": "all {n} people ({m} more)",
-    "heute.unbek.cnt.eins": "{n} unknown person · sorted by last seen",
-    "heute.unbek.cnt.viele": "{n} unknown people · sorted by last seen",
+    "heute.unbek.cnt.eins": "{n} person · sorted by last seen",
+    "heute.unbek.cnt.viele": "{n} people · sorted by last seen",
     "heute.unbek.gesehen": "seen {von}–{bis}",
     "heute.unbek.gesehen_einmal": "seen {zeit}",
+    "heute.waechter.name": "Unknown person",
+    "heute.waechter.live_title": "reported by a live watcher as an unknown person — no identity, cannot be named here",
+    "heute.waechter.cnt.eins": "{n} live watcher alert",
+    "heute.waechter.cnt.viele": "{n} live watcher alerts",
+    "heute.waechter.mehr": "all {n} alerts ({m} more)",
     "heute.anw.dauer": "present about {h} h",
     "heute.anw.title": "presence by hour, all cameras — red: confirmed present, green: system running, nobody seen",
     "heute.anw.title_gesamt": "presence by hour — all cameras, not filtered by the area view",
     "heute.pass.mehr_kameras": "all {n} cameras ({m} more)",
     "heute.pass.live": "live",
     "heute.pass.live_title": "a live watcher reported a name during this pass",
-    "heute.rand.personen": "People",
+    "heute.rand.personen": "People recognized",
     "heute.rand.personen_title": "people with at least one confirmation on this day — worker judgments and live-watcher names",
     "heute.rand.passes": "Passes",
     "heute.rand.passes_title": "passes: events grouped by time and place; motion-only passes are not counted",
@@ -3825,12 +3886,10 @@ between.</p>""",
     "heute.rand.gesicht_title": "{n} of {m} analysed events with at least one checked face (false detections filtered out), cameras of the current view",
     "heute.rand.unbek_title": "unknown identities of the pool with support on this day; without pool data: passes with nobody recognized",
     "heute.aehnlich.titel": "Probably recognized",
-    "heute.aehnlich.cnt.eins": "{n} known person, not confirmed · sorted by last seen",
-    "heute.aehnlich.cnt.viele": "{n} known people, not confirmed · sorted by last seen",
+    "heute.aehnlich.cnt.eins": "{n} person",
+    "heute.aehnlich.cnt.viele": "{n} people",
     "heute.aehnlich.zu": "probably {person}",
     "heute.aehnlich.ident": "{uid} · median {median} · lead {abstand}",
-    "heute.aehnlich.rand.eins": "{n} person probably recognized — see Probably recognized",
-    "heute.aehnlich.rand.viele": "{n} people probably recognized — see Probably recognized",
     "heute.aehnlich.fehler": "The last check for probably recognized people failed (error) — the groups shown here can be out of date. Details in the log and in /health.",
     "heute.aehnlich.nein": "not {person}",
     "heute.aehnlich.nein_zurueck": "undo",

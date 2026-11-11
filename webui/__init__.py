@@ -9,11 +9,13 @@ from core.sprache import t, t_html
 
 # Cache-Stempel fuer Statik (User-Fund 04.08.: Browser hielt nach einem
 # Hotfix-Deploy DERSELBEN Version das alte app.js fest — Knoepfe ohne
-# Funktion). Datei-Stand statt Versionsnummer: aendert sich mit jedem Build.
+# Funktion). Datei-Stand: aendert sich mit jedem Build. Bauplan analysen/bauplan_today_seite.md, Stufe TY1 Punkt 4:
+# dazu vorn die Versionsnummer (dieselbe Quelle wie layout(), SUSLIK_VERSION), damit der Stempel mit jedem Release
+# wechselt, auch wenn die Zeitmarken der Dateien gleich bleiben; mit diesem Stempel liefert der Dienst die Statik haltbar.
 
 
 def _statik_stempel():
-    st = []
+    st = [os.environ.get("SUSLIK_VERSION", "")]
     for n in ("app.js", "style.css"):
         p = os.path.join(os.path.dirname(__file__), n)
         try:
@@ -59,7 +61,10 @@ def _nav():
         # Menuepunkt Unbekannte soll wieder unter Aktivitaet rechts neben Events
         # stehen“, 14:14:50 „Pack es einfach an beiden jetzt hin“). Auf
         # /unbekannte leuchtet oben Aktivitaet, der erste passende Bereich.
+        # Bauplan analysen/bauplan_today_seite.md, Stufe TY2 Punkt 2: der Reiter „Durchgaenge“ (/durchgaenge) zwischen
+        # Heute und Events traegt die Zahlen und die Liste der Durchgaenge, die bis dahin auf Heute standen.
         (t("nav.bereich.activity"), [("/heute", t("nav.heute")),
+                                     ("/durchgaenge", t("nav.durchgaenge")),
                                      ("/ereignisse", t("nav.ereignisse")),
                                      ("/unbekannte", t("nav.unbekannte"))]),
         # .220 (User 16.08., Mockup-Abnahme): der Gesichts-Bereich "eingedampft" —
@@ -591,6 +596,8 @@ def whatsnew_block():
     kommen aus core/highlights.py und werden je Release 5-sprachig gepflegt
     (§6.3) — bis dahin englisch."""
     from core.highlights import BETONT, HIGHLIGHTS   # import-frei, kein Zyklus
+    from core.readmefirst import KAPITEL             # die Anker der Kapitel, eine Quelle
+    anker_bekannt = {a for a, _p in KAPITEL}
     eintraege = [(v, tx) for v, its in HIGHLIGHTS for tx in its][:10]
     if not eintraege:
         return ""
@@ -609,7 +616,7 @@ def whatsnew_block():
         readme = False
         if isinstance(txt, dict):
             betont = bool(txt.get("betont"))
-            readme = bool(txt.get("readme"))
+            readme = txt.get("readme")
             txt = txt.get(code) or txt["en"]
         else:
             betont = txt.startswith(BETONT)
@@ -636,9 +643,12 @@ def whatsnew_block():
         # „Bitte zuerst lesen" (readme.knopf der aktiven Sprache, durch dieselbe Escape-Funktion)
         # an seiner ersten Fundstelle als Link auf das Kapitel „Neu in dieser Version". Steht
         # der Name nicht im Text (englischer Rueckfall unter anderer Sprache), bleibt er ohne Link.
-        if readme:
+        # MQTT melden, Stufe MM4: die Marke darf statt True einen Anker aus KAPITEL nennen und verlinkt dann auf
+        # dieses Kapitel. True bleibt „neu“; ein Anker, den KAPITEL nicht kennt, gibt keinen Verweis.
+        anker = "neu" if readme is True else readme
+        if readme and anker in anker_bekannt:
             rmn = html.escape(t("readme.knopf"))
-            koerper = koerper.replace(rmn, f'<a href="/readme#rm-neu">{rmn}</a>', 1)
+            koerper = koerper.replace(rmn, f'<a href="/readme#rm-{html.escape(anker)}">{rmn}</a>', 1)
         li.append(f'<li{f' class="{kl}"' if kl else ""}>{chip}'
                   + koerper + "</li>")
     mehr = len(eintraege) - 3

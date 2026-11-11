@@ -90,6 +90,12 @@ def _auslastung(verlauf, gpu, npu, gpu_eigen, ram, kind):
                                      (t("gpu.engine.compute"), _sst_zahl(e.get("compute"), " %")),
                                      (t("gpu.engine.video"), _sst_zahl(e.get("video"), " %"))],
                              unter=t("gpu.kachel.last_eigen_unter")))
+    elif (gpu or {}).get("prozent_grund"):
+        # Bauplan nvidia_wsl2 NV3: die Karte ist gemessen, nur ihre Auslastung nicht (WSL2:
+        # „[N/A]"). Die Kachel steht trotzdem und sagt, warum die Zahl fehlt.
+        k.append(_sst_kachel(t("gpu.kachel.last"), {"grund": gpu.get("prozent_grund")},
+                             _sst_zahl(None, " %"), _sst_balken(reihe("gpu")),
+                             unter=t("gpu.kachel.last_unter")))
     if (npu or {}).get("prozent") is not None:
         k.append(_sst_kachel(t("gpu.kachel.npu"), npu,
                              _sst_zahl(npu.get("prozent"), " %"),

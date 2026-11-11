@@ -186,13 +186,15 @@ def _bilder(kamera, vorrat, lauf_bilder):
                     "e": (-1.0 if e.get("e") is None else float(e["e"])),
                     "t": (-1.0 if e.get("t") is None else float(e["t"])),
                     "p": (-1.0 if e.get("p") is None else float(e["p"])),
-                    # .515: der Ring fuehrt KEINE Feature-Norm — der Live-/
-                    # Analyse-Weg misst sie nicht. -1 heisst wie ueberall
-                    # „nicht gemessen" und passiert die Latte.
-                    "n": -1.0,
-                    # Ebenso die Kantenlaenge: der Ring-Index fuehrt sie nicht
-                    # (er speichert Datei, Zeitstempel und die vier Messwerte).
-                    "k": -1.0,
+                    # MW1: Norm und Kante kommen aus dem Ring-Index, wenn der
+                    # Waechter sie gemessen hat; -1 heisst wie ueberall „nicht
+                    # gemessen" (alte Zeilen, andere Zulaeufe) und passiert die
+                    # Latte.
+                    "n": (-1.0 if e.get("n") is None else float(e["n"])),
+                    "k": (-1.0 if e.get("k") is None else float(e["k"])),
+                    # Die Achse, an der der Fund ausschied, nur wenn es eine gibt.
+                    **({"abbruch": str(e["abbruch"])}
+                       if e.get("abbruch") is not None else {}),
                     "q": "ring"})
     for b in lauf_bilder or []:
         aus.append({"src": f"/lernlauf/crop/{urllib.parse.quote(str(b['lid']), safe='')}/"

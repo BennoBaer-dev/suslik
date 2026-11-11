@@ -130,12 +130,15 @@ def geraete_lage():
     Quelle ist ausschliesslich core/registry (BACKENDS/DEVICES) — die
     Projektregel verlangt fuer fachliche Aufzaehlungen die zentrale Quelle, nie
     ein weiteres verstreutes Literal. Ein kind ohne pruefbaren Knoten (cpu,
-    MIXED) taucht mit leerem Tupel auf: es existiert, ist aber kein Geraet."""
+    MIXED) taucht mit leerem Tupel auf: es existiert, ist aber kein Geraet.
+    NVIDIA (kind cuda) entscheidet core/nvidia_lage: Knoten unter Linux, Treiber unter
+    WSL2 (Bauplan analysen/bauplan_nvidia_wsl2.md, NV2)."""
+    from core.nvidia_lage import nvidia_da           # noqa: PLC0415
     aus = {}
     for kind in _reg.BACKENDS:
         namen = []
         for dev in _reg.DEVICES.get(kind, ()):
-            if _knoten_da(dev.get("knoten")):
+            if (nvidia_da()[0] if kind == "cuda" else _knoten_da(dev.get("knoten"))):
                 namen.append(dev["name"])
         aus[kind] = tuple(namen)
     return aus
@@ -522,8 +525,11 @@ SONDE_CUDA_ZEITGRENZE_S = 2
 def _sonde_cuda(zeitgrenze_s=SONDE_CUDA_ZEITGRENZE_S):
     """NVIDIA: nvidia-smi. Die Auslastung ist dort GESAMT (je Prozess liefert
     nvidia-smi nur Speicher, keine Rechenzeit — Bauplan §0).
-    `zeitgrenze_s`: Frist fuer nvidia-smi in Sekunden; ohne Angabe SONDE_CUDA_ZEITGRENZE_S."""
-    if not _knoten_da(_pflicht_knoten("cuda")):
+    `zeitgrenze_s`: Frist fuer nvidia-smi in Sekunden; ohne Angabe SONDE_CUDA_ZEITGRENZE_S.
+    Unter WSL2 nennt nvidia-smi Auslastung und Temperatur als „[N/A]"; die werden None, die
+    drei Speicherwerte muessen Zahlen sein (Bauplan analysen/bauplan_nvidia_wsl2.md, NV3)."""
+    from core.nvidia_lage import nvidia_da           # noqa: PLC0415
+    if not nvidia_da()[0]:
         return _fehlt("kein_geraet")
     try:
         # .536 B1a: stdin=DEVNULL. Diese Sonde ist IM WORKER erreichbar (die
@@ -552,11 +558,20 @@ def _sonde_cuda(zeitgrenze_s=SONDE_CUDA_ZEITGRENZE_S):
     if not zeile:
         return dict(_fehlt("nicht_lesbar"), messgrund="empty output")
     teile = [x.strip() for x in zeile[0].split(",")]
+
+    def _oder_none(wert):
+        # NV3: nur Auslastung und Temperatur duerfen fehlen, und nur mit dem Fehlwert
+        # „[N/A]" (WSL2; auch ohne Klammern, Gross- und Kleinschreibung egal). Jeder
+        # andere Wert, der keine Zahl ist, wirft und bleibt unten der laute Wandlungsfehler.
+        if wert.strip("[]").strip().lower() == "n/a":
+            return None
+        return float(wert)
     try:
-        return {"prozent": float(teile[0]), "grund": None,
+        temperatur = _oder_none(teile[3])
+        return {"prozent": _oder_none(teile[0]), "grund": None,
                 "speicher_mb": int(float(teile[1])),
                 "speicher_max_mb": int(float(teile[2])),
-                "temperatur_c": int(float(teile[3])),
+                "temperatur_c": None if temperatur is None else int(temperatur),
                 "speicher_frei_mb": int(float(teile[4]))}
     except Exception:                                        # noqa: BLE001
         _logbuch.swallowed(_log, _logbuch.WARNING, "returning _fehlt('nicht_lesbar')")
@@ -583,8 +598,10 @@ def prozesse_karte_mb(pids=None):
     .535 unterscheidet diese Funktion drei Lagen, und jede hat ihren Namen:
     `liste_leer` (der Treiber nennt ueberhaupt keinen Prozess), `kein_eintrag`
     (er nennt welche, aber keine der gefragten) und „gemessen" (grund None).
-    Wortgleich mit `prozess_karte_mb` — EIN Vokabular fuer dieselbe Auskunft."""
-    if not _knoten_da(_pflicht_knoten("cuda")):
+    Wortgleich mit `prozess_karte_mb` — EIN Vokabular fuer dieselbe Auskunft.
+    Ob eine Karte da ist, entscheidet core/nvidia_lage (Bauplan nvidia_wsl2, NV2)."""
+    from core.nvidia_lage import nvidia_da           # noqa: PLC0415
+    if not nvidia_da()[0]:
         return {}, "kein_geraet"
     try:
         # .536 B1a: stdin=DEVNULL, gleiche Begruendung wie bei der Karten-Sonde
@@ -714,7 +731,8 @@ def gpu_messen():
     """-> Block der GPU-Kachel. Reihenfolge: das erste kind, dessen Geraet hier
     liegt UND das eine Zahl liefert, gewinnt; liefert keins eine Zahl, gewinnt
     der Grund des ersten anwesenden Geraets. Ist gar kein Beschleuniger da,
-    heisst der Grund kein_geraet."""
+    heisst der Grund kein_geraet. Eine gemessene Karte ohne Auslastung kommt ohne
+    `grund`, mit ihren Speicherwerten und `prozent_grund` (Bauplan nvidia_wsl2, NV3)."""
     lage = geraete_lage()
     erster = None
     for kind in sorted(lage):
@@ -730,6 +748,11 @@ def gpu_messen():
         d = dict(d, kind=kind)
         if d.get("prozent") is not None:
             return d
+        if d.get("grund") is None:
+            # NV3: Karte gemessen, nur ohne Auslastung (WSL2: „[N/A]"). `grund` bleibt leer,
+            # damit Kacheln, Verlauf und Planung die Speicherwerte behalten; warum die
+            # Auslastung fehlt, steht im eigenen Feld `prozent_grund`.
+            d["prozent_grund"] = "nicht_lesbar"
         if erster is None:
             erster = d
     return erster or _fehlt("kein_geraet", kind=None)

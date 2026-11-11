@@ -401,6 +401,33 @@ def graph_crop(core, H, W, n, seiten, norm, marke):
     return _kompilieren(core, modell, {"INFERENCE_PRECISION_HINT": "f32"})
 
 
+def graph_crop_zb(core, H, W, n, seiten, norm):
+    """Ausschnitt-Graph des zweiten Blicks (Bauplan analysen/bauplan_zweiter_blick.md, Stufe ZB1): dasselbe GridSample
+    mit uint8-Rundung wie `graph_crop`, aber nur das Rechteck des Ausschnitts traegt Bildinhalt; der Rest des Felds
+    ist einfarbig `worker_kern.ZB_FUELL` (vor der Normierung), nicht das echte Umfeld. Eingang 'th' [n,2,5] ist der Zug
+    aus `worker_kern.zb_lage`: Spalten 0..2 theta, Spalten 3..4 die Feld-Pixel [von, bis) je Achse (Zeile 0 x,
+    Zeile 1 y). f32 wie bei den uebrigen Ausschnitt-Graphen.
+    -> kompiliert"""
+    h, w = seiten
+    rgb = _benannt(ops.parameter([1, 3, H, W], np.float32, name=NAME_RGB), NAME_RGB)
+    zug = _benannt(ops.parameter([n, 2, 5], np.float32, name="th"), "th")
+    th = ops.slice(zug, _i64([0]), _i64([3]), _i64([1]), _i64([2]))                 # [n,2,3]
+    s = _u8_rundung(_ausschnitt(rgb, th, n, h, w))                                   # [n,3,h,w]
+
+    def achse(zeile, laenge):
+        von = ops.slice(zug, _i64([zeile, 3]), _i64([zeile + 1, 4]), _i64([1, 1]), _i64([1, 2]))
+        bis = ops.slice(zug, _i64([zeile, 4]), _i64([zeile + 1, 5]), _i64([1, 1]), _i64([1, 2]))
+        pos = ops.constant(np.arange(laenge, dtype=np.float32).reshape(1, 1, laenge))
+        drin = ops.logical_and(ops.greater_equal(pos, von), ops.less(pos, bis))       # [n,1,laenge]
+        return ops.convert(drin, "f32")
+
+    maske = ops.multiply(ops.reshape(achse(1, h), _i64([n, 1, h, 1]), False),
+                         ops.reshape(achse(0, w), _i64([n, 1, 1, w]), False))       # [n,1,h,w]
+    feld = ops.add(ops.multiply(ops.subtract(s, _c(wk.ZB_FUELL)), maske), _c(wk.ZB_FUELL))
+    modell = ov.Model([_benannt(ops.result(norm(feld)), NAME_CROP)], [rgb, zug], f"crop_{wk.ZB}_{n}")
+    return _kompilieren(core, modell, {"INFERENCE_PRECISION_HINT": "f32"})
+
+
 def _grau(s):
     """RGB [n,3,h,w] -> Graustufen [n,1,h,w] im OpenCV-Festkomma, mit derselben
     Rundung wie cv2.cvtColor(BGR2GRAY) (CV_DESCALE: +halbe Einheit, dann abschneiden)."""
@@ -545,6 +572,16 @@ def modell_p(core, n, pfad):
                                        f"p_{n}"))
 
 
+def modell_zb(core, n, pfad, seiten):
+    """Modell-Kompilat des zweiten Blicks: det_10g (der Detektor des ersten Blicks) in der festen Eingangsgroesse
+    des Felds, auf dem normierten Ausschnitt-Tensor. Die neun Ausgaenge gehen unveraendert zur CPU.
+    -> kompiliert"""
+    m = core.read_model(pfad)
+    m.reshape([n, 3, *seiten])
+    _benannt(m.get_parameters()[0], NAME_CROP)
+    return _kompilieren(core, m)
+
+
 def modell_r(core, n, pfad):
     """Modell-Kompilat der Erkennungs-Stufe: das konfigurierte Recognition-Modell
     (face_audit.aktuelles_modell) auf dem normierten norm_crop, Embedding L2-normiert
@@ -623,7 +660,8 @@ class ModellBestand:
         # Clip-Geometrie — genau deshalb gehoeren die Modelle hierher. Die Geometrie
         # uebernimmt sie unveraendert (Ausschnitt-Graphen und Affin-Matrizen).
         pw, ph = wk.pose_wache.INPUT_SIZE
-        self.seiten = {"p": (ph, pw)}
+        # Der zweite Blick (ZB1) hat die feste Feldgroesse aus dem Kern; det_10g selbst hat offene Seiten.
+        self.seiten = {"p": (ph, pw), wk.ZB: (wk.ZB_FELD, wk.ZB_FELD)}
         for k in (wk.FD, "e", "t", "r"):
             self.seiten[k] = _seiten(core.read_model(self.pfade[k]))
         # Die Punktzahl der Pose kommt aus der mittleren Form, an der sie geschaetzt wird
@@ -635,7 +673,8 @@ class ModellBestand:
             "e": lambda n: modell_e(core, n, self.pfade["e"]),
             "t": lambda n: modell_t(core, n, self.pfade["t"]),
             "p": lambda n: modell_p(core, n, self.pfade["p"]),
-            "r": lambda n: modell_r(core, n, self.pfade["r"])}
+            "r": lambda n: modell_r(core, n, self.pfade["r"]),
+            wk.ZB: lambda n: modell_zb(core, n, self.pfade[wk.ZB], self.seiten[wk.ZB])}
         self._kompilate = {}
         self._schloss = threading.Lock()
         self.bau_s = 0.0                                  # Summe der geteilten Bauzeit
@@ -751,8 +790,11 @@ class Satz:
         self.stufen = {}
         for k in wk.STUFEN:
             h, w = g.seiten[k]
+            # Der zweite Blick (ZB1) rechnet mit seiner eigenen Breite (worker_kern.ZB_BREITE), alle uebrigen
+            # Stufen mit der festen Aufrufbreite.
+            breite = wk.ZB_BREITE if k == wk.ZB else wk.AUFRUF_BREITE
             zwischen = g.ctx.create_tensor(
-                ov.Type.f32, ov.Shape([wk.AUFRUF_BREITE, 3, h, w]), {})
+                ov.Type.f32, ov.Shape([breite, 3, h, w]), {})
             c_req = g.crop[k].create_infer_request()
             c_req.set_tensor(NAME_RGB, self.rgb)
             c_req.set_tensor(NAME_CROP, zwischen)
@@ -802,13 +844,32 @@ class Satz:
         Der letzte Rest wird durch Wiederholen des letzten Gesichts aufgefuellt, sein
         Doppel verworfen — Zeile fuer Zeile das Polster-Muster, das v1 fuer die
         Buendelstufen benutzt hat, nur mit EINER Breite statt einer Stufenleiter.
-        -> je Gesicht ein Tupel seiner Ausgabezeilen"""
+        -> je Gesicht ein Tupel seiner Ausgabezeilen
+        Der zweite Blick (ZB1) laeuft je Gesicht ueber `_ruf_zb`; sein Tupel sind die neun Detektor-Ausgaenge."""
+        if k == wk.ZB:
+            return [self._ruf_zb(zug) for zug in thetas]
         aus = []
         for start in range(0, len(thetas), wk.AUFRUF_BREITE):
             teil = thetas[start:start + wk.AUFRUF_BREITE]
             voll = teil + [teil[-1]] * (wk.AUFRUF_BREITE - len(teil))
             aus.extend(self._ruf(k, voll)[:len(teil)])
         return aus
+
+    def _ruf_zb(self, zug):
+        """EIN Aufruf des zweiten Blicks fuer EIN Gesicht (Breite worker_kern.ZB_BREITE = 1): Ausschnitt in das Feld
+        auf der GPU, dann det_10g auf demselben Geraete-Tensor. det_10g legt einen Stapel in seinen Ausgaengen
+        verschraenkt ab, deshalb gehoeren bei Breite 1 alle Zeilen der neun Ausgaenge zu diesem Gesicht; zur CPU
+        kommt nur die Detektor-Ausgabe.
+        -> Tupel der neun Ausgaenge (Kopien)"""
+        c_req, m_req, _zw, n_aus, th_t = self.stufen[wk.ZB]
+        np.copyto(th_t.data, np.asarray(zug, np.float32)[None])
+        with im.Einreichung(self.m_crop[wk.ZB], self.g.marke):
+            c_req.start_async()
+            abwarten(c_req, self.g.frist_ms, self.m_crop[wk.ZB], self.g.marke)
+        with im.Einreichung(self.m_modell[wk.ZB], self.g.marke):
+            m_req.start_async()
+            abwarten(m_req, self.g.frist_ms, self.m_modell[wk.ZB], self.g.marke)
+        return tuple(np.array(m_req.get_output_tensor(j).data) for j in range(n_aus))
 
     def _ruf_fd(self, thetas, zuege):
         """EIN Aufruf der fd-Stufe mit GENAU AUFRUF_BREITE Gesichtern: Landmark-Ausschnitt
@@ -854,6 +915,10 @@ class Satz:
         self.det(y0, uv0)
         th0 = np.array([[1, 0, 0], [0, 1, 0]], np.float32)
         for k in wk.KASKADE:
+            if k == wk.ZB:
+                # zweiter Blick (ZB1): eigener Zug mit gueltigem Feld-Rechteck, Form [2,5]
+                self._ruf_zb(wk.zb_lage([0, 0, 2, 2], self.g.W, self.g.H, self.g.nm)[0])
+                continue
             self._ruf(k, [th0] * wk.AUFRUF_BREITE)
         zug0 = wk.leinwand_zug([0, 0, wk.LEINWAND - 2, wk.LEINWAND - 2], self.g.W, self.g.H)
         self._ruf_fd([th0] * wk.AUFRUF_BREITE, [zug0] * wk.AUFRUF_BREITE)
@@ -884,10 +949,13 @@ class Geometrie:
                 # selben Graphen (graph_crop_fd) — ein Aufruf statt zwei.
                 self.crop[k] = graph_crop_fd(core, H, W, wk.AUFRUF_BREITE, best.seiten[k],
                                              best.norm[k])
+            elif k == wk.ZB:
+                # Der zweite Blick (ZB1): Ausschnitt in das einfarbige Feld, eigene Breite.
+                self.crop[k] = graph_crop_zb(core, H, W, wk.ZB_BREITE, best.seiten[k], best.norm[k])
             else:
                 self.crop[k] = graph_crop(core, H, W, wk.AUFRUF_BREITE, best.seiten[k],
                                           best.norm[k], k)
-            self.modell[k] = best.kompilat(k, wk.AUFRUF_BREITE)
+            self.modell[k] = best.kompilat(k, wk.ZB_BREITE if k == wk.ZB else wk.AUFRUF_BREITE)
         self.bau_geteilt_s = best.bau_s - geteilt0     # was DIESE Geometrie am Bestand zahlte
         self.nm = wk.gitter_norm(W, H)
         self.zentren = wk.zentren_fuellen(self.det_wh, self.det_scale)

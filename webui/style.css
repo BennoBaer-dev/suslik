@@ -211,10 +211,9 @@ nav .live .d { width: 7px; height: 7px; border-radius: 50%; background: var(--ok
 .tagnav-u { font-size: 12px; color: var(--faint); min-height: 1em; }
 .tagnav .gtb { font-size: 15px; line-height: 1; padding: 4px 12px; }
 .tagnav [aria-disabled="true"] { opacity: .35; cursor: default; }
-/* Today-Umbau 25.07.: erkannte Personen dominieren, alles andere wird leise.
-   Zweispaltig — links wer/was passiert ist, rechts die Zahlen, die man selten braucht. */
-.tagraster { display: grid; grid-template-columns: minmax(0,1fr) 260px; gap: 16px; align-items: start; }
-@media (max-width: 900px) { .tagraster { grid-template-columns: minmax(0,1fr); } }
+/* Bauplan analysen/bauplan_today_seite.md, Stufe TY2: Heute zeigt nur die Baender mit Kacheln ueber die ganze Breite;
+   die Zahlen und die Liste der Durchgaenge stehen im Reiter Durchgaenge (die Randspalte .tagseite und das Raster
+   .tagraster sind entfallen). */
 
 .pband { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin: 0 0 24px; }
 .pk { display: flex; gap: 12px; align-items: center; text-decoration: none; color: inherit;
@@ -297,15 +296,32 @@ nav .live .d { width: 7px; height: 7px; border-radius: 50%; background: var(--ok
 .fussnote { font-size: 12px; color: var(--faint); text-decoration: none; border-bottom: 1px dotted var(--border); }
 .fussnote:hover { color: var(--dim); text-decoration: none; }
 
-.tagseite { display: flex; flex-direction: column; gap: 12px; }
-.ts-block { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
-.ts-lab { font-size: 12px; color: var(--faint); }
-.ts-val { font-size: 28px; font-weight: 600; line-height: 1.1; }
-.ts-meta { font-size: 12px; color: var(--dim); margin-top: 4px; }
-.ts-zeile { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; padding: 2px 0; }
-.ts-zeile span:first-child { color: var(--dim); }
-/* Stufe TS3 (Bauplan analysen/bauplan_today_statistik.md): der Wert einer Zeile der Randspalte bricht nie um. */
-.ts-zeile .num { white-space: nowrap; }
+/* TY2 Punkt 5: die Handlung unten rechts in der Kachel, Teil desselben Verweises (kein eigenes Klickziel). Die
+   Textspalte der Kachel streckt sich, damit die Handlung unten steht; „Benennen“ an Unbekannten traegt die Akzentflaeche. */
+.pband .pk-txt { flex: 1; align-self: stretch; display: flex; flex-direction: column; }
+.pband .pk-av { align-self: flex-start; }
+.pk-akt { align-self: flex-end; margin-top: auto; padding: 2px 10px; border: 1px solid var(--border); border-radius: 999px;
+          background: var(--surface); color: var(--accent); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.pk-akt.stark { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pk:hover .pk-akt { border-color: var(--accent); }
+.pband .pk-txt > :nth-last-child(2) { margin-bottom: 8px; }   /* Mindestabstand ueber der Handlung */
+/* TY2 Punkt 1: die Zeile am Ende von Heute — Zahl der Durchgaenge und der Verweis auf den Reiter. */
+.hk-fuss { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin: 4px 4px 0; font-size: 13px;
+           color: var(--dim); }
+/* TY2 Punkt 2: die vier Zahlen des Reiters Durchgaenge als eine Zeile (vorher die Randspalte), darunter der Satz zu
+   Unbekannten. Stufe TS3 (Bauplan analysen/bauplan_today_statistik.md): ein Wert bricht nie um. */
+.hk-zahlen { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0 0 8px; }
+.hk-zahl { display: flex; flex-direction: column; gap: 2px; background: var(--surface); border: 1px solid var(--border);
+           border-radius: 10px; padding: 10px 14px; }
+.hk-zahl .num { font-size: 22px; font-weight: 600; line-height: 1.15; white-space: nowrap; }
+.hk-zahl-lab { font-size: 12px; color: var(--faint); }
+.hk-zahl-lab a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--dim); }
+.hk-zahl-lab a:hover { border-bottom-color: var(--accent); }
+.hk-neben { font-size: 13px; color: var(--dim); margin: 0 4px 12px; }
+/* Koepfe der Baender und der Liste: Abstand und Umbruch, damit Titel und Zahl am Handy nicht aneinanderstossen. */
+#recognized.listhead, #similar.listhead, #unknown.listhead, #passes.listhead { gap: 2px 12px; flex-wrap: wrap; }
+.hk-neben + .hk-neben { margin-top: -6px; }
+@media (max-width: 700px) { .hk-zahlen { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 0 0 24px; }
 .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
@@ -729,9 +745,7 @@ input.bn-name{width:42ch;max-width:100%}
   border-radius:6px;padding:5px 8px}
 /* --- .54: F2-Badge + klickbare Kennzahlen ------------------------------------------ */
 .badge-gtfremd{color:var(--warn);font-weight:600}
-.ts-link{color:inherit;text-decoration:none;border-bottom:1px dotted var(--dim)}
 #recognized,#unknown,#passes,#unidentified{scroll-margin-top:96px}  /* Sprungziele unter der klebenden Leiste freihalten (Review .54) */
-.ts-link:hover{border-bottom-color:var(--accent)}
 /* Task #16 What's-new-Box (Startseite): gleiche Card-Familie wie .updblock —
    Surface-Card mit Akzentkante, ruhig, kein Blinken. Eingeklappt 3 Eintraege
    (.wn-mehr versteckt), .wn-open zeigt alle; Versions-Chips wie .marke .upd. */
@@ -762,17 +776,13 @@ input.bn-name{width:42ch;max-width:100%}
   color: var(--accent); cursor: pointer; padding: 0; font-size: 13px; }
 .wnblock .wn-toggle:hover { text-decoration: underline; }
 
-/* ---- Live-Reiter (Phase 2): Kachel-Farben aus registry.LIVE_ZUSTAENDE.farbe
+/* ---- Live-Reiter (Phase 2): Zustandsfarben aus registry.LIVE_ZUSTAENDE.farbe
    (eine Quelle: die Farbworte grau/gelb/blau/gruen/rot/neutral kommen aus der
-   Enum, hier haengt je Wort GENAU EINE Klasse — kein Streu-Literal). */
+   Enum, hier haengt je Wort GENAU EINE Klasse — kein Streu-Literal). Seit LS2
+   gibt es keine Live-Kacheln mehr; lv-grid und lv-kachel nutzt die
+   Kalibrier-Uebersicht weiter. */
 .lv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
 .lv-kachel { border-left: 4px solid var(--border); }
-.lv-grau    { border-left-color: var(--dim); }
-.lv-gelb    { border-left-color: var(--warn); }
-.lv-blau    { border-left-color: var(--accent); }
-.lv-gruen   { border-left-color: var(--ok); }
-.lv-rot     { border-left-color: var(--crit); }
-.lv-neutral { border-left-color: var(--border); }
 .lvp { margin-left: auto; }
 .lvp-grau, .lvp-neutral { background: var(--surface-2); color: var(--dim); }
 .lvp-gelb  { background: var(--warn-bg); color: var(--warn); }
@@ -782,15 +792,6 @@ input.bn-name{width:42ch;max-width:100%}
 .lv-zeile { margin: 3px 0; font-size: 13px; }
 .lv-vorschau { width: 100%; height: auto; display: block; border-radius: 6px;
                margin: 6px 0 2px; border: 1px solid var(--border); }
-.lv-abschnitt { margin: 14px 0; }
-.lv-kopfzeile { font-weight: 600; margin: 0 0 6px; color: var(--dim);
-                text-transform: uppercase; font-size: 12px; letter-spacing: .04em; }
-.lv-abschnitt summary { cursor: pointer; font-weight: 600; color: var(--dim);
-                        text-transform: uppercase; font-size: 12px;
-                        letter-spacing: .04em; margin: 0 0 6px; }
-.lv-abschnitt details[open] summary, details.lv-abschnitt[open] summary { margin-bottom: 6px; }
-.lv-areazeile { margin: 8px 0 4px; font-size: 12px; }
-.lv-schalterzeile { margin: 6px 0; }
 .kt-kette { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px;
             margin: 10px 0 16px; }
 .kt-stufe { flex: 1 1 240px; max-width: 380px; }
@@ -813,38 +814,134 @@ input.bn-name{width:42ch;max-width:100%}
 .lv-thumb { height: 84px; width: auto; border-radius: 6px;
             border: 1px solid var(--border); }
 .lv-knoepfe { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.lv-radio { display: block; margin: 3px 0; }
-.lv-erklaer { border-left: 4px solid var(--accent); }
 
-/* ---- Konfigseite eines Waechters (Live-Umbau 31.08.): Kachel-Raster statt
-   der Karten-Spalte. Vier Kacheln nebeneinander, faellt bei schmalen Schirmen
-   auf zwei und dann auf eine (S9-Geometrie: alle Breiten relativ, nichts
-   erzwingt eine Mindestbreite ausser dem 260px-Track, der unter einer
-   Kachelbreite umbricht). ---- */
-/* GLEICHE KACHEL-HOEHEN (User-Befund 31.08. an der deployten Seite: "wild
-   verschiedene Hoehen"). Ursache war align-items:start — jede Karte war so
-   hoch wie ihr Inhalt. Jetzt dehnt das Raster die Karten auf die Reihenhoehe
-   (Muster der Alarm-Reihe darueber, die das schon so macht), und die Karte
-   selbst ist eine Spalte, deren Knopfzeile unten sitzt. Damit stehen die
-   Knoepfe aller vier Kacheln auf EINER Linie. */
-.lvk-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-            gap: 12px; margin: 12px 0; align-items: stretch; }
-.lvk { display: flex; flex-direction: column; }
-.lvk h3 { margin: 0 0 8px; font-size: 15px; }
-.lvk .lv-knoepfe { margin-top: auto; padding-top: 10px; }
-.lv-titelzeile { display: flex; align-items: baseline; gap: 12px;
-                 flex-wrap: wrap; }
-.lv-titelzeile h2 { flex: 1 1 auto; margin-right: 0; }
-.lv-kopfkarte { border-left: 4px solid var(--accent); }
-/* Kopfkarte kompakt: Bild/Zustandsfeld links, Handlungen rechts daneben. */
-.lv-kopfreihe { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-start; }
-.lv-kopfbild { flex: 0 1 320px; min-width: 0; }
-.lv-kopftext { flex: 1 1 240px; min-width: 0; }
-.lv-kopfkarte .lv-vorschau { width: 100%; max-width: 320px; margin: 0; }
-.lv-kopfkarte .lv-knoepfe { margin-top: 0; }
-.lv-kein-bild { border: 1px dashed var(--border); border-radius: 6px;
-                padding: 10px 12px; background: var(--surface-2); }
-.lv-kein-bild-kopf { font-size: 13px; color: var(--dim); }
+/* ---- Live-Seite mit Plaetzen (LS2, Bauplan analysen/bauplan_live_seite.md; Zeilen und Abschnitte aus WS2):
+   so breit wie die uebrigen Seiten. Oben Titelzeile mit Engine-Marke, Satz und Platz-Leiste, darunter der
+   gewaehlte Platz: Kopf, zwei Spalten, eingeklappt Erweitert und Diagnose; unter 860 px wird alles einspaltig,
+   unter 520 px bricht der Kopf um. Jede Zeile traegt links Beschriftung und hoechstens einen gedaempften Satz,
+   rechts das Bedienelement. Farben nur ueber die Variablen oben. Die Kippschalter sind echte Kontroll-
+   kaestchen mit dem Aussehen von .ek-kipp (Groesse, Rand, Knopf kommen von dort); hier steht nur, was
+   die allgemeine Regel input[type=checkbox] sonst ueberschreibt, und der Zustand :checked, weil
+   .ek-kipp ihn als Klasse .an traegt. Die weisse Knopffarbe gibt .ek-kipp.an::after vor. ---- */
+.lvs-titelzeile { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.lvs-marke-engine { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim);
+                    border: 1px solid var(--border); background: var(--surface); border-radius: 999px;
+                    padding: 4px 12px; }
+.lvs-punkt { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none;
+             background: var(--dim); }
+.lvs-punkt.lvs-f-gelb { background: var(--warn); }
+.lvs-punkt.lvs-f-blau { background: var(--accent); }
+.lvs-punkt.lvs-f-gruen { background: var(--ok); }
+.lvs-punkt.lvs-f-rot { background: var(--crit); }
+.lvs-punkt.lvs-f-neutral { background: var(--border); }
+.lvs-intro { color: var(--dim); font-size: 13px; margin: 2px 0 12px; }
+.lvs-satz { margin: 0 0 12px; }
+/* Platz-Leiste: je Platz ein Knopf; der gewaehlte blau unterstrichen, ein freier gestrichelt, die Farbe des
+   Zustands am Punkt und bei gestoert oder nicht in Frigate auch am Rand. */
+.lvs-plaetze { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 0 0 12px; }
+.lvs-platz { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--text); text-decoration: none;
+             background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+.lvs-platz:hover { border-color: var(--accent); text-decoration: none; }
+.lvs-platz.lvs-frei { border-style: dashed; }
+.lvs-platz.lvs-f-rot { border-color: var(--crit); }
+.lvs-platz.lvs-f-gelb { border-color: var(--warn); }
+.lvs-platz.lvs-gewaehlt { border-color: var(--accent); background: var(--accent-bg);
+                          box-shadow: inset 0 -3px 0 var(--accent); }
+.lvs-nr { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--surface-2);
+          border: 1px solid var(--border); display: flex; align-items: center; justify-content: center;
+          font-size: 12px; font-weight: 700; color: var(--dim); }
+.lvs-gewaehlt .lvs-nr { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.lvs-tx { min-width: 0; display: flex; flex-direction: column; }
+.lvs-tx b { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lvs-frei .lvs-tx b { font-weight: 500; color: var(--dim); }
+.lvs-tx small { font-size: 12px; color: var(--dim); display: flex; align-items: baseline; gap: 6px; }
+.lvs-warnung { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--warn-bg);
+               color: var(--warn); border: 1px solid var(--warn); border-radius: 10px; padding: 8px 14px;
+               margin: 0 0 12px; font-size: 13px; font-weight: 600; }
+.lvs-ungespeichert { font-size: 12px; color: var(--warn); text-align: center; }
+.lvs-wahl { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--dim); }
+.lvs-auswahl { font-size: 14px; padding: 5px 8px; border-radius: 8px; border-color: var(--border-strong);
+               max-width: 100%; }
+.lvs-leer { text-align: center; padding: 28px 18px; }
+.lvs-leer .lvs-wahl { justify-content: center; margin-top: 12px; }
+.lvs-wahl .gtb { padding: 7px 14px; font-size: 13px; }
+/* Zwei Spalten (links Push, rechts Home Assistant, Besuch, Frigate), innen drei und vier Spalten. */
+.lvs-spalten { display: grid; gap: 0 24px; align-items: start; }
+.lvs-zwei { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+.lvs-drei { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.lvs-vier { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+/* Tabelle der Push-Nachrichten: Zeile = was, Spalte = wohin; ein abgeschalteter Kanal dimmt seine Spalte. */
+.lvs-tabelle { width: 100%; border-collapse: collapse; }
+.lvs-tabelle th { font-weight: 600; font-size: 14px; padding: 4px 0 10px; text-align: center; width: 110px;
+                  text-transform: none; letter-spacing: normal; color: var(--text); background: none; }
+.lvs-tabelle th:first-child { width: auto; }
+.lvs-tabelle td { padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 0; vertical-align: middle; }
+.lvs-tabelle th { border-bottom: 0; }
+.lvs-tabelle td.lvs-spalte { text-align: center; }
+.lvs-kanalkopf, .lvs-video { display: inline-flex; flex-direction: column; align-items: center; gap: 6px; }
+.lvs-kanalkopf { cursor: pointer; }
+.lvs-dauer { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.lvs-dauer .lvs-num { width: 60px; padding: 3px 6px; }
+.lvs-nur { font-size: 12px; color: var(--dim); }
+.lvs-tabelle:has(.lv-kanal[value="pushover"]:not(:checked)) .lvs-p > *,
+.lvs-tabelle:has(.lv-kanal[value="telegram"]:not(:checked)) .lvs-t > * { opacity: .35; }
+.lvs-hn.lvs-pkt { padding-left: 14px; position: relative; }
+.lvs-hn.lvs-pkt::before { content: ""; position: absolute; left: 3px; top: 8px; width: 4px; height: 4px;
+                          border-radius: 50%; background: var(--dim); }
+.lvs-stand.lvs-rot { color: var(--crit); }
+@media (max-width: 860px) {
+  .lvs-zwei, .lvs-drei, .lvs-vier { grid-template-columns: minmax(0, 1fr); }
+}
+.card.lvs-abschnitt { border-left: 1px solid var(--border); border-radius: 12px; padding: 10px 18px; margin: 0 0 12px; }
+.lvs-abschnitt h3 { font-size: 16px; margin: 6px 0 2px; }
+.lvs-zweck { font-size: 13px; color: var(--dim); margin: 0 0 6px; }
+.lvs-zeile { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+             gap: 6px 16px; padding: 10px 0; border-top: 1px solid var(--border); }
+.lvs-zweck + .lvs-zeile, h3 + .lvs-zeile, .lvs-gruppe + .lvs-zeile { border-top: 0; }
+label.lvs-zeile { cursor: pointer; }
+.lvs-lbl { flex: 1 1 160px; min-width: 0; }
+.lvs-name { display: block; font-size: 15px; }
+.lvs-hn { display: block; font-size: 13px; color: var(--dim); margin: 2px 0 0; }
+.lvs-ctl { flex: none; display: flex; align-items: center; gap: 6px; max-width: 100%; }
+.lvs-mono { font-family: var(--mono); font-size: 12px; color: var(--dim); overflow-wrap: anywhere; }
+.lvs-num { width: 80px; text-align: right; font-size: 14px; padding: 5px 8px; border-radius: 8px;
+           border-color: var(--border-strong); }
+.lvs-url { width: 260px; max-width: 100%; font-size: 14px; padding: 5px 8px; border-radius: 8px;
+           border-color: var(--border-strong); }
+.lvs-einheit { font-size: 13px; color: var(--dim); }
+.ek-kipp.lvs-kipp { appearance: none; -webkit-appearance: none; margin: 0;
+                    border: 1px solid var(--border); background: var(--surface-2); }
+.ek-kipp.lvs-kipp:checked { background: var(--accent); }
+.ek-kipp.lvs-kipp:checked::after { left: 24px; background: #fff; }
+.lvs-link { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+.lvs-link:hover { text-decoration: underline; }
+.lvs-marke { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
+             background: var(--crit-bg); color: var(--crit); }
+.lvs-notiz { font-size: 13px; color: var(--dim); margin: 0 0 4px; }
+/* Kopf: Bild links, Name und Zustand in der Mitte, Speichern und Ein/Aus rechts. */
+.card.lvs-kopf { display: flex; gap: 16px; align-items: stretch; padding: 10px 18px; }
+.lvs-bild { width: 256px; flex: none; }
+.lvs-bild .lv-vorschau { margin: 0; border-radius: 8px; }
+.lvs-kein-bild { min-height: 112px; box-sizing: border-box; border: 1px dashed var(--border); border-radius: 8px;
+                 padding: 8px 10px; background: var(--surface-2); font-size: 13px; color: var(--dim); }
+.lvs-mitte { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 6px; }
+.lvs-kamera { font-size: 18px; overflow-wrap: anywhere; }
+.lvs-zustand { display: inline-block; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+               margin-left: 8px; vertical-align: middle; }
+.lvs-rechts { display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+.lvs-rechts .gtb { padding: 7px 14px; font-size: 13px; text-align: center; }
+/* Erweitert und Diagnose: eingeklappt, die Kopfzeile zeigt den Stand; innen trennt eine Linie die Gruppen. */
+.card.lvs-klapp { background: var(--surface-2); }
+.lvs-klapp > summary { cursor: pointer; padding: 6px 0; }
+.lvs-titel { font-size: 16px; }
+.lvs-stand { display: block; font-size: 13px; color: var(--dim); margin: 2px 0 0 16px; }
+.lvs-gruppe { margin: 12px 0 0; padding-top: 8px; border-top: 1px solid var(--border); font-size: 12px;
+              font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+@media (max-width: 520px) {
+  .card.lvs-kopf { flex-wrap: wrap; }
+  .lvs-bild { width: 100%; }
+  .lvs-rechts { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; width: 100%; }
+}
 /* Alters-/Handlungs-Hinweis (Quelltest ueberfaellig, Alt-Aufloesung). */
 .lv-hinweis { color: var(--warn); font-size: 13px; }
 
