@@ -134,21 +134,37 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   restart it starts from the beginning.
 - **`poll_interval`** — seconds between two queries to Frigate for new events, in poll mode only
   (`trigger: poll`); with MQTT it has no effect. Default 10, allowed 5 to 300. A shorter interval
-  picks up finished events sooner and asks Frigate more often.
-- **`clip_delay`** — seconds suslik waits before it fetches an event's clip, so Frigate can finish
-  the recording: in poll mode counted from the end of the event, with MQTT from Frigate's end
-  message. Default 5, allowed 0 to 120. Raise it if clips often arrive incomplete or need a second
-  attempt.
-
-  Both are on the **Advanced** settings page (`/konfiguration`, in the menu in Expert mode) and
-  take effect without a restart: the next poll waits the new interval, and events queued after
-  saving get the new delay (events already waiting keep theirs). Up to version 0.1.1.034 the defaults were 20 and 15. On the first
-  start of the version that brings this change, suslik moves each of the two values that is still
-  at its old default (20 or 15, whether from your config file or from the settings store) to the
-  new one, once, with a line in the log and in the config audit; any other value is kept. A marker
-  in `state/` records that this happened, so setting 20 or 15 again later, or restoring an older
-  config backup, keeps your values. Restoring a full backup from before that version brings back
-  `state/` without the marker, and the next start moves the old defaults once more.
+  picks up finished events sooner and asks Frigate more often. It is on the **Advanced** settings
+  page (`/konfiguration`, in the menu in Expert mode) and takes effect without a restart: the next
+  poll waits the new interval. Up to version 0.1.1.034 the default was 20. On the first start of
+  the version that brought this change, suslik moved the value once from 20 to 10 if it was still
+  at the old default (whether from your config file or from the settings store), with a line in
+  the log and in the config audit; any other value is kept. A marker in `state/` records that this
+  happened, so setting 20 again later, or restoring an older config backup, keeps your value.
+  Restoring a full backup from before that version brings back `state/` without the marker, and
+  the next start moves the old default once more.
+- **`clip_aufnahme_deckel_s`** — the longest time, in seconds from the moment an event is queued,
+  that suslik waits until Frigate has recorded the event up to its end. Default 20, allowed 5 to
+  120; on the **Advanced** settings page, takes effect without a restart. This is an upper limit,
+  not a fixed delay. Frigate builds a clip only from the recording segments it has already
+  written, so a clip fetched too early can end before the event does. Before every clip fetch
+  suslik therefore asks Frigate whether the recording reaches the end of the event
+  (`/api/<camera>/recordings` at the event's end time) and fetches as soon as Frigate says so; until
+  then it asks again every 2 seconds. Older events are usually covered at the first question. If
+  the limit is reached first, suslik fetches what is there, writes a WARNING to the log and notes
+  `aufnahme_unbestaetigt: deckel` in the event's record. Only if Frigate does not answer the
+  question (an error, or an answer that is not a list) does the limit act like a fixed delay: the
+  event waits the full time from being queued and is then fetched without the check
+  (`aufnahme_unbestaetigt: abfrage_fehler`), and `/health` `ok` is false until a query succeeds
+  again. `/health` `vorlauf.aufnahme` shows the number of queries (`abfragen`), the number of
+  fetches without confirmation (`deckel`), and for the fallback `rueckfall`, `fehler` and
+  `letzter_fehler`. The limit counts on suslik's own clock and never compares it with Frigate's,
+  so the two machines may run with different clocks. A larger value gives Frigate more time before
+  a clip is fetched unconfirmed; it does not delay clips whose recording is already complete.
+- **`clip_delay`** was removed. suslik no longer waits a fixed time before it fetches a clip (the
+  check above replaces it). A `clip_delay` line in your config file, or a value in the settings
+  store, has no effect: suslik drops it at every start and says so once in the log (with the old
+  value) and in the config audit. You can delete the line.
 - **`/health` fields for stalls, losses and fallbacks** — `ok` is false while a start check
   failed, an analysis-failure series is active or a standstill lasts; a standstill lasts until the
   next successful analysis. `nachhol` counts the events the catch-up run gave up for good since the

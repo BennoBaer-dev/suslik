@@ -5,6 +5,12 @@ never pushed to GHCR; they ship bundled with the next release (each release entr
 says which steps it bundles). This file keeps the last five releases; the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git history.
 
+## 0.1.1.102 (2026-11-16)
+
+- Event clips: suslik now waits until Frigate has stored the recording up to the end of an event before it fetches the clip, so the end is no longer cut off by fetching too early. Thanks for the report in #40.
+- The setting `clip_delay` was removed.
+- New setting `clip_aufnahme_deckel_s` (factory value 20 s, 5 to 120 s): the longest time suslik waits for the recording.
+
 ## 0.1.1.101 (2026-11-11)
 
 Test release. 0.1.1.058 was never published; its changes are part of this version.
@@ -32,7 +38,3 @@ Test release. 0.1.1.058 was never published; its changes are part of this versio
 
 - Fewer file accesses per event (no usage journal, folders created once per process); built for large installations on network storage.
 - The Today and Presence pages are served from memory while nothing changed (switch render_cache, on by default).
-
-## 0.1.1.054 (2026-11-05)
-
-Small fixes.

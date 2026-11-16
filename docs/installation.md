@@ -83,7 +83,7 @@ docker pull ghcr.io/bennobaer-dev/suslik:latest-rocm        # AMD (testing)
 
 # the same release, pinned so it never moves under you:
 docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.101-gpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.101-cuda
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.102-cuda
 docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.101-cpu
 docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.101-gpu-legacy
 docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.101-rocm

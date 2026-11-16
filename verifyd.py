@@ -575,28 +575,31 @@ def _migration_straenge_0535_innen(cfg):
 
 # Bauplan analysen/bauplan_abfragetakt_wartezeit.md, Stufe TW1 Punkt 2 und 5 (Eigentuemer 23.10.2026 08:49:07, „den
 # Delay auf 5 Sekunden setzen ... und auch den Poll von 20 auf 10 Sekunden zu setzen, auch einmalig"): die alten und
-# die neuen Werkswerte von Abfragetakt und Clip-Wartezeit in Sekunden. Die neuen sind die Werkswerte in load_config,
-# die alten erkennt die einmalige Umstellung (Entscheid E2). Beide Paare sind ungemessen (Bauplan, Grenzen und Risiko).
-TAKT_WERK_ALT = {"poll_interval": 20, "clip_delay": 15}
-TAKT_WERK_NEU = {"poll_interval": 10, "clip_delay": 5}
+# die neuen Werkswerte des Abfragetakts in Sekunden. Der neue ist der Werkswert in load_config, den alten erkennt
+# die einmalige Umstellung (Entscheid E2). Das Paar ist ungemessen (Bauplan, Grenzen und Risiko).
+# Bauplan analysen/bauplan_clip_vollstaendig.md, Stufe CV1 Punkt 7: clip_delay ist entfernt (Service._clip_delay_entfernt),
+# die Umstellung behandelt nur noch den Abfragetakt.
+TAKT_WERK_ALT = {"poll_interval": 20}
+TAKT_WERK_NEU = {"poll_interval": 10}
 TAKT_MIGRATION_MARKE = "migration_takt_wartezeit.json"   # state/, Muster Anker-Umstellung
 
 
 def _migration_takt_wartezeit(cfg):
-    """Stellt Abfragetakt und Clip-Wartezeit beim ersten Start dieser Version einmal von den alten auf die neuen
-    Werkswerte um. -> None; ein Fehler haelt den Start nie auf, der naechste Start entscheidet dann neu.
+    """Stellt den Abfragetakt beim ersten Start dieser Version einmal vom alten auf den neuen Werkswert um.
+    -> None; ein Fehler haelt den Start nie auf, der naechste Start entscheidet dann neu.
 
     Bauform der Anker-Umstellung (_migration_anker_045): Marke unter state/ statt im Store, weil das Zurueckspielen
     einer Konfig-Sicherung den ganzen Store ersetzt; die Marke haelt auch den Nicht-Eingriff fest. Je Schluessel
     unabhaengig (Entscheid E2): gilt der alte Werkswert, gleich ob aus YAML, Store oder Werkswert, wird der neue in den
     Store und die laufende Config geschrieben, mit Audit- und INFO-Zeile; jeder andere Wert bleibt. Steht die Marke,
-    geschieht nichts mehr, auch nach einer Rueckstellung auf die alten Werte. Eine Vollwiederherstellung von vor dieser
+    geschieht nichts mehr, auch nach einer Rueckstellung auf den alten Wert. Die Clip-Wartezeit, die diese Umstellung
+    bis 0.1.1.101 mit behandelte, ist entfernt (Bauplan analysen/bauplan_clip_vollstaendig.md, Stufe CV1 Punkt 7). Eine Vollwiederherstellung von vor dieser
     Version bringt state/ ohne Marke zurueck, dann stellt der naechste Start einmal neu um (Entscheid E4). Ist Store
     oder Marke unlesbar, bleibt alles, wie es ist, und eine WARNING sagt es."""
     try:
         _migration_takt_wartezeit_innen(cfg)
     except Exception as e:                                     # noqa: BLE001
-        _log.warning(f"poll interval / clip delay migration failed ({type(e).__name__}: {e}) — values "
+        _log.warning(f"poll interval migration failed ({type(e).__name__}: {e}) — values "
                      f"unchanged, retried next start")
 
 
@@ -611,7 +614,7 @@ def _migration_takt_wartezeit_innen(cfg):
     except FileNotFoundError:
         pass
     except (OSError, ValueError) as e:
-        _log.warning(f"poll interval / clip delay migration skipped: marker state/{TAKT_MIGRATION_MARKE} exists "
+        _log.warning(f"poll interval migration skipped: marker state/{TAKT_MIGRATION_MARKE} exists "
                      f"but is unreadable ({type(e).__name__}: {e}) — values not touched")
         return
     store_datei = _config_store_pfad(cfg)
@@ -619,7 +622,7 @@ def _migration_takt_wartezeit_innen(cfg):
     with _cfg_lock:
         store = _lade_config_store(cfg)
         if not store and os.path.exists(store_datei):
-            _log.warning("poll interval / clip delay migration skipped: config store exists but reads "
+            _log.warning("poll interval migration skipped: config store exists but reads "
                          "empty/unreadable — not touching it (no marker; retried next start)")
             return
         for schluessel, alt in TAKT_WERK_ALT.items():
@@ -644,12 +647,12 @@ def _migration_takt_wartezeit_innen(cfg):
         from core import atomar as _at
         _at.json_schreiben(marke, info)
     except Exception as e:                                     # noqa: BLE001
-        _log.warning(f"poll interval / clip delay migration: marker not written ({type(e).__name__}: {e}) — "
+        _log.warning(f"poll interval migration: marker not written ({type(e).__name__}: {e}) — "
                      f"decision is retried next start")
 
 
 def _migration_takt_wartezeit_melden(cfg, info):
-    """Schreibt Audit-Zeile und INFO-Zeile einer vollzogenen Umstellung von Abfragetakt und Clip-Wartezeit.
+    """Schreibt Audit-Zeile und INFO-Zeile einer vollzogenen Umstellung des Abfragetakts.
     -> None; ein Fehler beim Audit wird als ERROR gemeldet, die Werte stehen dann trotzdem."""
     aenderungen = info["nachher"]
     vorher = {k: info["vorher"][k] for k in aenderungen}
@@ -659,16 +662,16 @@ def _migration_takt_wartezeit_melden(cfg, info):
         os.makedirs(os.path.dirname(audit), exist_ok=True)
         with open(audit, "a") as f:
             f.write(json.dumps({"ts": info["ts"], "aenderungen": aenderungen,
-                                "auto": "one-time migration of poll_interval and clip_delay to the new factory "
-                                        "values, change them any time",
+                                "auto": "one-time migration of poll_interval to the new factory value, "
+                                        "change it any time",
                                 "vorher": vorher}, ensure_ascii=False) + "\n")
             f.flush()
     except Exception as e:                                     # noqa: BLE001
-        _log.error(f"poll interval / clip delay migration: audit line not written ({type(e).__name__}: {e}) — "
+        _log.error(f"poll interval migration: audit line not written ({type(e).__name__}: {e}) — "
                    f"values are in place")
     was = ", ".join(f"{k} {vorher[k]} -> {v} s" for k, v in sorted(aenderungen.items()))
-    _log.info(f"poll interval / clip delay changed ONCE for this install: {was} (old factory values found). "
-              f"Change them in Settings (Expert) any time — they will never be migrated again "
+    _log.info(f"poll interval changed ONCE for this install: {was} (old factory value found). "
+              f"Change it in Settings (Expert) any time — it will never be migrated again "
               f"(marker state/{TAKT_MIGRATION_MARKE})")
 
 
@@ -1561,9 +1564,11 @@ def load_config(path):
     # Eigentuemer 25.10.2026 17:56:43): die Werte der Seite „Unbekannte“ stehen EINMAL in core.registry.BENENNEN_WERK.
     from core.registry import BENENNEN_WERK as _bw          # noqa: PLC0415
     # Bauplan analysen/bauplan_abfragetakt_wartezeit.md, Stufe TW1 Punkt 2 (ED004, freigegeben fuer diese zwei
-    # Schluessel): Werkswerte aus TAKT_WERK_NEU, die alten Werte stellt _migration_takt_wartezeit einmal um.
-    for key, default in [("poll_interval", TAKT_WERK_NEU["poll_interval"]),
-                         ("clip_delay", TAKT_WERK_NEU["clip_delay"]), ("fps_sample", 3),
+    # Schluessel): Werkswert aus TAKT_WERK_NEU, den alten Wert stellt _migration_takt_wartezeit einmal um.
+    # Bauplan analysen/bauplan_clip_vollstaendig.md, Stufe CV1 Punkt 7 (ED004, freigegeben fuer diese Stufe,
+    # Eigentuemer 16.11.2026 13:57:25): clip_delay hat keinen Werkswert mehr, Service._clip_delay_entfernt nimmt ihn aus
+    # cfg und einmal aus dem Speicher.
+    for key, default in [("poll_interval", TAKT_WERK_NEU["poll_interval"]), ("fps_sample", 3),
                          # .540 K-DECKEL. GEMESSEN, nicht geraten: 240 liegt ueber
                          # dem P95 beider Bestaende (Prod 9659 Ereignisse gemessen:
                          # P95 201 · Feld 50068 abgeleitet: P95 211). Herleitung,
@@ -1894,6 +1899,8 @@ def load_config(path):
                          ("vorlauf_max", VORLAUF_MAX_WERK),
                          ("vorlauf_parallel", VORLAUF_PARALLEL_WERK),
                          ("vorlauf_timeout_s", VORLAUF_TIMEOUT_WERK),
+                         # Bauplan Clip vollstaendig CV1 Punkt 1: der Deckel der Aufnahme-Pruefung vor dem Abruf.
+                         ("clip_aufnahme_deckel_s", CLIP_AUFNAHME_DECKEL_WERK),
                          # .534 (B8): eigener Platz fuer Hintergrund-Jobs.
                          # 0 = Verhalten der .533 (sie sitzen auf den
                          # Analyse-Plaetzen).
@@ -2338,8 +2345,8 @@ def load_config(path):
     # und ihr Schluessel wird EINMAL geraeumt, mit Audit-Zeile und altem Wert.
     _migration_0536(cfg)
     # Bauplan analysen/bauplan_abfragetakt_wartezeit.md, Stufe TW1 Punkt 5: dieselbe Bauform, derselbe Ort —
-    # Abfragetakt und Clip-Wartezeit werden EINMAL von den alten auf die neuen Werkswerte gestellt, wo der alte
-    # gilt; vor der Klemmung darunter, damit beide Werte ihre Spanne sehen.
+    # der Abfragetakt wird EINMAL vom alten auf den neuen Werkswert gestellt, wo der alte gilt; vor der Klemmung
+    # darunter, damit der Wert seine Spanne sieht.
     _migration_takt_wartezeit(cfg)
     # .374 (User-Entscheid 30.08., Fund am Q4-Umbau des Gates): ein Altwert
     # ausserhalb der Whitelist-Spanne (gemessen: lookback_h: 100 aus einer
@@ -7434,6 +7441,18 @@ VORLAUF_MAX_GRENZE = 500
 VORLAUF_TIMEOUT_WERK = 60
 VORLAUF_TIMEOUT_KLEIN = 10
 VORLAUF_TIMEOUT_GROSS = 300
+# Bauplan analysen/bauplan_clip_vollstaendig.md, Stufe CV1 Punkt 1, Entscheid 1 (Eigentuemer 16.11.2026 12:46:15): so
+# viele Sekunden ab dem Einreihen wartet der Disponent hoechstens, bis Frigate die Aufnahme bis zum Ereignisende
+# eingetragen hat (`clip_aufnahme_deckel_s`), Werkswert und Grenzen. Eine Obergrenze, kein fester Aufschub: geholt
+# wird, sobald Frigate das Segment mit dem Ereignisende meldet.
+CLIP_AUFNAHME_DECKEL_WERK = 20
+CLIP_AUFNAHME_DECKEL_KLEIN = 5
+CLIP_AUFNAHME_DECKEL_GROSS = 120
+# CV1 Punkte 3, 5 und 6: die Vermerke im Datensatz unter `aufnahme` (geholt, ohne dass Frigate die Aufnahme bis zum
+# Ereignisende bestaetigt hat) und die Ergebnisse der Pruefung vor dem Abruf.
+AUFNAHME_DECKEL = "deckel"
+AUFNAHME_ABFRAGE_FEHLER = "abfrage_fehler"
+AUFNAHME_HOLEN, AUFNAHME_WARTEN = "holen", "warten"
 # Wie lange eine Antwort von Frigate zu einem Ereignis gilt, bevor erneut gefragt wird: bei einem noch offenen
 # Ereignis und nach einem Abfragefehler (ausser 404). KEIN Budget: ein Ereignis, das Frigate noch nicht abgeschlossen
 # hat, wird durch haeufigeres Fragen nicht schneller fertig — und der Disponent, der Frigate schonen soll, darf es nicht
@@ -7545,6 +7564,17 @@ class Vorlauf:
         self.selbstabruf_phasen = 0
         self.selbstabrufe = 0
         self.phase_letzte = None
+        # Bauplan analysen/bauplan_clip_vollstaendig.md, Stufe CV1: die Einreihzeit (drittes Feld des Schlangen-
+        # Eintrags) je faelligem Ereignis der laufenden Runde (Punkt 2) und der Beginn der Runde auf der Wanduhr
+        # (Punkt 4); die Zaehler der Aufnahme-Pruefung seit Start und der Rueckfall (Punkt 6, Entscheide 3 und 4).
+        self._einreihzeiten = {}
+        self._runde_beginn = 0.0
+        self.aufnahme_abfragen = 0
+        self.aufnahme_deckel = 0
+        self.aufnahme_rueckfall = False
+        self.aufnahme_fehler = 0
+        self.aufnahme_letzter_fehler = None
+        self._aufnahme_gemeldet = set()
 
     # ----------------------------------------------------------- Einstellungen
     def _z(self, name, werk, klein, gross):
@@ -7608,6 +7638,11 @@ class Vorlauf:
             selbst = {"selbstabruf_phasen": self.selbstabruf_phasen, "selbstabrufe": self.selbstabrufe,
                       "phase_seit": self._phase["seit"] if self._phase else None,
                       "phase_letzte": dict(self.phase_letzte) if self.phase_letzte else None}
+            # Bauplan Clip vollstaendig CV1 Punkt 6: Abfragen seit Start, Abrufe mit Vermerk (Deckel oder Rueckfall),
+            # der Rueckfall (Frigate beantwortet die Segment-Abfrage nicht), gescheiterte Abfragen, der letzte Fehler
+            aufnahme = {"abfragen": self.aufnahme_abfragen, "deckel": self.aufnahme_deckel,
+                        "rueckfall": bool(self.aufnahme_rueckfall), "fehler": self.aufnahme_fehler,
+                        "letzter_fehler": self.aufnahme_letzter_fehler}
         # `an` ist immer wahr: der Disponent laeuft auch bei Vorrat aus (dann holt er fuer die Analyseplaetze).
         return {"abruf": abruf, "an": True, "ziel": self.ziel, "bereit": self.bereit, "min": tief,
                 "max": hoch, "laedt": laedt, "parallel": par,
@@ -7621,7 +7656,7 @@ class Vorlauf:
                 # Punkt 9: Zustandszahlen je Stufe (neu = wartet auf Metadaten), Versuche, Metadatenfehler, Faden.
                 "stufen": stufen, "versuche": self.versuche, "metadaten_fehler": self.meta_fehler,
                 "faden_lebt": self._t.is_alive() if self._t is not None else None,
-                "faden_grund": self.faden_grund, **selbst}
+                "faden_grund": self.faden_grund, "aufnahme": aufnahme, **selbst}
 
     # ----------------------------------------------------------- Lebenszyklus
     def start(self):
@@ -7681,24 +7716,28 @@ class Vorlauf:
         return frigate_schoner.gesperrt() or (
             getattr(self.svc, "frigate_fehlerserie", 0) >= max(1, int(frigate_schoner.schwelle)))
 
-    def _warteschlange(self, halt=None):
+    def _warteschlange(self, halt=None, merken=False):
         """Die faelligen eids in der Reihenfolge der Zuteilung (gewichtete Runde ab dem heutigen Rundenstand, in der
         Stufe das neueste) und mit der Ausfall-Regel des Abholers (waehrend Frigate unten ist, nur Eingespieltes).
-        -> Liste der eids"""
+        Mit `merken` (die Runde in `_takt`) haelt sie die Einreihzeit jedes faelligen Eintrags fuer `_fenster` und
+        `_holen` fest (Bauplan Clip vollstaendig CV1 Punkt 2). -> Liste der eids"""
         q = getattr(self.svc, "_ev_q", None)
         if q is None:
             return []
-        # .534 (Pruefbericht H-3): NUR FAELLIGE Eintraege — ein Ereignis, dessen `clip_delay` noch laeuft, ist bei
-        # Frigate oft noch gar nicht fertig.
+        # .534 (Pruefbericht H-3), seit CV1: NUR FAELLIGE Eintraege — ein Ereignis, das der Disponent zurueckgestellt
+        # hat, weil Frigate die Aufnahme noch nicht bis zum Ereignisende eingetragen hat, wartet ausserhalb des Fensters.
         halt = self._frigate_halt() if halt is None else halt
         jetzt = time.time()
-        je_stufe = {}
+        je_stufe, einreihzeiten = {}, {}
         with self._wecker():
             daten = self.svc._ev_daten() if hasattr(self.svc, "_ev_daten") else {}
             for f, e, *_r in reversed(list(q)):
                 if (not f or f <= jetzt) and (not halt or _einspiel.ist_einspiel(e)):
                     je_stufe.setdefault((daten.get(e) or {}).get("stufe", _reg.PRIO_WERK), []).append(e)
+                    einreihzeiten[e] = _r[0] if _r else None
             runde = dict(getattr(self.svc, "_ev_runde", None) or {})
+        if merken:
+            self._einreihzeiten = einreihzeiten
         return dispatch_order(je_stufe, runde)
 
     # ------------------------------------------------------------------ Einordnung
@@ -7730,6 +7769,10 @@ class Vorlauf:
                                f"event metadata not available, asked again in {VORLAUF_OFFEN_TAKT_S:g} s")
             return False
         zeiten = {"asked_at": jetzt, "end_time": ev.get("end_time"), "start_time": ev.get("start_time")}
+        if ev.get("camera") and not self._info(eid).get("kamera"):
+            # Bauplan Clip vollstaendig CV1 Punkt 3: die Segment-Abfrage vor dem Abruf braucht die Kamera; fehlt sie
+            # im Datensatz (Einreihweg ohne Kamera), kommt sie aus dieser Antwort.
+            zeiten["kamera"] = ev["camera"]
         if not ev.get("end_time"):
             abgelaufen = open_deadline(cfg, ev)[2]
             self._setzen(eid, True, state=DISPATCH_NO_CLIP if abgelaufen else DISPATCH_OPEN,
@@ -7816,8 +7859,104 @@ class Vorlauf:
         self.svc.log.debug(f"vorlauf: {eid} not fetched ({self.letzter_fehler}), attempt {n} of "
                            f"{DISPATCH_ATTEMPTS_MAX}")
 
+    # ------------------------------------------------------------------ Aufnahme (Bauplan Clip vollstaendig CV1)
+    def _deckel_s(self):
+        """Der Deckel der Aufnahme-Pruefung aus der Config, geklemmt (CV1 Punkt 1). -> int Sekunden"""
+        return self._z("clip_aufnahme_deckel_s", CLIP_AUFNAHME_DECKEL_WERK, CLIP_AUFNAHME_DECKEL_KLEIN,
+                       CLIP_AUFNAHME_DECKEL_GROSS)
+
+    def _aufnahme_pruefen(self, eid, info, eingereiht):
+        """Fragt Frigate vor dem Abruf, ob ein Segment zur Endzeit des Ereignisses eingetragen ist (CV1 Punkt 3 und 6).
+        -> (AUFNAHME_HOLEN, None oder Vermerk AUFNAHME_DECKEL / AUFNAHME_ABFRAGE_FEHLER) oder (AUFNAHME_WARTEN, bis als
+        Wanduhrzeit, None heisst die naechste Runde)"""
+        if _einspiel.ist_einspiel(eid):
+            return AUFNAHME_HOLEN, None                 # ein eingespieltes Ereignis hat kein Frigate
+        abgelaufen = self._deckel_abgelaufen(eingereiht)
+        if info.get("aufnahme") == AUFNAHME_ABFRAGE_FEHLER and abgelaufen:
+            return AUFNAHME_HOLEN, AUFNAHME_ABFRAGE_FEHLER   # Rueckfall: nach dem Deckel ohne weitere Abfrage
+        kamera = urllib.parse.quote(str(info.get("kamera") or ""), safe="")
+        ende = info.get("end_time")
+        with self._mutex:
+            self.aufnahme_abfragen += 1               # Entscheid 4: jede Abfrage, auch die gescheiterte
+        try:
+            # Frigate beantwortet das mit allen Segmenten, die ende einschliessen (end_time >= after, start_time <=
+            # before); eine leere Liste heisst: das Segment mit dem Ereignisende ist noch nicht eingetragen.
+            antwort = api(self.svc.cfg, f"/api/{kamera}/recordings?after={ende}&before={ende}")
+            if not isinstance(antwort, list):
+                raise ValueError(f"the recordings answer is not a list ({type(antwort).__name__})")
+        except Exception as e:                            # noqa: BLE001
+            self._aufnahme_gescheitert(e)
+            if abgelaufen:
+                return AUFNAHME_HOLEN, AUFNAHME_ABFRAGE_FEHLER
+            self._setzen(eid, aufnahme=AUFNAHME_ABFRAGE_FEHLER)
+            return AUFNAHME_WARTEN, float(eingereiht) + self._deckel_s()
+        self._aufnahme_gelungen()
+        if antwort:
+            if hasattr(self.svc, "_ev_wecker"):
+                with self.svc._ev_wecker:
+                    (self.svc._ev_daten().get(eid) or {}).pop("aufnahme", None)
+            return AUFNAHME_HOLEN, None
+        if abgelaufen:
+            return AUFNAHME_HOLEN, AUFNAHME_DECKEL
+        return AUFNAHME_WARTEN, None
+
+    def _aufnahme_gescheitert(self, e):
+        """Eine Segment-Abfrage scheiterte (CV1 Punkt 6): zaehlen, Rueckfall setzen, je Fehlerart einer Rueckfall-Phase
+        eine WARNING, danach nur gezaehlt (Muster `_fehler_gemeldet`). -> None"""
+        art = type(e).__name__ + (f" {e.code}" if getattr(e, "code", None) else "")
+        with self._mutex:
+            self.aufnahme_fehler += 1
+            self.aufnahme_letzter_fehler = f"{art}: {str(e)[:200]}"
+            self.aufnahme_rueckfall = True
+            erste = art not in self._aufnahme_gemeldet
+            self._aufnahme_gemeldet.add(art)
+            text = self.aufnahme_letzter_fehler
+        if erste:
+            self.svc.log.warning(f"vorlauf: Frigate did not answer whether the recording reaches the event end "
+                                 f"({text}) — events now wait up to clip_aufnahme_deckel_s ({self._deckel_s()} s) "
+                                 f"after they were queued and are then fetched unchecked; /health ok is red until a "
+                                 f"query succeeds again; further errors of this kind are counted, not logged")
+
+    def _aufnahme_gelungen(self):
+        """Eine Segment-Abfrage gelang (CV1 Punkt 6): ein laufender Rueckfall endet mit einer INFO-Zeile. -> None"""
+        with self._mutex:
+            war = self.aufnahme_rueckfall
+            self.aufnahme_rueckfall = False
+            if war:
+                self._aufnahme_gemeldet.clear()
+            n = self.aufnahme_fehler
+        if war:
+            self.svc.log.info(f"vorlauf: Frigate answers the recordings query again ({n} failed queries since the "
+                              f"start) — clips are fetched as soon as the recording reaches the event end")
+
+    def _aufnahme_vermerken(self, eid, info, vermerk):
+        """Ein Abruf ohne Bestaetigung der Aufnahme (CV1 Punkt 5): Vermerk im Datensatz unter `aufnahme`, Zaehler
+        `deckel`, eine WARNING je Ereignis. -> None"""
+        self._setzen(eid, aufnahme=vermerk)
+        with self._mutex:
+            self.aufnahme_deckel += 1
+        grund = ("Frigate did not answer whether it does" if vermerk == AUFNAHME_ABFRAGE_FEHLER
+                 else "it still does not")
+        self.svc.log.warning(f"vorlauf: {eid} ({info.get('kamera')}): the recording may not reach the event end — "
+                             f"{grund} {self._deckel_s()} s after the event was queued (clip_aufnahme_deckel_s); "
+                             f"fetching what is there, the record notes aufnahme_unbestaetigt={vermerk}")
+
+    def _zurueckstellen(self, eid, bis):
+        """Setzt nur die Faelligkeit (erstes Feld) des Schlangen-Eintrags von eid auf `bis` (CV1 Punkt 4); Kennung,
+        Einreihzeit und Position bleiben. -> True, wenn der Eintrag gefunden wurde"""
+        q = getattr(self.svc, "_ev_q", None)
+        if q is None:
+            return False
+        with self._wecker():
+            for k, (_f, e, *rest) in enumerate(q):
+                if e == eid:
+                    q[k] = (bis, e, *rest)
+                    return True
+        return False
+
     def _holen(self, eid):
-        """EIN Clip in den Cache, mit Frist und benanntem Pin (Punkt 3, 5). Laeuft in einem eigenen kurzen Faden.
+        """EIN Clip in den Cache, mit Frist und benanntem Pin (Punkt 3, 5); vorher die Pruefung der Aufnahme (Bauplan
+        Clip vollstaendig CV1 Punkt 4). Laeuft in einem eigenen kurzen Faden.
         -> None"""
         cfg = self.svc.cfg
         dd = cfg["data_dir"]
@@ -7825,10 +7964,20 @@ class Vorlauf:
         alter = (_clip_alter_min(info.get("end_time"), info.get("start_time"))
                  if info.get("end_time") or info.get("start_time") else None)
         frist, erzeugung = job_deadline(cfg, clip_age_min=alter)
-        with self._mutex:
-            self.versuche += 1
         t0 = time.monotonic()
         try:
+            # CV1 Punkt 4: die Pruefung liegt im Schutz des `finally` (nur dort wird `_laeuft` frei). „warten“ stellt
+            # den Eintrag zurueck: der Zustand bleibt holen, kein Versuch zaehlt, kein Pin, nichts geholt.
+            aktion, wert = self._aufnahme_pruefen(eid, info, self._einreihzeiten.get(eid))
+            if aktion == AUFNAHME_WARTEN:
+                bis = wert if wert is not None else self._runde_beginn + VORLAUF_TAKT_S
+                if not self._zurueckstellen(eid, bis):
+                    self.svc.log.debug(f"vorlauf: {eid} left the queue while its recording was checked")
+                return
+            if wert is not None:
+                self._aufnahme_vermerken(eid, info, wert)
+            with self._mutex:
+                self.versuche += 1
             _frames.pin_named(eid, DISPATCHER_PIN, dd)      # vor dem Abruf (Punkt 5)
             _frames.clip_holen(
                 eid, data_dir=dd, frigate_url=cfg.get("frigate_url") or "", quelle="vorlauf", alter_min=alter,
@@ -7969,6 +8118,9 @@ class Vorlauf:
     def _takt(self):
         """Eine Runde des Disponenten: Pins uebernehmen (erste Runde), Ziel, Einordnung und Fenster, Zielverlust,
         Auffrischen, Vorrat mit Hysterese (NZ1), Abrufe starten. -> None"""
+        # Bauplan Clip vollstaendig CV1 Punkt 4: ein Ereignis, dessen Aufnahme noch nicht reicht, wird bis zum Beginn
+        # dieser Runde plus VORLAUF_TAKT_S zurueckgestellt und ist damit in der naechsten regulaeren Runde faellig.
+        self._runde_beginn = time.time()
         tief, hoch, par = self._zahlen()
         # Bauplan VL1 Punkt 2: das Ende einer offenen Phase „Vorrat haelt nicht Schritt" VOR jeder fruehen Rueckgabe
         # pruefen; ohne offene Phase kehrt die Pruefung sofort zurueck
@@ -7990,7 +8142,7 @@ class Vorlauf:
         # geholt, was gleich gebraucht wird, nie gar nichts.
         knapp = not hoch or voll
         self.ziel = self._straenge() if knapp else hoch
-        fenster = self._fenster(self._warteschlange(halt), self.ziel)
+        fenster = self._fenster(self._warteschlange(halt, merken=True), self.ziel)
         self._ziel_verlust(fenster, halt)
         self._auffrischen()
         self._vorgefunden(fenster)
@@ -8056,12 +8208,27 @@ class Vorlauf:
             if info.get("state", DISPATCH_NEW) in (DISPATCH_NEW, DISPATCH_OPEN):
                 gefragt = info.get("asked_at")
                 if ((fragen or _einspiel.ist_einspiel(eid))
-                        and (gefragt is None or time.monotonic() - gefragt >= VORLAUF_OFFEN_TAKT_S)):
+                        and (gefragt is None or time.monotonic() - gefragt >= self._offen_takt(eid, info))):
                     fragen = self._einordnen(eid) and fragen
                     info = self._info(eid)
             if info.get("state") in (DISPATCH_FETCH, DISPATCH_READY):
                 fenster.append(eid)
         return fenster
+
+    def _offen_takt(self, eid, info):
+        """Nach wie vielen Sekunden seit der letzten Abfrage ein neues oder offenes Ereignis wieder gefragt wird
+        (Bauplan Clip vollstaendig CV1 Punkt 9). -> VORLAUF_TAKT_S fuer ein offenes Ereignis, solange der Deckel ab
+        dem Einreihen laeuft (die Endmeldung kann vor Frigates Datenbank kommen), sonst VORLAUF_OFFEN_TAKT_S"""
+        if info.get("state") == DISPATCH_OPEN and not self._deckel_abgelaufen(self._einreihzeiten.get(eid)):
+            return VORLAUF_TAKT_S
+        return VORLAUF_OFFEN_TAKT_S
+
+    def _deckel_abgelaufen(self, eingereiht):
+        """Hat die eigene Uhr die Einreihzeit plus `clip_aufnahme_deckel_s` erreicht (CV1 Punkt 3)? Frigates Zeiten
+        gehen nicht ein. -> bool; ohne Einreihzeit True (es gibt nichts, worauf noch zu warten waere)"""
+        if eingereiht is None:
+            return True
+        return time.time() >= float(eingereiht) + self._deckel_s()
 
     def _ziel_verlust(self, fenster, halt):
         """Punkt 5: faellt ein faelliges Ereignis der Schlange aus dem Ziel, wird sein Pin geloest und es ist wieder
@@ -8406,6 +8573,9 @@ class Service:
         # Umgebung: als Modul-Vorgabe ersetzte er einen fehlenden Deckel und
         # hebelte die Schutzregel fuer Erzeugung ohne Deckel aus (core/frames).
         self._clip_vod_einmal_aus()
+        # Bauplan analysen/bauplan_clip_vollstaendig.md, Stufe CV1 Punkt 7: clip_delay ist entfernt; aus cfg bei jedem
+        # Start, aus dem Speicher einmal mit Meldung.
+        self._clip_delay_entfernt()
         _frames.CLIP_VOD = _frames.vod_an(cfg.get("clip_vod"))
         os.environ["SUSLIK_CLIP_VOD"] = "1" if _frames.CLIP_VOD else "0"
         if cfg.get("cpu_threads"):
@@ -10294,8 +10464,9 @@ class Service:
         (kein Deckel, keine Reihenfolge — CPython-Locks sind nicht FIFO).
         Jetzt: ein Abarbeiter je Platz, „last in, first out" nach
         Einreihposition (Bauplan analysen/bauplan_neueste_zuerst.md, Stufe LZ1:
-        das zuletzt eingereihte FAELLIGE Element zuerst, Faelligkeit = clip_delay
-        ab Event-Ende; bis 0.1.1.032 FIFO), Deckel EV_QUEUE_MAX (seit B2 wird bei voller Schlange das
+        das zuletzt eingereihte FAELLIGE Element zuerst; eingereiht wird immer
+        faellig, nicht faellig ist nur ein Eintrag, den der Disponent zurueckgestellt
+        hat, Bauplan analysen/bauplan_clip_vollstaendig.md CV1; bis 0.1.1.032 FIFO), Deckel EV_QUEUE_MAX (seit B2 wird bei voller Schlange das
         NEUE abgewiesen statt das aelteste verdraengt — s. `event_einreihen`;
         das Nachhol-Netz holt Abgewiesene spaeter nach, jenseits des
         lookback-Fensters haelt sie der Merkzettel), Laenge und Alter sichtbar
@@ -10321,11 +10492,11 @@ class Service:
                     # (Bauplan analysen/bauplan_neueste_zuerst.md) von hinten: das
                     # ZULETZT EINGEREIHTE FAELLIGE Element, nicht blind das Ende.
                     # Die Suche laeuft vom Ende zum Kopf und nimmt den ersten
-                    # faelligen Treffer; ein Eintrag mit noch offener
-                    # clip_delay-Faelligkeit wird uebersprungen und haelt die
-                    # faelligen vor ihm nicht auf (bis .504 warteten alle Abholer
-                    # auf `_ev_q[0]`, und ein unfaelliger Kopf hielt jeden
-                    # `sofort`-Eintrag bis zu einem vollen clip_delay auf). Gleiche
+                    # faelligen Treffer; ein Eintrag, den der Disponent bis zum
+                    # naechsten Blick auf Frigates Aufnahme zurueckgestellt hat
+                    # (CV1), wird uebersprungen und haelt die faelligen vor ihm
+                    # nicht auf (bis .504 warteten alle Abholer auf `_ev_q[0]`,
+                    # und ein unfaelliger Kopf hielt alle dahinter auf). Gleiche
                     # Regel im Vorlader (`Vorlauf._warteschlange`). Die Suche ist
                     # linear und laeuft unter `_ev_wecker`: bei EV_QUEUE_MAX = 5000
                     # sind das im schlimmsten Fall 5000 Zahlenvergleiche, also
@@ -10622,10 +10793,10 @@ class Service:
     # cfg, und ein Deckel, den man erst mit Config kennt, waere dort blind.
     EV_QUEUE_MAX = 5000
 
-    def event_einreihen(self, eid, sofort=False, marke=None, kamera=None):
-        """Ein Event faellig in clip_delay Sekunden einreihen (Dedup je eid,
-        Deckel mit lautem Verwerfen). Ohne gestartete Queue (Alt-Tests)
-        Rueckfall auf den alten Timer-Weg.
+    def event_einreihen(self, eid, marke=None, kamera=None):
+        """Ein Event sofort faellig einreihen (Dedup je eid, Deckel mit lautem
+        Verwerfen). Ohne gestartete Queue (Alt-Tests) Rueckfall auf den alten
+        Timer-Weg, ebenfalls ohne Wartezeit.
 
         `kamera` (Bauplan Disponent D1 Punkt 3 und 7): mit der Aufnahme entsteht
         der Datensatz `_ev_info[eid]` mit Kamera, Stufe (aus dem Kamera-Blatt,
@@ -10652,11 +10823,14 @@ class Service:
         Wiederholen also erneut unter den Live-only-Uebersprung — dann aber
         mit der ehrlichen Akte-Zeile `uebersprungen/live_only`, nicht still.
 
-        `sofort=True` setzt die Faelligkeit auf JETZT. Das nimmt, wer den
-        clip_delay schon geprueft hat: der Sweep (seine todo-Liste filtert auf
-        `time.time() - end_time >= clip_delay`, B1) und der Platzwaechter (eine
-        tote Analyse hat ihr clip_delay laengst hinter sich). Ohne das kostete
-        jedes eingereihte Sweep-Ereignis den vollen clip_delay ein zweites Mal.
+        Faelligkeit (Bauplan analysen/bauplan_clip_vollstaendig.md, Stufe CV1
+        Punkt 8, ED011 freigegeben fuer diese Stufe): jeder Eintrag ist ab dem
+        Einreihen faellig, eine feste Wartezeit (`clip_delay`, Parameter
+        `sofort`) gibt es nicht mehr. Ob Frigate die Aufnahme bis zum
+        Ereignisende eingetragen hat, fragt der Disponent vor dem Abruf; bis
+        dahin stellt er den Eintrag selbst zurueck (`Vorlauf._zurueckstellen`),
+        er liegt dabei weiter in dieser Schlange. Das dritte Feld des Eintrags
+        (Einreihzeit) ist der Beginn seines Deckels.
 
         -> True = liegt jetzt in der Warteschlange, False = nicht eingereiht
         (schon vermerkt, oder die Schlange ist voll). Der Sweep nimmt nur die
@@ -10693,8 +10867,7 @@ class Service:
             # Einreih-Zeitpunkt durch. Ohne ihn stand im Zeitprotokoll jeder ueber
             # diesen Weg gestarteten Analyse `warte n/a` — und wer den
             # Einspiel-Weg zum MESSEN nutzt, bekam die Spalte nie.
-            threading.Timer(0 if sofort else self.cfg["clip_delay"],
-                            self.process_safe, args=(eid,),
+            threading.Timer(0, self.process_safe, args=(eid,),
                             kwargs={"marke": marke,
                                     "einge_ts": time.time()}).start()
             return True
@@ -10713,9 +10886,7 @@ class Service:
             if marke:
                 self._ev_marken[eid] = marke
             _jetzt = time.time()
-            self._ev_q.append((_jetzt if sofort
-                               else _jetzt + float(self.cfg["clip_delay"]),
-                               eid, _jetzt))
+            self._ev_q.append((_jetzt, eid, _jetzt))
             self._ev_wecker.notify()
             return True
 
@@ -10867,6 +11038,21 @@ class Service:
         oder None (nicht gestartet: Proben, --once, die Startsekunden)"""
         t = getattr(getattr(self, "_vorlauf_obj", None), "_t", None)
         return t.is_alive() if t is not None else None
+
+    def _disponent_aufnahme_rueckfall(self):
+        """Beantwortet Frigate die Segment-Abfrage des Disponenten gerade nicht (Bauplan Clip vollstaendig CV1 Punkt 6,
+        Entscheid 3, ED008)? -> bool; vom ersten Fehlschlag bis zur naechsten gelungenen Abfrage True, ohne Disponent
+        False"""
+        return bool(getattr(getattr(self, "_vorlauf_obj", None), "aufnahme_rueckfall", False))
+
+    def _dispatch_aufnahme(self, eid):
+        """Der Vermerk `aufnahme` im Datensatz von eid (Bauplan Clip vollstaendig CV1 Punkt 5, Weg wie
+        `_dispatch_failure`). -> AUFNAHME_DECKEL, AUFNAHME_ABFRAGE_FEHLER oder None (bestaetigt, kein Datensatz)"""
+        if not hasattr(self, "_ev_wecker"):
+            return None
+        with self._ev_wecker:
+            wert = (self._ev_daten().get(eid) or {}).get("aufnahme")
+        return wert if wert in (AUFNAHME_DECKEL, AUFNAHME_ABFRAGE_FEHLER) else None
 
     def _ev_eigen(self, eid, kennung):
         """Ist `kennung` noch die Besitzkennung im Datensatz von eid (D1 Punkt 4)? Nur unter `_ev_wecker`.
@@ -11132,15 +11318,8 @@ class Service:
                              f"already queued — no second queue entry (previous "
                              f"results were set aside, it will be computed fresh)")
                     return None
-        # `sofort=True` (E5/N1, 05.09.2026, Widerleger B1 B-2): eine
-        # Support-Einspielung meint ALTE Ereignisse, deren Clip laengst bei
-        # Frigate liegt — `clip_delay` waere hier reine Latenz. Schlimmer noch:
-        # bis .505 stand ein solcher, noch nicht faelliger Kopf VOR allen
-        # Abholern (gemessen 15,00 s Stillstand fuer 4 Abholer bei 20 faelligen
-        # Ereignissen). C2-T0 hat den Kopf-Riegel entschaerft, die unnoetige
-        # Frist selbst gehoert trotzdem weg.
         # D1 Punkt 3: die Kamera reist mit (Stufe und Grenze je Stufe).
-        if self.event_einreihen(eid, sofort=True, marke=marke, kamera=kamera):
+        if self.event_einreihen(eid, marke=marke, kamera=kamera):
             return True
         self.log.warning(f"{eid}: re-analysis could NOT be queued — the event queue is "
                  f"at its limit for this event's priority ({self.EV_QUEUE_MAX} per "
@@ -12190,15 +12369,13 @@ class Service:
             # RLock: `event_einreihen` nimmt dieselbe Klammer darin noch einmal.
             # Der Datensatz besteht (die Kennung legt ihn notfalls an), also ist
             # die eid dort nicht neu: keine Stufengrenze, keine Abweisung.
-            # `sofort=True`: eine tote Analyse hat ihr clip_delay laengst hinter
-            # sich, ein zweites Warten waere reine Verzoegerung.
             if hasattr(self, "_ev_wecker"):
                 with self._ev_wecker:
                     self._ev_kennung_neu(eid)
                     self._ev_gesehen.discard(eid)
-                    _wieder = self.event_einreihen(eid, sofort=True)
+                    _wieder = self.event_einreihen(eid)
             else:
-                _wieder = self.event_einreihen(eid, sofort=True)
+                _wieder = self.event_einreihen(eid)
             # C3 (05.09.2026, B2-Bericht „Offene Punkte", Nachzug N1): den
             # Rueckgabewert PRUEFEN. Mit Warteschlange kann die Wiederaufnahme seit
             # D1 nicht mehr abgewiesen werden; ohne sie (Timer-Weg, Attrappen) bleibt
@@ -12527,11 +12704,18 @@ class Service:
                           f"with MQTT this value has no effect). Default {TAKT_WERK_NEU['poll_interval']}. A shorter "
                           f"interval picks up finished events sooner and asks Frigate more often. Applies from the "
                           f"next query on, no restart"),
-        "clip_delay": (int, 0, 120,
-                       f"seconds to wait before the clip is fetched, so Frigate can finish the recording: in poll "
-                       f"mode counted from the end of the event, with MQTT from the end message. Default "
-                       f"{TAKT_WERK_NEU['clip_delay']}. Raise it if clips often arrive incomplete or need a second "
-                       f"attempt. Applies to events queued after saving, no restart"),
+        # Bauplan analysen/bauplan_clip_vollstaendig.md, Stufe CV1 Punkt 1 und 7 (ED004, freigegeben fuer diese Stufe,
+        # Eigentuemer 16.11.2026 13:57:25): clip_delay ist entfernt, an seine Stelle tritt der Deckel; er wirkt ohne
+        # Neustart (_live_keys in config_schreiben), der Disponent liest ihn bei jeder Pruefung aus cfg.
+        "clip_aufnahme_deckel_s": (int, CLIP_AUFNAHME_DECKEL_KLEIN, CLIP_AUFNAHME_DECKEL_GROSS,
+                                   f"the longest time, in seconds from the moment an event is queued, that suslik "
+                                   f"waits until Frigate has recorded the event up to its end. This is an upper "
+                                   f"limit, not a fixed delay: before every clip fetch suslik asks Frigate whether "
+                                   f"the recording reaches the end of the event, and it fetches as soon as Frigate "
+                                   f"says so. If the limit is reached first, suslik fetches what is there and notes "
+                                   f"it in the log and in the record. Only if Frigate does not answer that question "
+                                   f"does every event wait the full time. Default {CLIP_AUFNAHME_DECKEL_WERK}. "
+                                   f"Applies from the next check on, no restart"),
         "clip_retention_d": (int, 1, 60, "how long downloaded clips are kept as a cache, in days. They are only a cache — suslik fetches a clip from Frigate again whenever it needs one, so a short time costs nothing except a second download. The cache exists because Frigate's clip generation can stall, which is worth avoiding for the last hours, not for the last week: measured on the development system, 1212 of 1542 cached clips were older than two days and none of them was ever read again"),
         "live_verworfen_speichern": (bool, None, None, "keep the pictures the live watchers threw away (no human in frame): off by default — they are pure diagnostics, the interface never shows them, and they were the single largest item under the data folder (61 GB in nine days on the development system). They are still counted, so you can see how often the pose gate rejected something. Turn on only while chasing a bug"),
         "clip_cache_max_gb": (int, 0, 500, "clip cache size cap in GB, oldest evicted first (age eviction stays). 0 = derive it from the disk (15 % of its size), which is the sensible default because disks differ wildly — a fixed cap larger than the disk can never take effect, and that is exactly how one installation filled up (issue #25). Set a number only if you want a fixed cap; keep it well below the size of the disk — a cap larger than the disk can never take effect, and the cache will fill the disk before it is reached (issue #25). suslik warns at startup if the two do not fit together"),
@@ -12884,13 +13068,14 @@ class Service:
         # Bauplan analysen/bauplan_aehnlich.md Entscheide 6, 11 und 17: die drei Grenzen der Regel „ähnlich zu P“ liest
         # der Verbraucher-Faden aus cfg (seine Wache sieht eine Aenderung binnen einer Minute); Namen aus der einen
         # Quelle core.registry.AEHNLICH_WERK.
-        # Bauplan analysen/bauplan_abfragetakt_wartezeit.md, Stufe TW1 Punkt 3: Abfragetakt und Clip-Wartezeit lesen
-        # poll_loop (vor jedem Schlaf), sweep (je Kandidat) und event_einreihen (je neuem Eintrag) aus cfg; ein
-        # laufender Schlaf und schon eingereihte Faelligkeiten bleiben. Namen aus TAKT_WERK_NEU.
+        # Bauplan analysen/bauplan_abfragetakt_wartezeit.md, Stufe TW1 Punkt 3: den Abfragetakt liest poll_loop vor
+        # jedem Schlaf aus cfg; ein laufender Schlaf bleibt. Namen aus TAKT_WERK_NEU.
         # Bauplan analysen/bauplan_benennen.md Stufe BN2 Punkt 4: die fuenf Werte der Seite „Unbekannte“ liest die Seite je
         # Aufruf aus cfg (core.unbekanntpool.benennen_werte); Namen aus core.registry.BENENNEN_WERK.
+        # Bauplan analysen/bauplan_clip_vollstaendig.md, Stufe CV1 Punkt 1: den Deckel der Aufnahme-Pruefung liest
+        # der Disponent bei jeder Pruefung aus cfg.
         _live_keys = {*LOG_SWITCH_KEYS, *_kk_ernte.ACHSE_GLOBAL.values(), *_reg.AEHNLICH_WERK, *TAKT_WERK_NEU,
-                      *_reg.BENENNEN_WERK}
+                      *_reg.BENENNEN_WERK, "clip_aufnahme_deckel_s"}
         if not geaendert and not _fa_geaendert:
             # .378: kein Wert weicht von der laufenden Config ab — ein Neustart
             # haette nichts zu laden. Wichtig fuer das Kalibrier-Uebernehmen
@@ -12991,6 +13176,54 @@ class Service:
         except Exception as e:                            # noqa: BLE001
             self.log.warning(f"clip_vod one-time switch-off: audit line not written "
                              f"({type(e).__name__}: {e}) — store and marker are in place, the switch-off stands")
+
+    # Bauplan analysen/bauplan_clip_vollstaendig.md, Stufe CV1 Punkt 7 (Eigentuemer 16.11.2026 12:16:25 „Ja,
+    # entfernen“): clip_delay hat keinen Leser mehr. Aus cfg faellt er bei JEDEM Start, denn eine unveraenderte yaml
+    # bringt ihn jedes Mal wieder mit (load_config), und die Wiederherstellung einer Sicherung uebernimmt unbekannte
+    # Schluessel. Gemeldet wird einmal: INFO mit dem alten Wert, Audit-Zeile, Marke im Speicher. Die Marke gilt nur fuer
+    # die Meldung, nicht fuer das Entfernen (anders als bei _clip_vod_einmal_aus, das bei gesetzter Marke sofort kehrt).
+    CLIP_DELAY_MARKE = "clip_delay_entfernt"
+
+    def _clip_delay_entfernt(self):
+        """Nimmt clip_delay aus der laufenden Config und einmal aus dem Konfig-Speicher, mit Meldung (CV1 Punkt 7).
+        -> None; ein leerer oder unlesbarer Speicher wird nicht angefasst (WARNING)"""
+        im_cfg = "clip_delay" in self.cfg
+        wert_cfg = self.cfg.pop("clip_delay", None)
+        p = _config_store_pfad(self.cfg)
+        with _cfg_lock:
+            store = _lade_config_store(self.cfg)
+            if not store and os.path.exists(p):
+                self.log.warning(f"clip_delay removal: config store {p} exists but reads empty/unreadable — not "
+                                 f"touching it (no marker; retried next start); clip_delay has no effect any more")
+                return
+            im_store = "clip_delay" in store
+            if not im_store and (not im_cfg or self.CLIP_DELAY_MARKE in store):
+                return                                    # nichts da oder schon gemeldet: still
+            vorher = store.pop("clip_delay") if im_store else wert_cfg
+            quelle = "Settings" if im_store else "the yaml file"
+            store[self.CLIP_DELAY_MARKE] = {"version": os.environ.get("SUSLIK_VERSION", "dev"),
+                                            "ts": round(time.time(), 1), "vorher": vorher}
+            try:
+                _store_schreiben(p, store)
+            except Exception as e:                        # noqa: BLE001
+                self.log.error(f"clip_delay removal: config store not written ({type(e).__name__}: {e}) — removed "
+                               f"from the running config only, no marker; the next start tries again")
+                return
+        self.log.info(f"clip_delay was removed by this version (previous value {vorher} s, from {quelle}): suslik "
+                      f"no longer waits a fixed time before it fetches a clip. It asks Frigate whether the recording "
+                      f"reaches the end of the event and fetches as soon as it does, at most clip_aufnahme_deckel_s "
+                      f"after the event was queued. A clip_delay line in the yaml file has no effect and can be "
+                      f"removed")
+        try:
+            with open(os.path.join(self.cfg["data_dir"], "config", "config_audit.jsonl"), "a") as f:
+                f.write(json.dumps({"ts": round(time.time(), 1), "aenderungen": {},
+                                    "auto": "clip_delay removed (replaced by the recording check before every clip "
+                                            "fetch, clip_aufnahme_deckel_s)",
+                                    "entfernt": {"clip_delay": vorher}}, ensure_ascii=False) + "\n")
+                f.flush()
+        except Exception as e:                            # noqa: BLE001
+            self.log.warning(f"clip_delay removal: audit line not written ({type(e).__name__}: {e}) — store and "
+                             f"marker are in place")
 
 
     # Modulumbau R3: Notifications-Settings (Store-Schreiber + Kanal-Tests) leben
@@ -23979,7 +24212,10 @@ class Service:
         (Bauplan analysen/bauplan_lesen_drei_dateien.md E5, D2 Punkt 7, ED008: Schreibfehler, kaputte Zeile, gescheiterter
         Nachtrag; der planmaessige Nachtrag ist nicht rot; Block `lesekopie`), und der Seitenspeicher von /heute und
         /anwesenheit ist nicht rot (Bauplan analysen/bauplan_render_cache.md RC1 Punkt 5, ED008: rot nach einem Fehler in
-        Nachsehen oder Ablegen bis zum naechsten gelungenen Aufruf; Block `render_cache`). -> bool
+        Nachsehen oder Ablegen bis zum naechsten gelungenen Aufruf; Block `render_cache`), und Frigate beantwortet die
+        Segment-Abfrage des Disponenten (Bauplan analysen/bauplan_clip_vollstaendig.md CV1 Punkt 6, Entscheid 3, ED008:
+        rot vom ersten Fehlschlag bis zur naechsten gelungenen Abfrage, auf einer ruhigen Anlage also bis zum naechsten
+        Ereignis; Block `vorlauf.aufnahme`). -> bool
         Bauplan Lebenszeichen LZ5: `worker` ist der schon geholte Zustand des Worker-Prozesses (geht an
         `_kompilat_stopp_grund`), `umzug` der schon gelesene Umzugsstand (`migration_state`) aus dem Dateiblock des
         Sammlers; ohne Angabe fragt und liest die Funktion selbst wie bisher."""
@@ -24009,7 +24245,8 @@ class Service:
                 and not self._frigate_mqtt_rot()
                 and not _aeh_ok.SPEICHER.rot()
                 and not _rc_ok.red()
-                and self._disponent_faden_lebt() is not False)
+                and self._disponent_faden_lebt() is not False
+                and not self._disponent_aufnahme_rueckfall())
 
     def stillstand_stand(self):
         """Der Grund `stillstand` des Stoerungswaechters (Feldbefunde Punkt 2), rein lesend.
@@ -24746,6 +24983,9 @@ class Service:
             # laeuft keine Analyse: der heutige Fehlerweg bucht `fehler` mit dem Verwurfgrund seiner letzten Ausnahme.
             _cache_only = kennung is not None and not nachhol
             _fail = self._dispatch_failure(eid) if _cache_only else None
+            # Bauplan analysen/bauplan_clip_vollstaendig.md CV1 Punkt 5: holte der Disponent ohne Bestaetigung der
+            # Aufnahme bis zum Ereignisende, steht der Grund in der Akte-Zeile (`aufnahme_unbestaetigt`).
+            _aufnahme = self._dispatch_aufnahme(eid) if _cache_only else None
             if _wk is not None and _fail is None:
                 _t_pz = time.time()
                 if _einspiel.ist_einspiel(eid):
@@ -25249,6 +25489,7 @@ class Service:
                 # Additiv + nur wenn Frigate es liefert (der Sweep wartet ohnehin auf
                 # end_time); Alt-Zeilen ohne das Feld behalten den dauer_s-Fallback.
                 **({"ende_ts": float(ev["end_time"])} if ev.get("end_time") else {}),
+                **({"aufnahme_unbestaetigt": _aufnahme} if _aufnahme else {}),   # CV1 Punkt 5
                 **({"nachhol": nachhol} if nachhol else {}),   # nur auf Retry-Zeilen
             }
             # STUMM bei Nachhol: die Drosseln sind GLOBAL (alert_cooldown 300s, telegram_cooldown
@@ -27331,8 +27572,7 @@ class Service:
             todo = [ev for ev in sorted(evs, key=lambda e: e["start_time"])
                     if ev["id"] not in self.processed and ev["id"] not in _in_arbeit
                     and ev["id"] not in _wartet
-                    and ev.get("end_time")
-                    and time.time() - ev["end_time"] >= cfg["clip_delay"]]
+                    and ev.get("end_time")]
             # .371: Was beim Start zurueckgehalten wurde, bleibt draussen, bis der
             # Nutzer den Knopf drueckt. Ohne diesen Filter holte der ZWEITE Sweep
             # genau den Stapel nach, den der erste bewusst liegen liess.
@@ -27551,8 +27791,9 @@ class Service:
             #
             # B1: EINREIHEN statt rechnen. Alles Weitere macht der Abholer der
             # Warteschlange — es gibt K davon, einen je Analyse-Platz.
-            # `sofort=True`, weil der todo-Filter oben clip_delay schon geprueft
-            # hat; ohne das kostete jedes Ereignis die Wartezeit ein zweites Mal.
+            # Seit CV1 (Bauplan analysen/bauplan_clip_vollstaendig.md) ohne feste
+            # Wartezeit: jedes beendete Ereignis wird sofort faellig eingereiht, ob
+            # Frigates Aufnahme bis zum Ereignisende reicht, fragt der Disponent.
             #
             # B2 (05.09.2026, Widerleger-Befund B1 B-4): die Schleife steht jetzt
             # VOR dem Steckbrief, weil in ihn nur gehoert, was WIRKLICH eingereiht
@@ -27563,7 +27804,7 @@ class Service:
             # Schleife): sie haengt seit B2 an `processed`, s. `_catchup_freigeben`.
             eingereiht = []
             for ev in todo:
-                if self.event_einreihen(ev["id"], sofort=True, kamera=ev.get("camera")):
+                if self.event_einreihen(ev["id"], kamera=ev.get("camera")):
                     eingereiht.append(ev["id"])
             _abgewiesen = len(todo) - len(eingereiht)
             if _abgewiesen:
@@ -28128,7 +28369,7 @@ class Service:
         from core import lebenszeichen as _lz       # Stufe LZ2: Fortschrittsmarke je Runde
         cfg = self.cfg
         self.log.info(f"poll mode: every {cfg['poll_interval']}s, lookback {cfg['lookback_h']}h, "
-                 f"clip_delay {cfg['clip_delay']}s, backend {cfg.get('backend') or cfg['ov_device']}")
+                 f"backend {cfg.get('backend') or cfg['ov_device']}")
         while True:
             _lz.setzen("abholen")
             self.sweep()
@@ -31813,14 +32054,7 @@ def make_handler(svc):
                                 f"age_min={'?' if _alter is None else int(_alter)} "
                                 f"(templates: {_bn} file(s), {_bb} byte(s) — "
                                 f"never auto-purged)")
-                        # `sofort=True` (E5/N1, 05.09.2026, Widerleger B1 B-2):
-                        # der Clip liegt hier schon auf der Platte (`ablegen`
-                        # ein paar Zeilen darueber) — `clip_delay` waere reine
-                        # Wartezeit auf etwas, das nicht mehr kommen muss, und
-                        # ein unfaelliger Kopf hielt bis .505 ALLE Abholer auf
-                        # (gemessen 15,00 s). Betrifft auch reine
-                        # Poll-Installationen, nicht nur MQTT.
-                        svc.event_einreihen(_neu, sofort=True, kamera=_kam)
+                        svc.event_einreihen(_neu, kamera=_kam)
                         return self._send(200, json.dumps(
                             {"ok": True, "eid": _neu, "weg": "kamera-override"}),
                             "application/json")
@@ -31849,11 +32083,7 @@ def make_handler(svc):
                                 f"score={_einspiel.TOP_SCORE} zones=[] "
                                 f"sub_label=none (templates: {_bn} file(s), "
                                 f"{_bb} byte(s) — never auto-purged)")
-                        # `sofort=True` (E5/N1): derselbe Grund wie beim
-                        # Kamera-Weg darueber — die Vorlage liegt bereits als
-                        # Datei vor, es gibt nichts, worauf clip_delay warten
-                        # koennte.
-                        svc.event_einreihen(_neu, sofort=True, kamera=_kam)
+                        svc.event_einreihen(_neu, kamera=_kam)
                         return self._send(200, json.dumps(
                             {"ok": True, "eid": _neu, "weg": "clip"}),
                             "application/json")

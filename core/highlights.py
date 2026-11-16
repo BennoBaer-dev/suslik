@@ -12,8 +12,12 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.101"   # 0.1.1.101: Box-Text unveraendert, der Eintrag traegt nur die neue Nummer; 0.1.1.100 wurde nie
-                      # veroeffentlicht (Eigentuemer 11.11.2026 09:05:30: "als wenn die 100 gar nicht da ist, sondern
+STAND = "0.1.1.102"   # 0.1.1.102: neuer Box-Eintrag mit einem Satz zum Clip-Abruf (Wunsch des Eigentuemers 16.11.2026
+                      # 14:38:28 "kurz und knapp was wir geändert haben, ein satz"; Wortlaut DE abgenommen 14:39:22
+                      # "Passt so", Nummer und CHANGELOG mit dem Ketten-Go 14:43:11). Dahinter steht der Bauplan
+                      # analysen/bauplan_clip_vollstaendig.md, Stufen CV1 und CV2; im CHANGELOG stehen drei Punkte.
+                      # Davor 0.1.1.101: Box-Text unveraendert, der Eintrag traegt nur die neue Nummer; 0.1.1.100 wurde
+                      # nie veroeffentlicht (Eigentuemer 11.11.2026 09:05:30: "als wenn die 100 gar nicht da ist, sondern
                       # nur die 101 in dem Textfeld"). Neu im CHANGELOG ist allein der Satz zum Video der
                       # Live-Meldungen in Safari (Bauplan analysen/bauplan_video_teilabruf.md, Stufe VT1).
                       # Davor 0.1.1.100: neuer Box-Eintrag mit drei Zeilen, die erste mit dem roten, fetten Kopf
@@ -886,6 +890,28 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.1.102 — EIN Eintrag, MIT DEM EIGENTUEMER ABGESTIMMT 16.11.2026 (Vorschlag der Hauptsession auf seinen Wunsch
+    # nach einem kurzen Satz dazu, was sich geaendert hat; Wortlaut DE abgenommen 14:39:22 „Passt so“). EN von der
+    # Hauptsession, ES, IT, FR und FI nach EN; Begriffe nach begriffe_tabellen.md (IT clip=video, FR clip=séquence).
+    # Was dahinter steht: analysen/bauplan_clip_vollstaendig.md, Stufen CV1 und CV2 (suslik fragt Frigate vor dem
+    # Clip-Abruf, ob die Aufnahme bis zum Ereignisende eingetragen ist); der CHANGELOG-Abschnitt nennt drei Punkte.
+    ("0.1.1.102", (
+        {"de": "Ereignis-Clips: suslik wartet jetzt, bis Frigate die Aufnahme bis zum Ende eines Ereignisses "
+               "gespeichert hat, und holt erst dann den Clip. Das Ende fehlt damit nicht mehr, weil zu früh "
+               "geholt wurde.",
+         "en": "Event clips: suslik now waits until Frigate has stored the recording up to the end of an event "
+               "before it fetches the clip, so the end is no longer cut off by fetching too early.",
+         "es": "Clips de eventos: suslik espera ahora a que Frigate haya guardado la grabación hasta el final de un "
+               "evento antes de obtener el clip, por lo que el final ya no se corta por obtenerlo demasiado pronto.",
+         "it": "Video degli eventi: suslik ora attende che Frigate abbia salvato la registrazione fino alla fine di "
+               "un evento prima di recuperare il video, così la fine non viene più tagliata da un recupero troppo "
+               "anticipato.",
+         "fr": "Séquences d'événements : suslik attend désormais que Frigate ait sauvegardé l'enregistrement jusqu'à "
+               "la fin d'un événement avant de récupérer la séquence, de sorte que la fin n'est plus coupée par une "
+               "récupération trop précoce.",
+         "fi": "Tapahtumaleikkeet: suslik odottaa nyt, kunnes Frigate on tallentanut tallenteen tapahtuman loppuun "
+               "asti, ennen kuin se hakee leikkeen, joten loppu ei enää katkea liian aikaisen haun vuoksi."},
+    )),
     # 0.1.1.100 — DREI Zeilen, MIT DEM EIGENTUEMER ABGESTIMMT 10.11.2026 (Vorschlag der Hauptsession auf seinen Wunsch
     # nach einem kurzen Text mit rotem, fettem „Testversion“ davor; Wortlaut DE abgenommen 22:16:06 „Passt so“). Die
     # erste Zeile traegt `betont`: der Teil vor dem Gedankenstrich wird rot und fett gesetzt (webui.whatsnew_block).
