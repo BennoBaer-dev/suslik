@@ -2369,6 +2369,17 @@ T = {
     "system.ampel.analyse": "Analyysi",
     "system.ampel.analyse_dauer": "viimeisin kesto {s} s",
     "system.ampel.analyse_nie": "ei vielä analyysiä",
+    # Bauplan beschleuniger_lage BL3 (Reihenfolge wie en.py).
+    "system.ampel.analyse_fehler": "viimeisin analyysi epäonnistui {s} s:n jälkeen, katso palvelun loki",
+    "ui.lage.kopf_cpu": "{geraet} ei toimi, ajetaan CPU:lla",
+    "ui.lage.kopf": "{geraet} ei toimi",
+    "ui.lage.kopf_eingeschraenkt": "GPU toimii, mutta sitä ei voi valvoa",
+    "ui.lage.tooltip": "Syy ja korjaus Järjestelmä-sivulla",
+    "system.lage.grund.allgemein": "Syy: laite, jota varten tämä image on tehty, ei laskenut käynnistystarkistuksessa. Korjaus: välitä laite konttiin ja tarkista, että image sopii laitteistoon, tai aseta backend arvoon cpu, jos se on tarkoitus.",
+    "system.lage.grund.bibliothek_fehlt": "Syy: kontti käynnistettiin ilman NVIDIAn konttiajoympäristöä, joten ajurikirjasto puuttuu. Korjaus: välitä kortti asetuksella capabilities: [gpu] (Compose) tai --gpus all (docker run).",
+    "system.lage.grund.kein_geraet": "Syy: NVIDIA-ajurikirjasto ei ilmoita käyttökelpoista korttia (cuInit {code}). Korjaus: tarkista laitevalinta (Compose capabilities: [gpu]) ja että kortti toimii isännällä (siellä nvidia-smi).",
+    "system.lage.grund.bindet_nicht": "Syy: NVIDIA-kortti näkyy, mutta CUDA-istunto ei sitoutunut; epäily: isännän ajuri ei vastaa tämän imagen CUDA-versiota. Korjaus: vertaa isännän ajuria tämän imagen CUDA-versioon.",
+    "system.lage.grund.werkzeug_fehlt": "Syy: nvidia-smi puuttuu tästä kontista (NVIDIA_DRIVER_CAPABILITIES={wert}), joten kortin muistia ja kuormaa ei voi mitata. Korjaus: käytä asetusta capabilities: [gpu] (Compose, ilman muita kykyjä kuten video) tai --gpus all.",
     "system.ampel.retry": "Uudelleenyritykset",
     "system.ampel.retry_info":
         "{offen} avointa / {aufgegeben} luovutettu (ikkuna {tage} pv)",
@@ -3982,6 +3993,9 @@ T = {
         "(kernelin suorituskykytapahtumat vaativat lisäoikeuksia)",
     "systemstat.grund.werkzeug_fehlt":
         "tämän laitteen kyselytyökalu ei ole osa tätä imagea",
+    "systemstat.grund.werkzeug_nicht_eingebunden":
+        "nvidia-smi ei ole liitetty tähän konttiin; NVIDIA-ajoympäristö lisää sen, kun kortti "
+        "annetaan asetuksella capabilities: [gpu] tai --gpus all",
     "systemstat.grund.nicht_lesbar": "tätä lähdettä ei voitu lukea",
     "systemstat.grund.kein_limit":
         "tälle kontille ei ole asetettu muistirajaa, joten prosenttiarvoa "

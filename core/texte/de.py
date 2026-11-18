@@ -2209,6 +2209,17 @@ T = {
     "system.ampel.analyse": "Analyse",
     "system.ampel.analyse_dauer": "letzte Dauer {s} s",
     "system.ampel.analyse_nie": "noch keine Analyse",
+    # Bauplan beschleuniger_lage BL3 (Reihenfolge wie en.py).
+    "system.ampel.analyse_fehler": "letzte Analyse nach {s} s gescheitert — siehe Dienst-Log",
+    "ui.lage.kopf_cpu": "{geraet} arbeitet nicht, Erkennung läuft auf der CPU",
+    "ui.lage.kopf": "{geraet} arbeitet nicht",
+    "ui.lage.kopf_eingeschraenkt": "GPU arbeitet, ist aber nicht messbar",
+    "ui.lage.tooltip": "Ursache und Abhilfe auf der Seite System",
+    "system.lage.grund.allgemein": "Ursache: das Gerät, für das dieses Image gebaut ist, hat in der Startprüfung nicht gerechnet. Abhilfe: das Gerät in den Container durchreichen und prüfen, ob das Image zur Hardware passt, oder backend auf cpu stellen, wenn das so gewollt ist.",
+    "system.lage.grund.bibliothek_fehlt": "Ursache: der Container wurde ohne die NVIDIA-Container-Laufzeit gestartet, deshalb fehlt die Treiberbibliothek. Abhilfe: die Karte mit capabilities: [gpu] (Compose) oder --gpus all (docker run) übergeben.",
+    "system.lage.grund.kein_geraet": "Ursache: die NVIDIA-Treiberbibliothek meldet keine nutzbare Karte (cuInit {code}). Abhilfe: die Geräteauswahl prüfen (Compose capabilities: [gpu]) und ob die Karte am Host arbeitet (dort nvidia-smi).",
+    "system.lage.grund.bindet_nicht": "Ursache: die NVIDIA-Karte ist sichtbar, aber die CUDA-Sitzung hat nicht gebunden; Vermutung: der Treiber des Hosts passt nicht zur CUDA-Version dieses Images. Abhilfe: den Treiber des Hosts gegen die CUDA-Version dieses Images prüfen.",
+    "system.lage.grund.werkzeug_fehlt": "Ursache: nvidia-smi fehlt in diesem Container (NVIDIA_DRIVER_CAPABILITIES={wert}), deshalb sind Speicher und Last der Karte nicht messbar. Abhilfe: capabilities: [gpu] (Compose, ohne weitere Fähigkeiten wie video) oder --gpus all verwenden.",
     "system.ampel.retry": "Wiederholungen",
     "system.ampel.retry_info":
         "{offen} offen / {aufgegeben} aufgegeben (Fenster {tage} d)",
@@ -4095,6 +4106,9 @@ Personen zwischendurch auffüllen.</p>""",
         "(Kernel-Performance-Ereignisse brauchen zusätzliche Rechte)",
     "systemstat.grund.werkzeug_fehlt":
         "das Abfrage-Werkzeug für dieses Gerät liegt nicht in diesem Image",
+    "systemstat.grund.werkzeug_nicht_eingebunden":
+        "nvidia-smi wurde nicht in diesen Container eingebunden; die NVIDIA-Laufzeit bringt es mit, "
+        "wenn die Karte mit capabilities: [gpu] oder --gpus all übergeben wird",
     "systemstat.grund.nicht_lesbar": "diese Quelle ließ sich nicht lesen",
     "systemstat.grund.kein_limit":
         "für diesen Container ist keine Speichergrenze gesetzt, also gibt "

@@ -256,6 +256,10 @@ NUR_EXPERT_BLAETTER = {"/kameras", "/benachrichtigungen", "/kette", "/konfigurat
 # ({"tag": "v0.1.0.x", "url": ...} oder None). Prozess-Zustand, Quelle state/update_check.json —
 # das Layout bleibt zustandslos und muss nichts nachladen.
 UPDATE_INFO = None
+# Bauplan analysen/bauplan_beschleuniger_lage.md, Stufe BL3: Spiegel der Lage des Beschleunigers aus Schritt 3 der
+# Startpruefung (svc.beschleuniger_lage, gesetzt am Ende dieses Schritts in verifyd.py) oder None. Muster wie
+# UPDATE_INFO: Prozess-Zustand, die Kopfzeile liest ihn nur und prueft selbst kein Geraet.
+BESCHLEUNIGER_LAGE = None
 
 
 def _fuss():
@@ -383,6 +387,20 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None, banner_aktion=None,
         upd = (f' <a class="upd" href="{html.escape(UPDATE_INFO.get("url") or "")}" target="_blank" '
                f'rel="noopener noreferrer" title="{html.escape(t("ui.upd.tooltip"))}">'
                f'{html.escape(t("ui.upd.link", tag=UPDATE_INFO["tag"]))}</a>')
+    # Bauplan beschleuniger_lage BL3 Punkt 1: rote Zeile direkt hinter der Marke, solange die Lage des Starts eine
+    # Abweichung oder eine Einschraenkung meldet; Link auf /system mit Ursache und Abhilfe. Nicht wegklickbar: sie
+    # verschwindet mit dem naechsten Start, an dem das Geraet rechnet. Gelesen wird nur die Lage, nichts nachgeprueft.
+    lage_rot = ""
+    _lg = BESCHLEUNIGER_LAGE or {}
+    if _lg.get("abweichung") or _lg.get("eingeschraenkt"):
+        _lg_teile = []
+        if _lg.get("abweichung"):
+            _lg_teile.append(t("ui.lage.kopf_cpu" if _lg.get("folge") == "cpu" else "ui.lage.kopf",
+                               geraet=_lg.get("geraet") or "?"))
+        if _lg.get("eingeschraenkt"):
+            _lg_teile.append(t("ui.lage.kopf_eingeschraenkt"))
+        lage_rot = (f'<a class="lage-rot" href="/system" title="{html.escape(t("ui.lage.tooltip"))}">'
+                    f'{html.escape(" · ".join(_lg_teile))}</a>')
     # banner_aktion: FERTIGES Markup des Aufrufers (heute nur der Nachhol-Knopf auf
     # /heute). Der Banner-TEXT bleibt escaped — Markup kommt nie aus dem Text.
     b = (f'<div class="banner">{html.escape(banner)}{banner_aktion or ""}</div>'
@@ -573,7 +591,7 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None, banner_aktion=None,
             # klebend brauchte die zweite Ebene einen Festwert fuer die Hoehe der ersten, und der
             # wurde falsch, sobald die erste umbrach — s. .kopf in style.css.
             f'<div class="kopf"><nav><div class="inner"><span class="marke">{mark}suslik'
-            f'{f" <small>{html.escape(ver)}</small>" if ver else ""}{upd}</span>{nav}{rmk}{kalk}{anwk}{gpuk}{rechts}</div></nav>'
+            f'{f" <small>{html.escape(ver)}</small>" if ver else ""}{upd}</span>{lage_rot}{nav}{rmk}{kalk}{anwk}{gpuk}{rechts}</div></nav>'
             f"{unter}</div>"
             f"<main>{b}{hw}{inhalt}</main>"
             f"<footer>{_fuss()}</footer>{rmjs}</html>")

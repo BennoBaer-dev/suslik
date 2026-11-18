@@ -12,7 +12,11 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.102"   # 0.1.1.102: neuer Box-Eintrag mit einem Satz zum Clip-Abruf (Wunsch des Eigentuemers 16.11.2026
+STAND = "0.1.1.103"   # 0.1.1.103: neuer Box-Eintrag mit einem Satz zur roten Anzeige, wenn der Beschleuniger nicht
+                      # arbeitet (Vorschlag der Hauptsession 18.11.2026 18:54; Wortlaut DE und der CHANGELOG mit vier
+                      # Punkten abgenommen 19:32:51 "Passt so"). Dahinter steht der Bauplan
+                      # analysen/bauplan_beschleuniger_lage.md, Stufen BL1 bis BL4.
+                      # Davor 0.1.1.102: Box-Eintrag mit einem Satz zum Clip-Abruf (Wunsch des Eigentuemers 16.11.2026
                       # 14:38:28 "kurz und knapp was wir geändert haben, ein satz"; Wortlaut DE abgenommen 14:39:22
                       # "Passt so", Nummer und CHANGELOG mit dem Ketten-Go 14:43:11). Dahinter steht der Bauplan
                       # analysen/bauplan_clip_vollstaendig.md, Stufen CV1 und CV2; im CHANGELOG stehen drei Punkte.
@@ -890,6 +894,26 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.1.103 — EIN Eintrag, MIT DEM EIGENTUEMER ABGESTIMMT 18.11.2026 (Vorschlag der Hauptsession 18:54; Wortlaut DE
+    # abgenommen 19:32:51 „Passt so“). EN von der Hauptsession, ES, IT, FR und FI nach EN; Begriffe wie in den Texten
+    # der Stufe BL3 (ui.lage.*, system.lage.grund.*: Seite System, Ursache und Abhilfe; FR mit vous, FI „image“ als
+    # Lehnwort). Was dahinter steht: analysen/bauplan_beschleuniger_lage.md, Stufen BL1 bis BL4 (FAIL im Startlog,
+    # Feld in /health, rote Zeile in der Kopfzeile, Ursache und Abhilfe unter der Kachel Backend); der
+    # CHANGELOG-Abschnitt nennt vier Punkte.
+    ("0.1.1.103", (
+        {"de": "Wenn die GPU oder NPU, für die dein Image gebaut ist, nicht arbeitet, sagt suslik das jetzt in Rot "
+               "auf jeder Seite, mit Ursache und Abhilfe auf der Systemseite.",
+         "en": "If the GPU or NPU your image is built for is not working, suslik now says so in red on every page, "
+               "with cause and fix on the System page.",
+         "es": "Si la GPU o la NPU para la que está hecha tu imagen no funciona, suslik lo dice ahora en rojo en "
+               "todas las páginas, con la causa y la solución en la página Sistema.",
+         "it": "Se la GPU o la NPU per cui è fatta la tua immagine non funziona, suslik ora lo dice in rosso su ogni "
+               "pagina, con causa e rimedio nella pagina Sistema.",
+         "fr": "Si le GPU ou le NPU pour lequel votre image est faite ne fonctionne pas, suslik le signale désormais "
+               "en rouge sur chaque page, avec la cause et la solution sur la page Système.",
+         "fi": "Jos GPU tai NPU, jota varten imagesi on tehty, ei toimi, suslik kertoo sen nyt punaisella jokaisella "
+               "sivulla; syy ja korjaus ovat Järjestelmä-sivulla."},
+    )),
     # 0.1.1.102 — EIN Eintrag, MIT DEM EIGENTUEMER ABGESTIMMT 16.11.2026 (Vorschlag der Hauptsession auf seinen Wunsch
     # nach einem kurzen Satz dazu, was sich geaendert hat; Wortlaut DE abgenommen 14:39:22 „Passt so“). EN von der
     # Hauptsession, ES, IT, FR und FI nach EN; Begriffe nach begriffe_tabellen.md (IT clip=video, FR clip=séquence).

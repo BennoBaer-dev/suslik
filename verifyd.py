@@ -11611,7 +11611,17 @@ class Service:
         # auf null. Die Ampel liest beides nicht. Ein Aufruf fuellt zwei Felder,
         # ein Schritt `clip_cache` (HEALTH_SCHRITT_JE_FELD).
         cache_b, cache_alter = m("clip_cache", lambda: self.clip_cache_bytes())
+
+        def beschleuniger():
+            # Bauplan beschleuniger_lage BL2 Punkt 3: die Lage aus Schritt 3 der Startpruefung, nur gelesen, ohne
+            # `werte`; `ok` bleibt beim Weg ueber startup_fails. Ohne Startpruefung (Buehnen) null.
+            lage = getattr(self, "beschleuniger_lage", None)
+            if not lage:
+                return None
+            return {**{k: lage.get(k) for k in ("variante", "soll", "ist", "fall", "abweichung", "eingeschraenkt")},
+                    "stand": "start", "ts": lage.get("ts")}
         return {"backend": m("backend", lambda: cfg.get("backend") or ""),
+                "beschleuniger": m("beschleuniger", beschleuniger),
                 # N8b: Cache-Groesse SICHTBAR (Feldbericht: 74-GB-Steady-State erst am
                 # 97 % vollen Host bemerkt) + der wirksame Deckel daneben.
                 "clip_cache_gb": (round(cache_b / 1024**3, 2)
@@ -35564,7 +35574,15 @@ def hardware_probe(placement_mess=None):
                 neu.append((m2, name, d2))
         res = neu
     if "CUDAExecutionProvider" in eps:
-        res.append(("ok", "hw CUDA", "CUDAExecutionProvider available"))
+        # Bauplan beschleuniger_lage BL1 Punkt 3: der Provider in der Liste ist kein Geraet. Ein Nutzer
+        # der cuda-Variante sah hier „ok", waehrend kein Geraet nutzbar war (Fehler 100). ok nur mit
+        # Treiberbibliothek und mindestens einem Geraet, sonst warn mit dem Satz des Urteils.
+        from core import nvidia_lage as _nl                # noqa: PLC0415
+        _cu = _nl.urteil(_nl.lage_sammeln())
+        if _cu["fall"] in _nl.KARTE_FEHLT:
+            res.append(("warn", "hw CUDA", _cu["satz"]))
+        else:
+            res.append(("ok", "hw CUDA", "CUDAExecutionProvider available"))
     if "MIGraphXExecutionProvider" in eps:
         # AMD/ROCm (rocm-Fall 31.07.): /dev/kfd ist die Schluessel-Voraussetzung und war bisher
         # NIRGENDS im Startlog sichtbar — Fern-Diagnose am Tester-Log war damit unmoeglich.
@@ -35606,19 +35624,23 @@ def cuda_versions():
         _logbuch.swallowed(_log, _logbuch.WARNING, "returning ''")
         return ""
     import glob as _glob
+    from core.nvidia_lage import lage_sammeln as _lage_sammeln   # noqa: PLC0415
     out = []
-    try:                                                   # Host-GPU + Treiber + max. CUDA des Treibers
-        q = subprocess.run(["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
-                           capture_output=True, text=True, timeout=5).stdout.strip().splitlines()
-        if q:
-            name, drv = (q[0].split(",") + ["", ""])[:2]
-            out.append(f"host {name.strip()} driver {drv.strip()}")
-        head = subprocess.run(["nvidia-smi"], capture_output=True, text=True, timeout=5).stdout
-        mm = re.search(r"CUDA Version:\s*([0-9.]+)", head)
-        if mm:
-            out.append(f"driver-CUDA {mm.group(1)}")
-    except Exception:
-        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
+    # Bauplan beschleuniger_lage BL1 Punkt 3: nvidia-smi nur fragen, wenn es da ist. Fehlt es,
+    # nennt die Faktenzeile danach das, statt einer verschluckten Ausnahme hier.
+    if _lage_sammeln()["smi_da"]:
+        try:                                               # Host-GPU + Treiber + max. CUDA des Treibers
+            q = subprocess.run(["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
+                               capture_output=True, text=True, timeout=5).stdout.strip().splitlines()
+            if q:
+                name, drv = (q[0].split(",") + ["", ""])[:2]
+                out.append(f"host {name.strip()} driver {drv.strip()}")
+            head = subprocess.run(["nvidia-smi"], capture_output=True, text=True, timeout=5).stdout
+            mm = re.search(r"CUDA Version:\s*([0-9.]+)", head)
+            if mm:
+                out.append(f"driver-CUDA {mm.group(1)}")
+        except Exception:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     try:                                                   # gebackene CUDA-Runtime aus dem Image
         with open("/usr/local/cuda/version.json") as f:
             cv = json.load(f).get("cuda", {}).get("version", "")
@@ -35905,13 +35927,14 @@ def varianten_hinweis(variante, probe):
     # Umkehr-Faelle (User-Fund 05.08.): cuda/rocm-Image auf fremder Hardware
     # lief bisher ohne jeden Hinweis still auf CPU.
     render_da = os.path.exists("/dev/dri/renderD128")
+    # Bauplan beschleuniger_lage BL3 Punkt 4: ohne Karte rechnet das cuda-Image nicht auf der CPU (jeder Job
+    # scheitert); der Hinweis behauptet das nicht mehr und empfiehlt nur das passende Image.
     if variante == "cuda" and not nvidia_da:
         if render_da:
             return ("No NVIDIA GPU found, but a /dev/dri render device is present. "
-                    "If that is an Intel iGPU, the gpu image would use it — this "
-                    "cuda image runs recognition on the CPU here.")
-        return ("No NVIDIA GPU found — this cuda image runs recognition on the "
-                "CPU here; the cpu image does the same with a much smaller download.")
+                    "If that is an Intel iGPU, the gpu image would use it.")
+        return ("No NVIDIA GPU found — if this host has no NVIDIA card, the cpu image "
+                "runs recognition on the CPU with a much smaller download.")
     if variante == "rocm" and nvidia_da:
         return "Found an NVIDIA GPU — the cuda image would use it for recognition."
     return None
@@ -36216,6 +36239,10 @@ def startup_selfcheck(svc):
     cv = cuda_versions()
     if cv:
         erg("info", f"CUDA: {cv}")
+        # Bauplan beschleuniger_lage BL1 Punkt 3 (Vorgabe des Eigentuemers 18.11.2026 13:01:11): was von der
+        # NVIDIA-Laufzeit im Container ankommt, steht im Startlog, damit ein Fall aus der Ferne erkennbar ist.
+        from core import nvidia_lage as _nl_fakt           # noqa: PLC0415
+        erg("info", _nl_fakt.faktenzeile(_nl_fakt.lage_sammeln()))
     rv = rocm_versions()
     if rv:
         erg("info", f"ROCm: {rv}")
@@ -36301,6 +36328,10 @@ def startup_selfcheck(svc):
     schritt(3, "backend", "selecting execution provider — does the device really bind?")
     try:
         kind, dev = resolve_backend(None)
+        # Bauplan beschleuniger_lage BL2 Punkt 2: `_lage_geb` ist das Ist der Lage, die Menge der Geraete, die in
+        # der echten Sitzung gebunden haben (None = offen, kein Modell zum Proben); jeder Zweig unten setzt es.
+        # `_cuda_urteil` ist das Urteil von BL1, nur im cuda-Zweig nach der Sitzung gesetzt.
+        _cuda_urteil, _lage_geb = None, None
         avail = _ort.get_available_providers()
         from core.registry import ep_von              # P3.1: EP-Soll aus der Registry —
         want = ep_von(kind)                           # ein neues kind kann hier nie mehr fehlen
@@ -36359,6 +36390,8 @@ def startup_selfcheck(svc):
             _ov_ep = _ep_von2("openvino")
             _ov_cpu_onnx = next((v["onnx"] for v in MODELLE.values()
                                  if v.get("onnx") and os.path.exists(v["onnx"])), None)
+            # Lage (BL2): ohne Modell zum Proben offen, sonst rechnet hier kein Beschleuniger.
+            _lage_geb = set() if _ov_cpu_onnx else None
             _ov_cpu_bind, _ov_cpu_grund = None, ""
             if _ov_ep in avail and _ov_cpu_onnx:
                 try:
@@ -36393,6 +36426,7 @@ def startup_selfcheck(svc):
                 erg("warn", _ungenutzt)
         elif not (want and want in avail):
             # EP fehlt ganz -> haeufigster Fehler: plain onnxruntime verdeckt onnxruntime-openvino.
+            _lage_geb = set()                         # Lage (BL2): ohne Provider bindet kein Geraet
             erg("warn", f"requested {spec} but {want} unavailable ({', '.join(avail)}) — CPU fallback")
             if kind == "openvino":
                 erg("hint", "onnxruntime lacks the OpenVINO EP — a plain onnxruntime shadows "
@@ -36403,6 +36437,7 @@ def startup_selfcheck(svc):
             onnx = next((v["onnx"] for v in MODELLE.values()
                          if v.get("onnx") and os.path.exists(v["onnx"])), None)
             if not onnx:
+                _lage_geb = None                      # Lage (BL2): offen
                 erg("?", f"{spec} — EP present, engagement unconfirmed (no onnx model to probe)")
             elif dev == "MIXED":
                 # P4: MIXED ist UNSER Untermodus (detector=GPU, recognition=NPU; face_audit
@@ -36416,6 +36451,7 @@ def startup_selfcheck(svc):
                         teile.append((rolle, d2, want in s.get_providers()))
                     except Exception:
                         teile.append((rolle, d2, False))
+                _lage_geb = {d2 for _, d2, okk in teile if okk}      # Lage (BL2): jeder Teil fuer sich
                 if all(okk for _, _, okk in teile):
                     # Feldbefunde Punkt 9 (O312): MIXED verteilt nur im Dienst und in der
                     # Live-Engine (face_audit._to_backend); engine_ov im Worker bindet die GPU.
@@ -36429,29 +36465,40 @@ def startup_selfcheck(svc):
             else:
                 try:
                     s = _ort_session(kind, dev, onnx)
-                    if want in s.get_providers():
+                    _gebunden = want in s.get_providers()
+                    # Lage (BL2): openvino bindet auf seinem Geraet (GPU.1 zaehlt als GPU), cuda und migraphx auf
+                    # der GPU; die Registry nimmt nur Beschleuniger auf (openvino:CPU zaehlt nicht).
+                    _lage_geb = ({str(dev).split(".")[0].upper() if kind == "openvino" else "GPU"}
+                                 if _gebunden else set())
+                    if kind == "cuda":
+                        # Bauplan beschleuniger_lage BL1 Punkt 4: nach der echten Sitzung das Urteil ueber die
+                        # NVIDIA-Lage. Gebunden bleibt „device engaged“ stehen und das Urteil kommt dazu (info
+                        # bei ok); nicht gebunden ersetzt genau eine Zeile des Urteils die frueheren zwei
+                        # Warnungen. `_cuda_urteil` haelt fall, marke und werte fuer Stufe BL2; eine FAIL-Zeile
+                        # ist geschrieben, wenn seine marke FAIL ist.
+                        from core import nvidia_lage as _nl3           # noqa: PLC0415
+                        _cuda_urteil = _nl3.urteil(_nl3.lage_sammeln(), _gebunden)
+                        if _gebunden:
+                            erg("ok", f"{spec} — device engaged")
+                        erg(_cuda_urteil["marke"], _cuda_urteil["satz"])
+                    elif _gebunden:
                         erg("ok", f"{spec} — device engaged")
                     else:
                         # Widerleger-Fund .66: ohne Geraeteknoten ist "mismatch?" irrefuehrend —
                         # die Plattform HAT das Geraet dann schlicht nicht (Issue-#6-Klasse).
                         import glob as _sglob
                         from face_audit import geraete_knoten_muster as _gkm
-                        # migraphx/cuda: dev ist eine Geraetenummer ('0'), der Pflicht-Knoten ist
-                        # /dev/kfd bzw. /dev/nvidia* — sonst liefe die Knoten-Vorpruefung ins Leere
-                        # und meldete "mismatch?" obwohl die Plattform das Geraet schlicht nicht hat
-                        # (Gen9-Klasse). P3.1: Familie+Muster aus der Registry.
+                        # migraphx: dev ist eine Geraetenummer ('0'), der Pflicht-Knoten ist
+                        # /dev/kfd — sonst liefe die Knoten-Vorpruefung ins Leere und meldete
+                        # "mismatch?" obwohl die Plattform das Geraet schlicht nicht hat
+                        # (Gen9-Klasse). P3.1: Familie+Muster aus der Registry. cuda meldet seit
+                        # Bauplan beschleuniger_lage BL1 oben ueber das Urteil und kommt hier nicht an.
                         from core.registry import knoten_familie
-                        if kind in ("migraphx", "cuda"):
+                        if kind == "migraphx":
                             _kdev, _kn = knoten_familie(kind)
                         else:
                             _kdev, _kn = dev, _gkm(dev)
-                        if kind == "cuda":
-                            # Bauplan nvidia_wsl2 NW1: die Karte fehlt nur, wenn core/nvidia_lage
-                            # keine findet (Knoten unter Linux, Treiber unter WSL2).
-                            from core.nvidia_lage import nvidia_da as _nvidia_da   # noqa: PLC0415
-                            _ohne_geraet = not _nvidia_da()[0]
-                        else:
-                            _ohne_geraet = bool(_kn) and not _sglob.glob(_kn)
+                        _ohne_geraet = bool(_kn) and not _sglob.glob(_kn)
                         if _ohne_geraet:
                             erg("warn", f"requested {spec} but this host has no {_kdev} device "
                                         f"({_kn}) — running on CPU")
@@ -36459,7 +36506,26 @@ def startup_selfcheck(svc):
                             erg("warn", f"requested {spec} but device not available — running on CPU "
                                         f"(GPU/NPU runtime vs. host driver version mismatch?)")
                 except Exception as e:
+                    _lage_geb = set()                 # Lage (BL2): eine Ausnahme zaehlt als nicht gebunden
                     erg("warn", f"requested {spec} but bind failed ({str(e)[:80]}) — CPU fallback")
+        # Bauplan beschleuniger_lage BL2 Punkt 2: Soll gegen Ist, einmal je Start. Eine Abweichung ist genau eine
+        # FAIL-Zeile; hat BL1 hier schon eine FAIL-Zeile geschrieben (cuda nach der Sitzung), ist sie die Lage-Zeile.
+        # Die Warnzeilen der Zweige bleiben als Einzelheiten. Wirft die Rechnung, ERROR-Zeile und keine Lage.
+        try:
+            from core import livewache as _lw_bl      # noqa: PLC0415
+            _u = _cuda_urteil or {}
+            _lage_bl = _reg.beschleuniger_lage(
+                os.environ.get("SUSLIK_VARIANT", ""), os.environ.get(_lw_bl.BACKEND_EINGESTELLT_ENV, ""), spec,
+                _lage_geb, fall=_u.get("fall"), fall_marke=_u.get("marke"), werte=_u.get("werte"))
+            if _lage_bl["abweichung"] and _u.get("marke") != "FAIL":
+                erg("FAIL", _lage_bl["satz"])
+            svc.beschleuniger_lage = {**_lage_bl, "ts": round(time.time(), 1)}
+        except Exception as e_bl:                     # noqa: BLE001  die Lage reisst den Start nie
+            svc.beschleuniger_lage = None
+            L.error(f"accelerator status could not be determined: {type(e_bl).__name__}: {str(e_bl)[:120]}")
+        # Bauplan beschleuniger_lage BL3: Spiegel der Lage fuer die Kopfzeile jeder Seite (Muster UPDATE_INFO).
+        import webui as _webui_bl                     # noqa: PLC0415  lokal wie die uebrigen webui-Importe
+        _webui_bl.BESCHLEUNIGER_LAGE = svc.beschleuniger_lage
         pi = (getattr(svc, "cfg", None) or {}).get("placement_info")
         if pi:
             _m = pi.get("mess") or {}

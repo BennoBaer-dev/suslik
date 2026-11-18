@@ -2272,6 +2272,18 @@ T = {
     "system.ampel.analyse": "Analysis",
     "system.ampel.analyse_dauer": "last duration {s} s",
     "system.ampel.analyse_nie": "no analysis yet",
+    # Bauplan beschleuniger_lage BL3 Punkt 5 und 6: Kachel Analysis bei gescheiterter letzter Analyse,
+    # Kopfzeile der Beschleuniger-Lage (webui.layout), Ursache und Abhilfe je Fall unter der Kachel Backend.
+    "system.ampel.analyse_fehler": "last analysis failed after {s} s — see service log",
+    "ui.lage.kopf_cpu": "{geraet} not working, running on CPU",
+    "ui.lage.kopf": "{geraet} not working",
+    "ui.lage.kopf_eingeschraenkt": "GPU works, but cannot be monitored",
+    "ui.lage.tooltip": "Cause and fix on the System page",
+    "system.lage.grund.allgemein": "Cause: the device this image is built for did not compute in the startup check. Fix: pass the device into the container and check that the image matches the hardware, or set backend to cpu if that is intended.",
+    "system.lage.grund.bibliothek_fehlt": "Cause: the container was started without the NVIDIA container runtime, so the driver library is missing. Fix: pass the card in with capabilities: [gpu] (Compose) or --gpus all (docker run).",
+    "system.lage.grund.kein_geraet": "Cause: the NVIDIA driver library reports no usable card (cuInit {code}). Fix: check the device selection (Compose capabilities: [gpu]) and that the card works on the host (nvidia-smi there).",
+    "system.lage.grund.bindet_nicht": "Cause: the NVIDIA card is visible, but the CUDA session did not bind; suspected: the host driver does not match the CUDA version in this image. Fix: check the host driver against the CUDA version of this image.",
+    "system.lage.grund.werkzeug_fehlt": "Cause: nvidia-smi is missing in this container (NVIDIA_DRIVER_CAPABILITIES={wert}), so card memory and load cannot be measured. Fix: use capabilities: [gpu] (Compose, without further capabilities such as video) or --gpus all.",
     "system.ampel.retry": "Retry queue",
     "system.ampel.retry_info":
         "{offen} open / {aufgegeben} given up (window {tage} d)",
@@ -4087,6 +4099,9 @@ between.</p>""",
         "performance events need extra privileges)",
     "systemstat.grund.werkzeug_fehlt":
         "the query tool for this device is not part of this image",
+    "systemstat.grund.werkzeug_nicht_eingebunden":
+        "nvidia-smi was not passed into this container; the NVIDIA runtime adds it when the card is "
+        "given with capabilities: [gpu] or --gpus all",
     "systemstat.grund.nicht_lesbar": "this source could not be read",
     "systemstat.grund.kein_limit":
         "no memory limit is set for this container, so there is no "

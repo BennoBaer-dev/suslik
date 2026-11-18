@@ -76,6 +76,9 @@ GRUENDE = (
     "kein_zaehler",       # Geraet da, Treiber fuehrt keinen Auslastungszaehler
     "gesperrt",           # Quelle da, aber der Container darf sie nicht lesen
     "werkzeug_fehlt",     # das Abfrage-Werkzeug liegt nicht im Image
+    # Bauplan beschleuniger_lage BL1 Punkt 6: nvidia-smi liegt nie im Image, die NVIDIA-Laufzeit bindet es
+    # beim Start vom Wirt ein (Faehigkeit utility). Fehlt es, hat der Container es nicht bekommen.
+    "werkzeug_nicht_eingebunden",
     "nicht_lesbar",       # Quelle da, Lesen/Auswerten scheiterte
     "kein_limit",         # kein Limit gesetzt, also kein Prozentsatz bildbar
     "kein_dienst",        # Kennzahl kennt nur der laufende Dienst
@@ -543,7 +546,7 @@ def _sonde_cuda(zeitgrenze_s=SONDE_CUDA_ZEITGRENZE_S):
             # Zeitgrenze: Begruendung der 2 s bei SONDE_CUDA_ZEITGRENZE_S oben.
             capture_output=True, text=True, timeout=zeitgrenze_s)
     except FileNotFoundError:
-        return _fehlt("werkzeug_fehlt")
+        return _fehlt("werkzeug_nicht_eingebunden")       # BL1 Punkt 6, siehe GRUENDE
     except subprocess.TimeoutExpired:
         return dict(_fehlt("nicht_lesbar"), messgrund="timeout")
     except Exception:                                        # noqa: BLE001
@@ -615,7 +618,7 @@ def prozesse_karte_mb(pids=None):
             # um ihre eigenen Prozesse zu nennen, ist kein Messwert mehr.
             capture_output=True, text=True, timeout=2)
     except FileNotFoundError:
-        return {}, "werkzeug_fehlt"
+        return {}, "werkzeug_nicht_eingebunden"            # BL1 Punkt 6, siehe GRUENDE
     except subprocess.TimeoutExpired:
         return {}, "timeout"
     except Exception:                                        # noqa: BLE001

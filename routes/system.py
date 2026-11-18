@@ -57,15 +57,30 @@ def render(svc, cfg, ro, docs_url):
     _bk = _pi.get("backend") or cfg.get("backend") or cfg.get("ov_device") or "?"
     _sf = getattr(svc, "startup_fails", 0)
     _nh = getattr(svc, "_nachhol_stat", (0, 0))
+    # Bauplan beschleuniger_lage BL3 Punkt 3: bei Abweichung oder Einschraenkung eine zweite kleine Zeile unter der
+    # Kachel „Backend“ mit Ursache und Abhilfe je Fall. Quelle ist allein die Lage des Starts
+    # (svc.beschleuniger_lage); die Werte fuer {wert} und {code} kommen nur aus lage["werte"], ein fehlender als „?“,
+    # damit t() nie den rohen Text mit Platzhalter liefert. Die Ampel bleibt _sf == 0.
+    _lage = getattr(svc, "beschleuniger_lage", None) or {}
+    _lage_grund = ""
+    if _lage.get("abweichung") or _lage.get("eingeschraenkt"):
+        _lw = _lage.get("werte") or {}
+        _lage_grund = t(f"system.lage.grund.{_lage.get('fall')}",
+                        wert="?" if _lw.get("wert") is None else _lw["wert"],
+                        code="?" if _lw.get("code") is None else _lw["code"])
+    # Bauplan beschleuniger_lage BL3 Punkt 6 (Entscheid 4 des Eigentuemers): die Kachel „Analysis“ ist nur gruen,
+    # wenn die letzte Analyse nicht als `fehler` gebucht ist und kuerzer als 90 s war.
+    _a_fehler = bool(letzte) and letzte.get("kategorie") == "fehler"
     ampel = [
         (t("system.ampel.service"), True,
          t("system.ampel.service_info", n=len(svc.processed))),
         (t("system.ampel.backend"), _sf == 0,
          t("system.ampel.backend_ok", backend=_bk) if _sf == 0 else
-         t("system.ampel.backend_fail", backend=_bk, n=_sf)),
+         t("system.ampel.backend_fail", backend=_bk, n=_sf), _lage_grund),
         # Erstlauf: "noch nie analysiert" ist KEIN Fehler — vorher stand hier eine
         # rote Lampe mit "last duration — s", bevor je ein Event kam (Plan-QS P.6).
-        (t("system.ampel.analyse"), (letzte is None) or (letzte.get('dauer_s') or 0) < 90,
+        (t("system.ampel.analyse"), (letzte is None) or (not _a_fehler and (letzte.get('dauer_s') or 0) < 90),
+         t("system.ampel.analyse_fehler", s=letzte.get('dauer_s')) if _a_fehler else
          t("system.ampel.analyse_dauer", s=letzte.get('dauer_s')) if letzte
          else t("system.ampel.analyse_nie")),
         # bewusst IMMER gruen: eine dauerhaft rote Lampe fuer aufgegebene Alt-Events
@@ -106,11 +121,12 @@ def render(svc, cfg, ro, docs_url):
            max=f"{_cap_gb:.0f}")),
     ]
     a_teile = []
-    for name, ok, info in ampel:
+    for name, ok, info, *zusatz in ampel:            # zusatz: die Lage-Zeile der Kachel „Backend“ (BL3 Punkt 3)
         farbe = "var(--ok)" if ok else "var(--crit)"   # Tokens statt Hex: Hellmodus-Kontrast (Vor-Release-Pruefung B12)
         wort = t("system.ampel.ok") if ok else t("system.ampel.check")
+        z2 = f'<br><small>{html.escape(str(zusatz[0]))}</small>' if zusatz and zusatz[0] else ""
         a_teile.append(f'<div class="zaehler"><b style="color:{farbe}">{wort}</b>'
-                       f'{name}<br><small>{html.escape(str(info))}</small></div>')
+                       f'{name}<br><small>{html.escape(str(info))}</small>{z2}</div>')
     a_html = "".join(a_teile)
     # .313 (Issue #25): Aufraeum-Knopf + Warnung, wenn der Clip-Cache allein nicht reicht.
     a_html += (f'<div class="card" style="margin-top:8px"><b>{t("system.disk.titel")}</b> '

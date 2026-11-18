@@ -101,6 +101,7 @@ def _grund_satz(code):
         "kein_zaehler": t("systemstat.grund.kein_zaehler"),
         "gesperrt": t("systemstat.grund.gesperrt"),
         "werkzeug_fehlt": t("systemstat.grund.werkzeug_fehlt"),
+        "werkzeug_nicht_eingebunden": t("systemstat.grund.werkzeug_nicht_eingebunden"),
         "nicht_lesbar": t("systemstat.grund.nicht_lesbar"),
         "kein_limit": t("systemstat.grund.kein_limit"),
         "kein_dienst": t("systemstat.grund.kein_dienst"),

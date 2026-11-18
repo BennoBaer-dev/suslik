@@ -2346,6 +2346,17 @@ T = {
     "system.ampel.analyse": "Analisi",
     "system.ampel.analyse_dauer": "ultima durata {s} s",
     "system.ampel.analyse_nie": "ancora nessuna analisi",
+    # Bauplan beschleuniger_lage BL3 (Reihenfolge wie en.py).
+    "system.ampel.analyse_fehler": "ultima analisi fallita dopo {s} s (vedi il log del servizio)",
+    "ui.lage.kopf_cpu": "{geraet} non funziona, si esegue sulla CPU",
+    "ui.lage.kopf": "{geraet} non funziona",
+    "ui.lage.kopf_eingeschraenkt": "La GPU funziona, ma non è monitorabile",
+    "ui.lage.tooltip": "Causa e rimedio nella pagina Sistema",
+    "system.lage.grund.allgemein": "Causa: il dispositivo per cui è fatta questa immagine non ha calcolato nel controllo di avvio. Rimedio: passa il dispositivo al container e verifica che l'immagine corrisponda all'hardware, oppure imposta backend su cpu se è voluto.",
+    "system.lage.grund.bibliothek_fehlt": "Causa: il container è stato avviato senza il runtime per container di NVIDIA, quindi manca la libreria del driver. Rimedio: passa la scheda con capabilities: [gpu] (Compose) o --gpus all (docker run).",
+    "system.lage.grund.kein_geraet": "Causa: la libreria del driver NVIDIA non segnala nessuna scheda utilizzabile (cuInit {code}). Rimedio: verifica la selezione dei dispositivi (Compose capabilities: [gpu]) e che la scheda funzioni sull'host (lì nvidia-smi).",
+    "system.lage.grund.bindet_nicht": "Causa: la scheda NVIDIA è visibile, ma la sessione CUDA non si è collegata; ipotesi: il driver dell'host non corrisponde alla versione CUDA di questa immagine. Rimedio: confronta il driver dell'host con la versione CUDA di questa immagine.",
+    "system.lage.grund.werkzeug_fehlt": "Causa: nvidia-smi manca in questo container (NVIDIA_DRIVER_CAPABILITIES={wert}), quindi memoria e carico della scheda non sono misurabili. Rimedio: usa capabilities: [gpu] (Compose, senza altre capacità come video) o --gpus all.",
     "system.ampel.retry": "Coda dei nuovi tentativi",
     "system.ampel.retry_info":
         "{offen} aperti / {aufgegeben} abbandonati (finestra {tage} gg)",
@@ -4260,6 +4271,9 @@ vista del giorno integri le persone conosciute.</p>""",
     "systemstat.grund.werkzeug_fehlt":
         "lo strumento di interrogazione di questo dispositivo non è in "
         "questa immagine",
+    "systemstat.grund.werkzeug_nicht_eingebunden":
+        "nvidia-smi non è stato integrato in questo container; il runtime NVIDIA lo aggiunge "
+        "quando la scheda viene passata con capabilities: [gpu] o --gpus all",
     "systemstat.grund.nicht_lesbar": "questa fonte non si è potuta leggere",
     "systemstat.grund.kein_limit":
         "per questo container non è impostato alcun limite di memoria, "

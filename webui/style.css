@@ -669,6 +669,12 @@ a.pchip:hover, a.badge.warn:hover { filter: brightness(1.15); }
   border: 1px solid var(--accent); border-radius: 9px; padding: 1px 7px; margin-left: 6px;
   opacity: .85; white-space: nowrap; }
 .marke .upd:hover { opacity: 1; text-decoration: none; }
+/* Bauplan beschleuniger_lage BL3 Punkt 2: rote Zeile der Beschleuniger-Lage hinter der Marke, Umbruch erlaubt.
+   Eng (max-width 620px) steht sie als eigene Zeile direkt unter der Versionszeile; der klebende Kopf wird dabei
+   eine Zeile hoeher, seine Hoehe misst das Seiten-Skript selbst (--kopf-h), kein Festwert. */
+nav a.lage-rot, nav a.lage-rot:hover { color: var(--crit); background: var(--crit-bg); font-size: 12px;
+  font-weight: 600; white-space: normal; text-decoration: none; }
+@media (max-width: 620px) { nav a.lage-rot { flex-basis: 100%; } }
 
 /* W3 Lazy-Video: Spinner auf der Warteseite (/video), waehrend die Browser-Kopie entsteht */
 .spin { width: 36px; height: 36px; margin: 0 auto 14px; border-radius: 50%;

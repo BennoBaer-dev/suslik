@@ -82,11 +82,11 @@ docker pull ghcr.io/bennobaer-dev/suslik:latest-gpu-legacy  # Intel Gen8/9/11 (t
 docker pull ghcr.io/bennobaer-dev/suslik:latest-rocm        # AMD (testing)
 
 # the same release, pinned so it never moves under you:
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.101-gpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.102-cuda
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.101-cpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.101-gpu-legacy
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.101-rocm
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.103-gpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.103-cuda
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.103-cpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.103-gpu-legacy
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.103-rocm
 ```
 
 > **Testing variants:** `gpu-legacy` and `rocm` follow every release under `latest-*` like
@@ -278,9 +278,10 @@ services:
           devices:
             - driver: nvidia
               count: all                          # or device_ids: ["0"] for a specific GPU
-              capabilities: [gpu, video]          # `video` enables NVENC clip transcoding
-                                                  # (the image also sets NVIDIA_DRIVER_CAPABILITIES
-                                                  # accordingly, so plain `--gpus all` works too)
+              capabilities: [gpu]                 # only `gpu` here: the image sets
+                                                  # NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+                                                  # itself, and naming `video` or `compute` in this
+                                                  # line replaces that and removes nvidia-smi
     volumes:
       - ./suslik-data:/data
 ```
@@ -409,7 +410,7 @@ A `latest-*` tag only moves once a release has been deployed and verified on rea
 when to move, pin the version explicitly:
 
 ```yaml
-    image: ghcr.io/bennobaer-dev/suslik:0.1.1.101-cpu
+    image: ghcr.io/bennobaer-dev/suslik:0.1.1.103-cpu
 ```
 
 To move, change the tag and run `docker compose up -d`. Recent versions stay pullable, but a

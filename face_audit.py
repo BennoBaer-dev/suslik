@@ -778,8 +778,11 @@ def _ort_session(kind, dev, model_file, cache=None):
         # cuDNN-Mismatch, GPU belegt) -> onnxruntime nimmt still CPUExecutionProvider. Ungeprueft
         # meldete der Startup-Check "cuda engaged", waehrend real die CPU rechnete.
         if "CUDAExecutionProvider" not in s.get_providers():
+            # Bauplan beschleuniger_lage BL1 Punkt 5: statt der Vermutung „version mismatch?" der Satz des
+            # Urteils ueber die NVIDIA-Lage (Bibliothek, Geraet, Bindung, Werkzeug).
+            from core.nvidia_lage import lage_sammeln as _lage, urteil as _urteil   # noqa: PLC0415
             _log.error(f"WARN: CUDA device '{dev or 0}' not available -> running on "
-                              f"CPU (driver/cuDNN vs. onnxruntime-gpu version mismatch?)")
+                       f"CPU ({_urteil(_lage(), False)['satz']})")
         return s
     if kind == "migraphx" and "MIGraphXExecutionProvider" in avail:
         # AMD (N2): Geraete-Vorpruefung wie im OpenVINO-Zweig — ohne /dev/kfd ist der

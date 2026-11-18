@@ -78,8 +78,17 @@ The `-gpu` image bakes in current Intel compute-runtime + NPU drivers. The **hos
 talks to, so the devices are passed in at runtime (`/dev/dri`, `/dev/accel/accel0`) — see
 [installation.md](installation.md#intel-variant-igpu--npu-via-openvino).
 
-If the self-check says `running on CPU` on Intel hardware, the host driver and the image's
-runtime versions don't line up for your kernel — that's the usual cause.
+If the device the image is built for does not compute in the startup check, the self-check
+writes a `[FAIL ]` line such as `this gpu image should compute on the GPU, but the GPU did not
+compute in the startup check; recognition runs on the CPU`, `/health` reports `ok: false`, the
+System page names cause and fix under the Backend tile, and every page carries a short red line
+next to the version (`GPU not working, running on CPU`, or `NPU not working` when the NPU was set
+in the configuration). The same holds for the `-gpu-legacy` and `-rocm` images. When step 2 of the
+self-check says the iGPU was `found but did NOT bind in real probe`, the host driver and the
+image's runtime versions don't line up for your kernel; that's the usual cause. If you run a GPU
+image on the CPU on purpose, set `backend: cpu` and nothing turns red. An iGPU without an NPU is
+not an error with `backend: auto`: the NPU is only expected when you set it yourself. The check
+runs once per start, so the red line goes away with the next start on which the device computes.
 
 ## NVIDIA (CUDA)
 
@@ -102,11 +111,13 @@ has no `/dev/nvidia*` device nodes there. The card comes in through `/dev/dxg`, 
 provided by the NVIDIA driver installed in Windows. When the nodes are missing and `/dev/dxg` is
 present, suslik asks that driver whether it sees an NVIDIA card. If it does, recognition, video
 decoding for the analysis and the display transcodes use the card, as on Linux. Each of them is
-probed at start. If the CUDA provider does not bind, recognition runs on the CPU and the log says
-so; an error while the CUDA session is built is reported, not hidden. Hardware decoding falls back
-to software only when it delivered no frame at all, and the display encoder falls back to the CPU
-when its probe fails. The startup self-check shows the outcome: `cuda:0 — device engaged` for recognition, and the `video` line for
-the encoder.
+probed at start. If the CUDA provider does not bind, the startup self-check reports a `[FAIL ]`
+line with the cause and the fix, and the page header turns red as on Linux (the cases are listed in
+[proxmox.md](proxmox.md#10-if-it-says-something-else-in-the-container)); an error while the CUDA
+session is built is reported, not hidden. Hardware decoding falls back to software only when it
+delivered no frame at all, and the display encoder falls back to the CPU when its probe fails. The
+startup self-check shows the outcome: `cuda:0 — device engaged` for recognition, or the `[FAIL ]`
+line, and the `video` line for the encoder.
 
 Docker documents the setup on its side in
 [GPU support in Docker Desktop for Windows](https://docs.docker.com/desktop/features/gpu/): the

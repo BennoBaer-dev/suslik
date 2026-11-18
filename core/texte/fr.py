@@ -2251,6 +2251,17 @@ T = {
     "system.ampel.analyse": "Analyse",
     "system.ampel.analyse_dauer": "dernière durée {s} s",
     "system.ampel.analyse_nie": "aucune analyse pour l'instant",
+    # Bauplan beschleuniger_lage BL3 (Reihenfolge wie en.py).
+    "system.ampel.analyse_fehler": "dernière analyse échouée après {s} s, voir le journal du service",
+    "ui.lage.kopf_cpu": "{geraet} ne fonctionne pas, exécution sur le CPU",
+    "ui.lage.kopf": "{geraet} ne fonctionne pas",
+    "ui.lage.kopf_eingeschraenkt": "Le GPU fonctionne, mais ne peut pas être surveillé",
+    "ui.lage.tooltip": "Cause et solution sur la page Système",
+    "system.lage.grund.allgemein": "Cause : l'appareil pour lequel cette image est faite n'a pas calculé lors du contrôle de démarrage. Solution : transmettez l'appareil au conteneur et vérifiez que l'image correspond au matériel, ou réglez backend sur cpu si c'est voulu.",
+    "system.lage.grund.bibliothek_fehlt": "Cause : le conteneur a été démarré sans le runtime de conteneur NVIDIA, la bibliothèque du pilote manque donc. Solution : transmettez la carte avec capabilities: [gpu] (Compose) ou --gpus all (docker run).",
+    "system.lage.grund.kein_geraet": "Cause : la bibliothèque du pilote NVIDIA ne signale aucune carte utilisable (cuInit {code}). Solution : vérifiez la sélection des appareils (Compose capabilities: [gpu]) et que la carte fonctionne sur l'hôte (nvidia-smi sur l'hôte).",
+    "system.lage.grund.bindet_nicht": "Cause : la carte NVIDIA est visible, mais la session CUDA ne s'est pas liée ; hypothèse : le pilote de l'hôte ne correspond pas à la version CUDA de cette image. Solution : comparez le pilote de l'hôte avec la version CUDA de cette image.",
+    "system.lage.grund.werkzeug_fehlt": "Cause : nvidia-smi manque dans ce conteneur (NVIDIA_DRIVER_CAPABILITIES={wert}), la mémoire et la charge de la carte ne sont donc pas mesurables. Solution : utilisez capabilities: [gpu] (Compose, sans autres capacités comme video) ou --gpus all.",
     "system.ampel.retry": "File de rattrapage",
     "system.ampel.retry_info":
         "{offen} ouverts / {aufgegeben} abandonnés (fenêtre {tage} j)",
@@ -4181,6 +4192,9 @@ connues.</p>""",
     "systemstat.grund.werkzeug_fehlt":
         "l\u2019outil d\u2019interrogation de cet appareil n\u2019est pas "
         "dans cette image",
+    "systemstat.grund.werkzeug_nicht_eingebunden":
+        "nvidia-smi n\u2019a pas \u00e9t\u00e9 int\u00e9gr\u00e9 \u00e0 ce conteneur ; le runtime NVIDIA l\u2019ajoute "
+        "lorsque la carte est transmise avec capabilities: [gpu] ou --gpus all",
     "systemstat.grund.nicht_lesbar":
         "cette source n\u2019a pas pu être lue",
     "systemstat.grund.kein_limit":

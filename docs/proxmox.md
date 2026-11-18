@@ -138,7 +138,7 @@ is the part of this page that deals with it.
 | `nvidia-container-cli: mount error: failed to add device rules: unable to find any existing device filters attached to the cgroup` | [Chain 3, step 6](#6-turn-off-cgroup-enforcement-in-the-toolkit-in-the-container) |
 | `nvidia-smi` prints the card, but CUDA is still not detected | [Chain 3, step 7](#7-two-smoke-tests-because-the-obvious-one-is-too-weak-in-the-container) |
 | The smoke test prints only `CPUExecutionProvider` | [Chain 3, step 7](#7-two-smoke-tests-because-the-obvious-one-is-too-weak-in-the-container) |
-| `could not select device driver "nvidia" with capabilities: [[gpu video]]` | [Chain 3, step 10](#10-if-it-says-something-else-in-the-container) |
+| `could not select device driver "nvidia" with capabilities: [[gpu]]` | [Chain 3, step 10](#10-if-it-says-something-else-in-the-container) |
 | `running on CPU` on the `cuda` image | [Chain 3, step 10](#10-if-it-says-something-else-in-the-container) |
 | `Failed to initialize NVML: Unknown Error` | [Chain 3, step 10](#10-if-it-says-something-else-in-the-container) |
 | `/dev/kfd` is not there on the node | [Chain 4, step 2](#2-find-the-two-devices-on-the-node) |
@@ -333,7 +333,7 @@ missing the first has its own signature, and knowing them saves an evening:
 * No device line at all: suslik starts and runs on the CPU. Not silently, though. Steps 2 and 3 of
   the startup self-check name the missing device, see the end of each chain.
 * The NVIDIA `deploy:` block without a working Container Toolkit: the container is created and
-  then start fails with `could not select device driver "nvidia" with capabilities: [[gpu video]]`
+  then start fails with `could not select device driver "nvidia" with capabilities: [[gpu]]`
   (measured here as well). `docker run --gpus all` fails a bit earlier, with
   `failed to discover GPU vendor from CDI: no known GPU vendor found`.
 * A `dev[n]` entry pointing at a path that does not exist **on the node**: the LXC itself does not
@@ -1202,7 +1202,8 @@ services:
           devices:
             - driver: nvidia
               count: all                          # or device_ids: ["0"] for a specific GPU
-              capabilities: [gpu, video]          # `video` enables NVENC clip transcoding
+              capabilities: [gpu]                 # only `gpu` here; the image sets its driver
+                                                  # capabilities itself (see installation.md)
     volumes:
       - ./suslik-data:/data
 ```
@@ -1240,13 +1241,34 @@ inside the container prints the address) and the setup wizard takes over
 
 ### 10. If it says something else (in the container)
 
-* `could not select device driver "nvidia" with capabilities: [[gpu video]]` at start: the
+* `could not select device driver "nvidia" with capabilities: [[gpu]]` at start: the
   Container Toolkit is not in play. Back to steps 5 and 6, and check `/dev/nvidia*` inside the LXC
   (step 3).
-* `running on CPU` in the log: read step 2 of the self-check. The line
-  `[ ok  ] CUDA  CUDAExecutionProvider available` there means the image's runtime is fine and the
-  device is the problem; if that line is missing entirely, you are probably running a different
-  image tag than `-cuda`.
+* No `device engaged` line, or a `[FAIL ]` line in the self-check: the `[FAIL ]` line in step 3
+  names the cause and the fix. The System page shows the same cause under the Backend tile, and
+  every page carries a short red line next to the version (starting with `GPU not working`, or
+  `GPU works, but cannot be monitored`). The cases on the `-cuda` image:
+  * `the NVIDIA driver library libcuda.so.1 is missing in this container`: the container was
+    started without the NVIDIA container runtime. Pass the card in with `capabilities: [gpu]`
+    (Compose) or `--gpus all` (docker run).
+  * `the NVIDIA driver library is present, but it reports no usable device (cuInit returned …)`:
+    check the device selection and that the card works on the host (`nvidia-smi` there).
+  * `the NVIDIA card is visible …, but the CUDA session did not bind`: the suspected cause is a
+    host driver that does not match the CUDA version in this image.
+  * `the NVIDIA card computes, but nvidia-smi is missing in this container`: recognition runs, but
+    card memory and load cannot be measured. Use `capabilities: [gpu]` without further
+    capabilities such as `video`, or `--gpus all`.
+  * `this cuda image should compute on the GPU, but the GPU did not compute in the startup check`:
+    the general form, when none of the cases above was judged (for example the CUDA provider is
+    missing from the image).
+
+  Step 2 of the self-check shows `[ ok  ] CUDA  CUDAExecutionProvider available` only when the
+  driver library is present and reports at least one device, otherwise `[warn ]` with the same
+  cause. Right after the `CUDA:` versions line, one `[info ]` line `NVIDIA in this container: …`
+  lists what reached the container: `NVIDIA_DRIVER_CAPABILITIES`, `NVIDIA_VISIBLE_DEVICES`,
+  whether `nvidia-smi` and `libcuda.so.1` are present, the number of `/dev/nvidia*` nodes and the
+  `cuInit` result with the device count. Quote that line when you ask for help. If the CUDA line
+  is missing from step 2 entirely, you are probably running a different image tag than `-cuda`.
 * `Failed to initialize NVML: Unknown Error` in a container that worked a minute ago: NVIDIA
   documents this for systems where systemd manages the container's cgroups, where a plain
   `systemctl daemon-reload` is enough to trigger it. Their

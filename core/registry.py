@@ -704,6 +704,59 @@ def betrieb_soll(variante):
     return tuple(eintrag["zeilen"]), eintrag["backend"]
 
 
+def beschleuniger_lage(variante, eingestellt, wirksam, gebunden, fall=None, fall_marke=None, werte=None):
+    """Lage des Beschleunigers beim Start: Soll aus Variante und Einstellung gegen die gebundenen Geraete.
+    -> dict variante, soll, ist, geraet, abweichung, eingeschraenkt, fall, folge, satz, werte"""
+    # Bauplan analysen/bauplan_beschleuniger_lage.md, Stufe BL2 Punkt 1. Rein: liest nur die Tabellen dieses
+    # Moduls, keine Umgebung, kein Geraet. `gebunden` ist die Menge der Geraete ("GPU", "NPU"), die in der echten
+    # Sitzung von Schritt 3 der Startpruefung gebunden haben, oder None, wenn kein Modell zum Proben vorlag (offen).
+    # `soll` ist die sortierte Liste der Beschleuniger, die rechnen sollen; leer heisst CPU (kein Versprechen).
+    # `ist` nennt nur gebundene Beschleuniger, nie die CPU.
+    beschl = {"GPU", "NPU"}
+
+    def geraete(wert):
+        # Geraete eines Backend-Werts: openvino nach seinem Geraet (MIXED = GPU und NPU, CPU = keins), die
+        # uebrigen Beschleuniger-kinds (cuda, migraphx) rechnen auf der GPU, cpu und Unbekanntes auf keinem.
+        kind, _, dev = str(wert or "").strip().partition(":")
+        kind, _bekannt = kind_von(kind)
+        if kind == "openvino":
+            d = (dev or default_device(kind) or "").split(".")[0].upper()
+            return set(beschl) if d == "MIXED" else ({d} & beschl)
+        return {"GPU"} if kind in BACKENDS and kind != "cpu" else set()
+
+    v = str(variante or "").strip().lower()
+    e = str(eingestellt or "").strip()
+    # Die Variante verspricht einen Beschleuniger, wenn ihr Wizard-Wert einen hat (cpu und eine leere oder
+    # unbekannte Variante nie). Eingestellt `auto` (oder leer): das Soll ist das Versprechen der Variante, auch
+    # wenn das Placement MIXED waehlt (ED003); sonst der eingestellte Wert (`cpu`, `openvino:CPU`: kein Soll).
+    versprochen = geraete(VARIANTEN[v]["wizard_default"]) if v in VARIANTEN else set()
+    if not versprochen:
+        soll = set()
+    elif e.lower() in ("", "auto"):
+        soll = versprochen
+    else:
+        soll = geraete(e)
+    ist = None if gebunden is None else set(gebunden) & beschl
+    fehlt = set() if ist is None else soll - ist
+    abweichung = bool(fehlt)
+    # Eingeschraenkt: das Urteil der cuda-Variante (core/nvidia_lage) meldet FAIL, obwohl die GPU gebunden hat;
+    # heute ist das allein der Fall werkzeug_fehlt (Entscheid 2 des Eigentuemers vom 18.11.2026).
+    eingeschraenkt = bool(soll) and gebunden is not None and not abweichung and fall_marke == "FAIL"
+    # Folge: CPU-Rechnen nur, wenn das wirksame Backend cpu ist (Auto-Placement); sonst bleibt es offen.
+    folge = "cpu" if kind_von(str(wirksam or "").strip().partition(":")[0])[0] == "cpu" else "offen"
+    geraet = "/".join(sorted(fehlt)) or None
+    satz = None
+    if abweichung:
+        lauf = {"cpu": "recognition runs on the CPU", "offen": "where recognition runs is not confirmed"}[folge]
+        satz = (f"this {v} image should compute on the {' and '.join(sorted(soll))}, but the {geraet} did not "
+                f"compute in the startup check; {lauf}. Check that the device is passed into the container and "
+                f"that the image matches the hardware, or set backend to cpu if that is intended. Details on the "
+                f"System page")
+    return {"variante": v or None, "soll": sorted(soll), "ist": "offen" if ist is None else sorted(ist),
+            "geraet": geraet, "abweichung": abweichung, "eingeschraenkt": eingeschraenkt,
+            "fall": fall or "allgemein", "folge": folge, "satz": satz, "werte": dict(werte or {})}
+
+
 def ep_optionen(kind, dev):
     """Zusaetzliche Provider-Optionen DIESES Geraets -> dict (leer, wenn keine).
 

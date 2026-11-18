@@ -2216,6 +2216,17 @@ T = {
     "system.ampel.analyse": "Análisis",
     "system.ampel.analyse_dauer": "última duración {s} s",
     "system.ampel.analyse_nie": "aún sin análisis",
+    # Bauplan beschleuniger_lage BL3 (Reihenfolge wie en.py).
+    "system.ampel.analyse_fehler": "el último análisis falló tras {s} s — mira el registro del servicio",
+    "ui.lage.kopf_cpu": "{geraet} no funciona, se ejecuta en la CPU",
+    "ui.lage.kopf": "{geraet} no funciona",
+    "ui.lage.kopf_eingeschraenkt": "La GPU funciona, pero no se puede supervisar",
+    "ui.lage.tooltip": "Causa y solución en la página Sistema",
+    "system.lage.grund.allgemein": "Causa: el dispositivo para el que está hecha esta imagen no calculó en la comprobación de arranque. Solución: pasa el dispositivo al contenedor y comprueba que la imagen corresponde al hardware, o pon backend en cpu si es lo que quieres.",
+    "system.lage.grund.bibliothek_fehlt": "Causa: el contenedor se inició sin el runtime de contenedores de NVIDIA, por eso falta la biblioteca del controlador. Solución: pasa la tarjeta con capabilities: [gpu] (Compose) o --gpus all (docker run).",
+    "system.lage.grund.kein_geraet": "Causa: la biblioteca del controlador NVIDIA no indica ninguna tarjeta utilizable (cuInit {code}). Solución: comprueba la selección de dispositivos (Compose capabilities: [gpu]) y que la tarjeta funciona en el host (allí nvidia-smi).",
+    "system.lage.grund.bindet_nicht": "Causa: la tarjeta NVIDIA es visible, pero la sesión CUDA no se vinculó; sospecha: el controlador del host no corresponde a la versión de CUDA de esta imagen. Solución: compara el controlador del host con la versión de CUDA de esta imagen.",
+    "system.lage.grund.werkzeug_fehlt": "Causa: falta nvidia-smi en este contenedor (NVIDIA_DRIVER_CAPABILITIES={wert}), por eso no se pueden medir la memoria ni la carga de la tarjeta. Solución: usa capabilities: [gpu] (Compose, sin más capacidades como video) o --gpus all.",
     "system.ampel.retry": "Cola de reintentos",
     "system.ampel.retry_info":
         "{offen} abiertos / {aufgegeben} abandonados (ventana {tage} d)",
@@ -4085,6 +4096,9 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "systemstat.grund.werkzeug_fehlt":
         "la herramienta de consulta de este dispositivo no está en esta "
         "imagen",
+    "systemstat.grund.werkzeug_nicht_eingebunden":
+        "nvidia-smi no se ha integrado en este contenedor; el entorno de ejecución de NVIDIA lo "
+        "añade cuando la tarjeta se entrega con capabilities: [gpu] o --gpus all",
     "systemstat.grund.nicht_lesbar": "no se ha podido leer esta fuente",
     "systemstat.grund.kein_limit":
         "este contenedor no tiene fijado ningún límite de memoria, así que "
