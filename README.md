@@ -15,7 +15,7 @@ running (see the roadmap section below).
 
 The `latest-*` image tags follow the newest release, so `docker compose pull` gets you
 what this README describes. To pin a version instead, use its tag explicitly:
-`ghcr.io/bennobaer-dev/suslik:0.1.1.103-gpu`.
+`ghcr.io/bennobaer-dev/suslik:0.1.1.110-gpu`.
 
 ## Why this exists
 
@@ -40,7 +40,7 @@ declines rather than mislabels.
 The Today page answers "who was on the property, when, and where did they go" — one card per
 person, one block per pass, unknowns kept visible instead of buried:
 
-![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.1.103)
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.1.110)
 
 *(Screenshot from a live install of v0.1.0.199; names and faces anonymized. The
 "Recognized live" row is the live watchers' preliminary naming, right on the stream.)*
@@ -86,17 +86,16 @@ all stored face images and, where Telegram video is on, the video of the appeara
   transfer every picture shows Frigate's real answer. A one-click diagnosis bundles the suslik
   report with Frigate's own log. Needs write-back enabled and Frigate's own face recognition
   switched on.
-- **Vision detect (early working version)** — a third, independent recognition path: a
-  vision-language model judges a whole walk-through as one candidate grid against your
-  approved galleries. Runs against a local llama.cpp server or any OpenAI-compatible
-  endpoint you configure — without that, nothing leaves your machine. Includes a gallery
-  wizard that curates reference proposals itself, and a recognition test that shows face,
-  person and vision side by side for any past pass.
-- **Person recognition (preview)** — a second, independent path that learns residents by their
-  whole appearance (build, hair, posture) and recognizes them **without a visible face**. You
-  harvest images from your own recordings, approve every picture by hand, and arm it yourself;
-  alerts are clearly marked as person recognition. See **[Person recognition](docs/person-recognition.md)**
-  for the step-by-step guide.
+- **Vision detect (parked)** — a third recognition path in which a vision-language model judges
+  a whole walk-through against approved galleries. It is switched off in this version: its
+  galleries came from the old person-learn run, which has been removed. It comes back once it is
+  rebuilt on the new body images.
+- **Person recognition (preview)** — a second path that recognizes residents **without a visible
+  face**, by the whole body. A person learning run you start by hand cuts a few body images from videos where
+  the face path recognized the person; you check every new image on the **Body images** page.
+  An event with no recognized face and one person gets a body name when its body picture is close
+  enough to one of these images. The name is only shown on the passes, never sent. See
+  **[Person recognition](docs/person-recognition.md)**.
 
 ## Two speeds: the live trigger and the confirmed verdict
 
@@ -170,7 +169,7 @@ fixed version instead: [installation.md](docs/installation.md#updating).
 - **[Learning people](docs/learning.md)** — the guided learning run over your own
   recordings: harvest, grouping into recurring people, naming a cluster once, adoption.
 - **[Person recognition (preview)](docs/person-recognition.md)** — recognizing residents
-  without a visible face: learn, review, arm, and what the alerts look like.
+  without a visible face: body images, the person learning run, recognition by distance, and where the name shows up.
 - **[Architecture](docs/architecture.md)** — how the verify layer works and why there are
   separate hardware images.
 - **[Supported hardware](docs/supported-hardware.md)** — the full matrix (integrated GPUs are
@@ -220,31 +219,25 @@ only needed for the optional push-notification channels.
   only the Today page still has a few English bits and says so. All translations are
   native-speaker reviewed.
 
-- **Vision detect (early working version)** *(shipped in 0.1.0.168)*: a third
-  recognition path, independent of the other two. A vision-language model judges the
-  whole walk-through as one candidate grid against your approved galleries — measured
-  here as clearly better than comparing single pictures. It talks to a local
-  llama.cpp server or any OpenAI-compatible endpoint you configure; without that
-  configuration nothing leaves your machine. Galleries are built by a wizard that
-  scores proposals on face visibility, lighting and completeness and says per image
-  why it was picked or dropped. The recognition test page runs face, person and vision
-  over the same past pass so you can see where a judgement comes from. This is
-  published ahead of completion for testing: interfaces and defaults will still move,
-  and which model class is good enough is documented from our own measurements.
+- **Vision detect (parked)**: a third recognition path in which a vision-language model
+  judges the whole walk-through as one candidate grid against approved galleries. It is
+  switched off: its galleries and candidate pictures came from the old person-learn run,
+  which has been removed. The Vision pages say so, and switching it on is refused until it
+  is rebuilt on the new body images.
 
 - **Frigate sync** *(shipped in 0.1.0.138)*: your reference library and Frigate's are
   reconciled class by class on their own page — ready to transfer, only in Frigate,
   deleted in Frigate, sent earlier, rejected. Transfers are selective and pre-checked,
   and every image reports Frigate's real answer. Open: Frigate renames what it accepts,
   so images sent through the API cannot be verified afterwards.
-- **Person recognition (preview)** *(shipped in 0.1.0.113, extended since)*: the second
-  recognition path that works without a visible face. It cooperates with
-  the face path on Today (passes with no usable face are attributed to the person the body
-  path recognized, clearly marked), its decision threshold is measured from your own
-  reviewed material after every training, and the fire rule is configurable. Since
-  Confirmed stranger images (`personlern/fremd/`) are trained as their own
-  class and the threshold is calibrated against them. Next: collecting that stranger
-  material from inside the UI, and moving the harvest inference to the GPU/NPU.
+- **Person recognition (preview)**: the second recognition path that works without a
+  visible face. Body images come from videos the face path recognized; a person learning run you start
+  on the **Body images** page cuts them, and you check each new image. An event with no
+  recognized face and one person is compared with these images by distance, against a
+  threshold with a fixed floor that the calibration from your images can only raise. A
+  walk-through with no face name shows the body name, clearly marked, once enough of its
+  events carry it. No notification, no MQTT, nothing written to Frigate. The person learning run starts
+  only by hand, and videos with more than one person give no body images.
 - **Performance**: one pinned pixel path everywhere,
   video decoding on the GPU (Intel via VAAPI, NVIDIA via NVDEC) with hard gates and a loud
   software fallback, and only the sampled frames leave the decoder. On my machine a

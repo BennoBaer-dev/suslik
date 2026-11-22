@@ -7,10 +7,11 @@ analysis runs as Frigate produces person events.
 
 ## The web UI
 The UI has **eleven sections** (top bar): **Activity** (Today / Passes / Events / Unknown),
-**People** (your reference library), **Person** (the body-recognition path:
-learned material and model status), **Vision** (vision detect), **Live**
+**People** (your reference library), **Person** (the Body images page of the body-recognition
+path — see [person-recognition.md](person-recognition.md)), **Vision** (vision detect, parked in this
+version: the page says why), **Live**
 (live watchers — see [live-watchers.md](live-watchers.md)), **Areas** (camera groups),
-**Learn** (face learning runs, anchors, person learning), **Frigate sync** (the
+**Learn** (face learning runs and anchors), **Frigate sync** (the
 class-by-class comparison with Frigate's own face library), **Settings**,
 **Recognition test** and **System**.
 
@@ -19,12 +20,17 @@ in Expert mode only, in Easy mode the page stays reachable at `/kalibrierung` an
 camera's **Calibrate** button on the Live page) and **Presence** (route `/anwesenheit`) — the
 day, person by person, in quarter-hour cells. Red =
 that person was confirmed present in that quarter hour (by the event analysis or a live
-watcher, shown once), green = the system was running and confirmed nobody, an empty cell =
+watcher, shown once), light with a red border = seen there only via person recognition (body
+name, only with the switch **Presence page** on the Recognition page, `koerper_meldet_anwesenheit`,
+off by default; red wins as soon as a face or live watcher marks the same quarter hour), green =
+the system was running and confirmed nobody, an empty cell =
 the system was not running or did not look at that slot (no statement, not "absent"). The
 hours outside the day window are one cell per hour; the window is derived from your
 sightings (or fixed in Advanced settings). Arrows page day by day back to the first recorded
 day; the three switches **All / Camera / Area** narrow the view. Clicking a red cell opens
-the pass (or the person's day view for live-only sightings). Recording starts with the
+the pass of a confirmed event (or the person's day view for live-only sightings), a
+person-recognition cell opens its own event; the legend names that state only on days that
+show it. Recording starts with the
 version that introduced the page — earlier days stay empty.
 
 **Activity**
@@ -38,9 +44,10 @@ version that introduced the page — earlier days stay empty.
   **Recognized** has one card per person with at least one confirmation that day (from
   the normal analysis or from a live watcher), newest sighting first: best picture,
   "first–last confirmed HH:MM–HH:MM · N passes · last seen CAMERA HH:MM", and, once the
-  presence journal has that day, a small hour bar (red: confirmed present, green: system
-  running, nobody seen; always over all cameras, even in an area view) with "present about
-  N h". The action is **Change**, and the card opens the person's **Appearances** day view
+  presence journal has that day, a small hour bar (red: confirmed present, light with red
+  border: via person recognition, green: system running, nobody seen; each hour names its
+  state on hover; always over all cameras, even in an area view) with "present about N h"
+  (quarter hours via person recognition count too). The action is **Change**, and the card opens the person's **Appearances** day view
   (route `/auftritte`). A person only a live watcher has named carries a small "live" mark
   (preliminary, no confirmed pass yet), and the card opens that live alert instead. Twelve
   cards are shown, the rest folds behind "all N people". There are no combined "A & B"
@@ -89,7 +96,7 @@ version that introduced the page — earlier days stay empty.
   grouped by time, across all cameras unless you set a narrower reach per area under
   Areas), newest first, one collapsed row each: time, duration, up to three avatars plus
   "+N", the "+N not matched" footnote, the source tag (via face / via person / live), the
-  red body bar for body-only attributions and the vision line. A row starts open only when
+  red body bar for body-only attributions and the vision line (not while vision is parked). A row starts open only when
   it needs a look: nobody recognized with a serious face, or an alert went out (at most
   three). Inside, each camera line shows at most three names plus "+N", eight camera lines
   are visible and the rest folds behind "all N cameras". Passes whose whole clip contains

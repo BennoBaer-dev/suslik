@@ -42,27 +42,20 @@ Everything persistent is under the `/data` volume you mounted:
 | Path (under `/data`) | What |
 |---|---|
 | `config/config.json` | the settings the wizard writes (Frigate URL, backend, zones, alert options …) |
-| `refquelle/` | the reference source: one set per learned face (`refquelle/<ref_id>/`: face crop, fingerprint, profile picture, person crop, origin record) and the catalog `refquelle/katalog.jsonl` that binds each set to a person — your reference face library |
+| `refquelle/` | the reference source: one set per learned face (`refquelle/<ref_id>/`: face crop, fingerprint, profile picture, person crop, origin record) and the catalog `refquelle/katalog.jsonl` that binds each set to a person — your reference face library. `refquelle/koerperbilder/` holds the body images of the person recognition: one PNG per image and the file `koerperbilder.jsonl` with person, event, time, fingerprint and state (open, valid, discarded) |
 | `faces/` | a derived copy of the profile pictures, one folder per person, rebuilt by suslik for display and export; not a source any more |
 | `learn/` | enrollment data and the persistent unknown pool |
-| `state/` | judgments, ground-truth labels, write-back log; `state/anwesenheit/` holds the presence marks (one file per day: who was confirmed where, per quarter hour — personal data); `state/archiv/` holds removed reference sets, the copy of the old stock from the one-time migration (`vor_refquelle_<date>/`) and the parts replaced by a restore — nothing in it is deleted |
+| `state/` | judgments, ground-truth labels, write-back log; `state/koerper_treffer.jsonl` holds the results of the body recognition: one line per comparison, a rename of a person appends more lines, and per event the last line counts; `state/anwesenheit/` holds the presence marks (one file per day: who was seen where, per quarter hour: confirmed by face or the live watcher, or via person recognition when that switch is on — personal data); `state/archiv/` holds removed reference sets, the copy of the old stock from the one-time migration (`vor_refquelle_<date>/`) and the parts replaced by a restore — nothing in it is deleted |
 | `live/` | live watchers: per-camera evidence pictures of triggers and name messages, the appearance videos sent over Telegram and shown in the live day view, and the alert log |
-| `personlern/` | the person-recognition path: harvest runs with crops and your review verdicts, confirmed stranger images (`fremd/`), the trained model (`modell/`), judged live crops (`treffer/`, 30-day trim) and the fire-window state |
+| `personlern/` | only on systems that ran an older version: the material of the old person-learn run (model, harvested images, runs, vision galleries). Nothing reads it any more. The maintenance step "data cleanup" moves the whole folder into the trash, which suslik empties 7 days later |
 | `clips/`, `events/` | cached recorded clips (auto-pruned) and per-event crops/logs |
 | `backups/` | tar backups written by versions before the reference source; suslik writes none any more and leaves the old ones in place — the full backup below replaces them |
 
-**`personlern/fremd/` — the stranger folder.** A flat folder of `.jpg` body crops of
-people who are *not* residents. The model trains them as a class of its
-own, and the decision threshold is calibrated against them instead of only between your
-learned people (at least five images are needed; below that the old rule stays and Model
-status says so). The folder starts empty on a fresh install; drop confirmed stranger
-crops in, and the next training picks them up. Nothing else in suslik writes to it, and
-removing the folder simply restores the previous behaviour.
-
 Because config and data live in the volume, they survive image updates. Back up `/data` —
 or use the **Full backup** card on the System page: it downloads one portable archive with
-`config`, `faces`, `learn`, `personlern`, `state` (with `state/archiv/`) and, from `refquelle/`, the
-catalog and the reference sets (candidate sets stay out, they are produced again), deliberately without
+`config`, `faces`, `learn`, an old `personlern` folder while it is still there, `state` (with `state/archiv/`)
+and, from `refquelle/`, the catalog, the reference sets and the open and valid body images (candidate sets
+stay out, they are produced again), deliberately without
 the clip cache and per-event artifacts. The matching restore moves the parts it replaces into
 `state/archiv/`, deletes nothing and restarts the service. Made for moving to another machine. Before
 the update to the first version with the reference source, also save `clips/refcache.npz` (see
@@ -171,8 +164,8 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   service started (`verloren_n`, split by reason: `fenster`, `versuche`, `kaputt`, `event_weg`,
   `clip_weg`, `kein_ergebnis`); each of them also has one ERROR line in the log.
   `worker.absagen_n` counts the jobs the card memory gate refused since start. `worker.person`
-  says whether the person model's session in the analysis worker fell back to the CPU
-  (`fallback`, with the configured `backend`); that fallback also writes one ERROR line.
+  is no longer filled (it stays `{"fallback": false, "backend": null}`): the body fingerprint runs in
+  its own body process, and a fallback to the CPU there writes one ERROR line.
   `worker_straenge.wechsel_letzter` (direction, from, to, time, reason) and `wechsel_n` show the
   changes of the compute thread count since start; a drop below the configured `worker_straenge`
   and a drop back after a rise are ERROR lines.
@@ -217,7 +210,42 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   The same similarity threshold also drives the live watchers' preliminary name stage.
 - **Recognition chain** — its own Settings page: the order face → person → vision with a
   plain-language condition per step (always / only when the face path could not confirm
-  everyone / off).
+  everyone / off). The vision step is parked and does not run (see
+  [person-recognition.md](person-recognition.md)).
+- **Body images and person recognition** — see [person-recognition.md](person-recognition.md) for how the
+  path works. **`person_pfad`** (`immer` = always, the default \| `nur_wenn_gesicht_leer` = only when the
+  face path could not confirm everyone on the walk-through \| `aus` = off; a fresh install starts with `aus`):
+  an event without a recognized face and with exactly one person gets a body name when a body picture cut
+  from its video is close enough to a valid image on the **Body images** page. It needs at least one valid
+  image there. By default the name is only shown. Four switches, all off by default, let it report:
+  **`koerper_meldet_frigate`** (sub label in Frigate, needs `sub_label_schreiben`),
+  **`koerper_meldet_pushover`**, **`koerper_meldet_telegram`** and **`koerper_meldet_ha`** (MQTT topic
+  `koerper_erkannt`), each only with its channel set up, once per walk-through and person. A fifth switch,
+  **`koerper_meldet_anwesenheit`** (off by default), sends nothing outside (unlike `anwesenheit_push`): it
+  writes presence marks for the events the body name counts for, shown on the **Presence** page and in the
+  hour bar on **Today** as their own state *via person recognition*; red stays confirmed by face or live
+  watcher. They are on the
+  **Recognition** page (body card) and also on the **Advanced** settings page. The
+  ten settings of the path, all on the **Advanced** settings page (`koerper_lauf` and `koerper_sichtpruefung`
+  also on the **Body images** page); none of the defaults is measured on more than one system:
+
+  | Key | Default | Allowed | What it does |
+  |---|---|---|---|
+  | `koerper_auswahl_stimmen` | 6 | 1 to 20 | votes the recognized person needs before the video of an event counts as suitable for body images |
+  | `koerper_bilder_je_video` | 3 | 1 to 10 | body images the cutter keeps from one video at most, spread over the time the person was seen |
+  | `koerper_anker_min` | 0.5 | 0 to 1 | how close at least one cut picture must be to the person picture of the recognized face in the same event; below that, all pictures of the video are dropped |
+  | `koerper_sichtpruefung` | on | on / off | new body images wait for your check on the Body images page; off: they count at once (on that page the switch **Accept new images automatically**, the other way round; images already waiting stay until you decide) |
+  | `koerper_lauf` | `hand` | `hand` / `taeglich` / `sofort` | when the person learning run starts: `hand` = only by the button on the Body images page; `taeglich` = once a day with the daily maintenance at 06:00 (not at service start), over all suitable videos still waiting; `sofort` = right after each suitable event, one cut per event at the same time as the analysis of the next events, in the separate body process (on a CPU installation it shares the cores with the analysis) |
+  | `koerper_max_tage` | 10 | 1 to 30 | days a body image is kept; older ones go to the trash in the daily data cleanup |
+  | `koerper_max_je_person` | 50 | 5 to 200 | body images one person may have at most; the oldest go to the trash first |
+  | `koerper_schwelle` | 0.65 | 0 to 0.99 | the floor of the threshold for a body name; 0 = only the threshold calibrated from your images, which needs valid images of two persons |
+  | `koerper_marge` | 0.02 | 0 to 0.5 | margin of the calibration: the strongest match between valid images of two different persons plus this margin; it can only raise the floor |
+  | `koerper_stimmen` | 3 | 1 to 10 | body votes one walk-through must give the same person before the name counts; a vote is one query picture of an event over the threshold, the votes of all events add up |
+
+  Two more settings belong to the body process: **`personwork_rss_max_mb`** (default 3072) is its memory
+  limit, large events are thinned out instead of running out of memory; **`person_backend`** (default `cpu`)
+  places the body fingerprint on another device (`openvino:GPU`, `openvino:NPU`, `cuda`, `migraphx`, each
+  only in the matching image), with a loud fallback to the CPU.
 - **Live watchers** — configured per camera on the **Live** tab, not in the wizard:
   source (`proxy` / `direct` / `url`), processing resolution (360p–2160p, default
   1080p), the two times (appearance end, re-arm), and the notification channels per

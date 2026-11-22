@@ -13,10 +13,10 @@ Waise. Die vier Stellen, die den Unterschied zwischen "funktioniert" und
 `refquelle/katalog.jsonl` (er allein bindet die Saetze an den Namen, die
 Saetze selbst tragen keinen; bis E3b-3b war das `faces/refs_meta.jsonl` mit
 dem einzigen Embedding-Vektor der Vorrats-Referenzen), die
-Event-Crop-Dateinamen (fuenf reine Substring-Leser, kein Index daneben),
-`state/lernlauf/B*/vorrat.jsonl` (offene Angebote samt Beiwert) und
-`personlern/<P*>/manifest.jsonl` (das Trainings-Label — es erzeugt die
-Alt-Klasse ohne jede Nutzeraktion wieder).
+Event-Crop-Dateinamen (fuenf reine Substring-Leser, kein Index daneben) und
+`state/lernlauf/B*/vorrat.jsonl` (offene Angebote samt Beiwert). (Die
+Trainings-Label unter `personlern/` sind mit dem alten Koerper-Lernlauf in
+Stufe KW6 des Bauplans analysen/bauplan_koerperweg_neu.md entfallen.)
 
 DECKUNGS-VERTRAG (die eigentliche Arbeit, K3-Regel aus CLAUDE.md /
 qs_ebenen.md): `BESTAENDE` unten ist die EINE Aufzaehlung der
@@ -55,8 +55,9 @@ from core import logbuch as _logbuch
 _log = _logbuch.logger(__name__)
 
 # Reservierte Namen: weder Quelle noch Ziel eines Umbenennens.
-#   FREMD          — Klassenkennung des Koerper-Modells (core/personmodell,
-#                    core/personlauf), kein Personenname.
+#   FREMD          — Klassenkennung des alten Koerper-Modells (seit Stufe KW6
+#                    des Bauplans analysen/bauplan_koerperweg_neu.md im Archiv),
+#                    kein Personenname; der Name bleibt reserviert.
 # Seit E3b-3b (Bauplan analysen/bauplan_refquelle_einbau.md, Entscheid 6) ohne
 # refs_meta.jsonl und refs_mess.json: ein Name ist kein Ordner mehr, der eine
 # flache Katalogdatei in faces/ ueberschreiben koennte.
@@ -86,11 +87,6 @@ BESTAENDE = (
     ("uebernahmen",           "state/uebernahmen.jsonl",            "muss",   "uebernahmen_umschreiben"),
     ("lernlauf_manifeste",    "state/lernlauf/<lauf>/manifest.json", "muss",  "lernlauf_manifeste_umschreiben"),
     ("lernlauf_vorrat",       "state/lernlauf/<lauf>/vorrat.jsonl", "muss",   "lernlauf_vorrat_umschreiben"),
-    ("personlern_manifeste",  "personlern/<lauf>/manifest.jsonl",   "muss",   "personlern_manifeste_umschreiben"),
-    ("personlern_galerien",   "personlern/galerien/<person>/",      "muss",   "personlern_galerie_umbenennen"),
-    ("personlern_status",     "personlern/modell/status.json",      "muss",   "personlern_status_umschreiben"),
-    ("personlern_live",       "personlern/live_treffer.jsonl + live_fenster.json",
-                                                                    "kann",   "personlern_live_umschreiben"),
     ("live_meldungen",        "live/meldungen.jsonl (+ .1)",        "kann",   "live_meldungen_umschreiben"),
     ("event_crops",           "events/<eid>/*_{best,show,enroll}_<person>_*",
                                                                     "muss",   "event_durchgang"),
@@ -98,6 +94,12 @@ BESTAENDE = (
     ("event_kandidaten",      "events/<eid>/kandidaten.jsonl",      "muss",   "event_durchgang"),
     ("deckung",               "state/deckung.jsonl",                "muss",   "deckung_korrigieren"),
     ("ground_truth",          "state/ground_truth.jsonl",           "muss",   "ground_truth_korrigieren"),
+    # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW2 Punkt 8: Pfad und Feld kennt nur core.koerperweg.
+    ("koerper_treffer",       "Treffer-Datei des Koerperwegs (core.koerperweg.TREFFER_DATEI)",
+                                                                    "muss",   "koerper_treffer_umbenennen"),
+    # Stufe KW12 Punkt 11a: Merk-Datei der Koerper-Meldungen; Pfad und Feld kennt nur core.koerperweg.
+    ("koerper_meldungen",     "Merk-Datei der Koerper-Meldungen (core.koerperweg.MELDE_DATEI)",
+                                                                    "muss",   "koerper_meldungen_umbenennen"),
     # --- bewusst LASSEN (Begruendung ist Teil des Vertrags) --------------------
     ("deckung_sublabel",      "state/deckung.jsonl (sublabel, frigate.label)",
                               "lassen", None),
@@ -106,7 +108,6 @@ BESTAENDE = (
     ("anwesenheit",           "state/anwesenheit/<Tag>.jsonl",      "lassen", None),
     ("unbekannte_pool",       "learn/unbekannte.jsonl",             "lassen", None),
     ("live_beweisbilder",     "live/<Kamera>/<ts>_NAME_<person>.jpg", "lassen", None),
-    ("personlern_kontrolle",  "personlern/kontrolle/<pass>/*.jsonl", "lassen", None),
     ("protokolle",            "state/*.log, events/<eid>/analyze.log, logs/",
                               "lassen", None),
     ("backups_papierkorb",    "backups/master_*.tar.gz, trash/person_* (nur noch Altbestand)",
@@ -136,8 +137,6 @@ GRUENDE_LASSEN = {
     "live_beweisbilder": "der Name ist Beschriftung, nicht Schluessel — der "
                          "Zugriff laeuft ueber den Pfad im Melde-Protokoll; "
                          "Umbenennen wuerde genau die Pfade brechen.",
-    "personlern_kontrolle": "Diagnose-Historie mit eigenem Verfall (TRIM_TAGE); "
-                            "kein Entscheidungsweg haengt daran.",
     "protokolle": "Belege ueber Vergangenes; ihr Umschreiben faelscht die "
                   "Beweislage.",
     "backups_papierkorb": "Zeitschnitte — sie sollen den damaligen Zustand "
@@ -361,94 +360,6 @@ def lernlauf_vorrat_umschreiben(data_dir, alt, neu, log=None):
     return n
 
 
-# --------------------------------------------------- Migratoren: Koerper/Vision
-def personlern_manifeste_umschreiben(data_dir, alt, neu, log=None):
-    """personlern/<P…>/manifest.jsonl, Feld "person" = das TRAININGS-LABEL.
-    Der unangenehmste Wiederauferstehungs-Pfad: das naechste Voll-Training
-    erzeugt die Alt-Klasse OHNE jede Nutzeraktion, und der Koerperpfad meldet
-    danach dauerhaft den alten Namen. Der reservierte Wert "FREMD" wird nie
-    mitersetzt (RESERVIERT deckt das an der Eingangspruefung ab)."""
-    n = 0
-    for p in sorted(glob.glob(os.path.join(data_dir, "personlern",
-                                           "*", "manifest.jsonl"))):
-        n += _jsonl_umschreiben(p, _feld_tauschen(alt, neu, "person"))
-    return n
-
-
-def personlern_galerie_umbenennen(data_dir, alt, neu, log=None):
-    """personlern/galerien/<person>/ — der ORDNERNAME ist die Person
-    (core/visiongalerie.alle liest die Ordnernamen), herkunft.json traegt sie
-    zusaetzlich im Feld "person". Ohne Migration faellt die Person aus dem
-    Vision-Urteil heraus (sie ist im Kandidatenfeld nicht mehr vertreten) und
-    der Wizard zeigt "noch keine Galerie". Der Kopien-Vertrag
-    (quelle_hash/kopie_hash) bleibt gueltig: es wandert nur der Ordner."""
-    basis = os.path.join(data_dir, "personlern", "galerien")
-    q, z = os.path.join(basis, alt), os.path.join(basis, neu)
-    if not os.path.isdir(q):
-        return 0
-    if os.path.exists(z):
-        if log:
-            log.info(f"rename: gallery folder for the new name already exists — "
-                f"left untouched ({z})")
-        return 0
-    zwischen = os.path.join(basis, f".rename-{int(time.time())}-{os.getpid()}")
-    os.rename(q, zwischen)
-    try:
-        os.rename(zwischen, z)
-    except OSError:
-        os.rename(zwischen, q)
-        raise
-    h = os.path.join(z, "herkunft.json")
-    d = _json_lesen(h, {})
-    if d.get("person") == alt:
-        d["person"] = neu
-        _atomar.json_schreiben(h, d)
-    return 1
-
-
-def personlern_status_umschreiben(data_dir, alt, neu, log=None):
-    """personlern/modell/status.json, "personen": {Person: Bildzahl} — fuer
-    core/visiongalerie.deckung ist das die MASSGEBLICHE Personenmenge.
-    svm.pkl wird NICHT von Hand umgeschrieben: der Aufrufer faehrt nach den
-    Manifesten `core/personmodell.trainieren(data_dir)`, das baut die
-    Klassenliste neu, und core/personlive laedt per mtime-Pruefung selbst nach.
-    Ein Pickle mit fremder Klassenliste von Hand zu flicken waere unnoetig
-    riskant — das Statusfeld dagegen muss vor dem Training stimmen, sonst
-    laufen Modell und Anzeige auseinander."""
-    pfad = os.path.join(data_dir, "personlern", "modell", "status.json")
-    d = _json_lesen(pfad, {})
-    personen = d.get("personen")
-    if not isinstance(personen, dict) or alt not in personen:
-        return 0
-    _schluessel_tauschen(personen, alt, neu)
-    _atomar.json_schreiben(pfad, d)
-    return 1
-
-
-def personlern_live_umschreiben(data_dir, alt, neu, log=None):
-    """personlern/live_treffer.jsonl (Feld "person", Today-Herkunftszeile) und
-    live_fenster.json ("karenz": {Person: ts}, treffer[].person — die 900-s-
-    Karenz). Beide verfallen von selbst (30 Tage bzw. Fenster), aber bis dahin
-    zeigt Today eine inkonsistente Zeile und direkt nach dem Umbenennen kann
-    eine Doppelmeldung rausgehen."""
-    basis = os.path.join(data_dir, "personlern")
-    n = _jsonl_umschreiben(os.path.join(basis, "live_treffer.jsonl"),
-                           _feld_tauschen(alt, neu, "person"))
-    pfad = os.path.join(basis, "live_fenster.json")
-    d = _json_lesen(pfad, {})
-    treffer = False
-    if isinstance(d.get("karenz"), dict) and _schluessel_tauschen(d["karenz"], alt, neu):
-        treffer = True
-    for t in (d.get("treffer") or []):
-        if isinstance(t, dict) and t.get("person") == alt:
-            t["person"] = neu
-            treffer = True
-    if treffer:
-        _atomar.json_schreiben(pfad, d)
-        n += 1
-    return n
-
-
 def live_meldungen_umschreiben(data_dir, alt, neu, log=None):
     """live/meldungen.jsonl (+ rotiertes .1), Feld "person" — die Live-Historie
     der Today-Seite. Die Datei wird von einem ANDEREN Prozess (der Engine)
@@ -548,8 +459,12 @@ def deckung_korrigieren(data_dir, alt, neu, log=None, lock=None, markieren=None)
     Akte-Mutex ueber die ganze Datei halten, waehrend parallele Analysen
     anhaengen.
 
-    Umgeschrieben werden `bestaetigt[]`, die Schluessel von `ours` und
-    `korrektur.person`. NICHT angetastet: `sublabel` und `frigate.label`
+    Umgeschrieben werden `bestaetigt[]`, die Schluessel von `ours`,
+    `korrektur.person` und die Schluessel von `koerper_marke.stimmen` (Stufe
+    KW2 Punkt 8 des Bauplans analysen/bauplan_koerperweg_neu.md; sonst findet
+    core.koerperweg.eignet_sich keine Stimme fuer den neuen Namen). Erfasst
+    wird jedes Ereignis, das den Altnamen in einem dieser Felder traegt, auch
+    nur in den Stimmen der Marke. NICHT angetastet: `sublabel` und `frigate.label`
     (Fremd-Tatsachen — was damals nach/aus Frigate ging) sowie
     `alerted`/`presence_push` (historische Wahrheit; sonst faelschte die
     Korrektur die Alarm-Tageszahl). Genau dieselbe Grenze zieht
@@ -578,7 +493,9 @@ def deckung_korrigieren(data_dir, alt, neu, log=None, lock=None, markieren=None)
         best = list(d.get("bestaetigt") or [])
         ours = d.get("ours") if isinstance(d.get("ours"), dict) else {}
         korr = d.get("korrektur") if isinstance(d.get("korrektur"), dict) else {}
-        if alt not in best and alt not in ours and korr.get("person") != alt:
+        marke = d.get("koerper_marke") if isinstance(d.get("koerper_marke"), dict) else {}
+        stimmen = marke.get("stimmen") if isinstance(marke.get("stimmen"), dict) else {}
+        if alt not in best and alt not in ours and korr.get("person") != alt and alt not in stimmen:
             continue
         z = dict(d)
         z["ts"] = ts
@@ -592,6 +509,10 @@ def deckung_korrigieren(data_dir, alt, neu, log=None, lock=None, markieren=None)
             k = dict(korr)
             k["person"] = neu
             z["korrektur"] = k
+        if alt in stimmen:
+            s = dict(stimmen)
+            _schluessel_tauschen(s, alt, neu)
+            z["koerper_marke"] = dict(marke, stimmen=s)
         z["umbenannt"] = {"von": alt, "nach": neu, "ts": ts}
         neu_zeilen.append(z)
     if not neu_zeilen:
@@ -653,6 +574,23 @@ def ground_truth_korrigieren(data_dir, alt, neu, log=None):
         f.flush()
         os.fsync(f.fileno())
     return len(raus)
+
+
+def koerper_treffer_umbenennen(data_dir, alt, neu, log=None):
+    """Die Treffer-Datei des Koerperwegs (Stufe KW5 des Bauplans analysen/bauplan_koerperweg_neu.md), gelesen
+    last-wins je Ereignis -> APPEND ueber core.koerperweg.treffer_umbenennen, das allein Pfad und Feld kennt (Stufe KW2
+    Punkt 8). Ohne den Schritt zeigen die alten Durchgaenge der Person den alten Namen als Koerper-Namen.
+    -> Zahl der angehaengten Zeilen."""
+    from core import koerperweg as _kw
+    return _kw.treffer_umbenennen(data_dir, alt, neu)
+
+
+def koerper_meldungen_umbenennen(data_dir, alt, neu, log=None):
+    """Die Merk-Datei der Koerper-Meldungen (Stufe KW12 Punkt 11a) -> APPEND ueber core.koerperweg.meldungen_umbenennen,
+    das allein Pfad und Feld kennt. Ohne den Schritt meldet ein laufender Durchgang die Person nach dem Umbenennen noch
+    einmal. -> Zahl der angehaengten Zeilen."""
+    from core import koerperweg as _kw
+    return _kw.meldungen_umbenennen(data_dir, alt, neu)
 
 
 # Migratoren: Sync-Merker — entfallen mit E3b-3a (Bauplan analysen/bauplan_refquelle_einbau.md,
@@ -718,11 +656,8 @@ ABLAUF = (
     "uebernahmen_umschreiben",
     "lernlauf_manifeste_umschreiben",
     "lernlauf_vorrat_umschreiben",
-    "personlern_manifeste_umschreiben",
-    "personlern_galerie_umbenennen",
-    "personlern_status_umschreiben",
-    "personlern_live_umschreiben",
     "live_meldungen_umschreiben",
+    "koerper_meldungen_umbenennen",          # Stufe KW12 Punkt 11a: haengt nur an
 )
 
 
@@ -744,16 +679,17 @@ def umbenennen(data_dir, alt, neu, umfeld=None, puls=None, log=None):
        nur die, die seit dem Start des Zugs geschrieben wurden. Das faengt
        Ereignisse einer Analyse mit, die beim Start noch mit der alten
        Personenliste lief (bei mehreren Analyseplaetzen laufen sie parallel).
-    5. Die AKTEN (deckung, ground_truth) ZULETZT und per Append. Sie werden
-       last-wins je eid gelesen; wer sie zuletzt anfasst, erfasst auch die
-       Zeilen, die eine nachlaufende Analyse waehrend des Zugs mit dem
+    5. Die AKTEN (deckung, ground_truth) und die Treffer-Datei des
+       Koerperwegs ZULETZT und per Append. Sie werden last-wins je eid
+       gelesen; wer sie zuletzt anfasst, erfasst auch die Zeilen, die eine
+       nachlaufende Analyse oder Koerper-Abfrage waehrend des Zugs mit dem
        Altnamen geschrieben hat.
-    6. Protokoll, dann Engine wieder starten und die Nachlaeufe anstossen
-       (QS-Bericht, Koerper-Training).
+    6. Protokoll, dann Engine wieder starten und den Nachlauf anstossen
+       (QS-Bericht).
 
     umfeld = Dienst-Griffe, alle optional (Injektionsreinheit — dieses Modul
     importiert nichts aus verifyd): akte_lock, akte_markieren, engine_stoppen,
-    engine_starten, worker_stoppen, last_seen_umhaengen, qs_neu, training.
+    engine_starten, worker_stoppen, last_seen_umhaengen, qs_neu.
     Fehlt ein Griff, wird der Schritt uebersprungen und das im
     Bericht vermerkt (`uebersprungen`) — nie still.
     -> Bericht (dict), der auch ins Protokoll geht."""
@@ -833,6 +769,11 @@ def umbenennen(data_dir, alt, neu, umfeld=None, puls=None, log=None):
             data_dir, alt, neu, log=log)
     except Exception as e:
         bericht["fehler"]["ground_truth_korrigieren"] = f"{type(e).__name__}: {e}"
+    try:
+        bericht["zahlen"]["koerper_treffer_umbenennen"] = koerper_treffer_umbenennen(
+            data_dir, alt, neu, log=log)
+    except Exception as e:
+        bericht["fehler"]["koerper_treffer_umbenennen"] = f"{type(e).__name__}: {e}"
 
     bericht["dauer_s"] = round(time.time() - start_ts, 1)
     try:
@@ -840,7 +781,7 @@ def umbenennen(data_dir, alt, neu, umfeld=None, puls=None, log=None):
     except Exception as e:
         bericht["fehler"]["protokoll"] = f"{type(e).__name__}: {e}"
 
-    for name in ("engine_starten", "qs_neu", "training"):
+    for name in ("engine_starten", "qs_neu"):
         g = _griff(name)
         if g:
             try:

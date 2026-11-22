@@ -2068,6 +2068,47 @@ def load_config(path):
                          # steuerbar haben"): Tuer-Fenster in Bildern (core.tuer), Werkswert 20 wie
                          # im Labor L16. 0 = keine Tuer. PAAR-Bauart: Default hier, Whitelist dort.
         ("tuer_fenster", 20),
+                         # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW1 Punkt 5 (Eigentuemer 20.11.2026
+                         # 17:08:34 „Werte freigeben", Freigabe ED004 17:36:12): wie viele Stimmen der erkannte Name
+                         # mindestens braucht, damit sich das Video fuer Koerperbilder eignet
+                         # (core.koerperweg.eignet_sich); Werk 6, nicht gemessen (Konzept Abschnitt 8).
+                         # PAAR-Bauart: Default hier, Whitelist dort.
+        ("koerper_auswahl_stimmen", 6),
+                         # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW2 Punkt 5 (Entscheid A, Eigentuemer
+                         # 20.11.2026 16:45:00 und 16:45:29, Freigabe ED004 17:36:12): Hoechstalter der Koerperbilder in
+                         # Tagen und Hoechstzahl je Person (core.refquelle.body_age im Wartungsschritt); nicht gemessen.
+                         # PAAR-Bauart: Default hier, Whitelist dort.
+        ("koerper_max_tage", 10),
+        ("koerper_max_je_person", 50),
+                         # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW3 Punkt 5 (Entscheid K, Eigentuemer
+                         # 20.11.2026 17:08:34, Freigabe ED004 17:36:12): Bilder je Video hoechstens, Grenze des Ankers
+                         # zum person.png (core.koerperschnitt.abschliessen) und Sichtpruefung neuer Bilder (an: Zustand
+                         # offen, aus: gueltig, Entscheid E3); Werte aus Konzept Abschnitt 8, nicht gemessen.
+                         # PAAR-Bauart: Default hier, Whitelist dort.
+        ("koerper_bilder_je_video", 3),
+        ("koerper_anker_min", 0.5),
+        ("koerper_sichtpruefung", True),
+                         # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW5 Punkt 6 (Entscheide K und S, Eigentuemer
+                         # 20.11.2026 17:08:34 und 16:34:20, Freigabe ED004 17:36:12): Marge der Eichung (wie EICH_MARGE
+                         # des alten Personenmodells) und Boden der Schwelle (0 = nur geeicht). Stufe KW12 R2 (Entscheid
+                         # 1, Eigentuemer 21.11.2026 19:25:06 „Ja, 3 nehmen", Freigabe ED004 21:46:18): Zahl der Stimmen
+                         # je Durchgang fuer einen Koerper-Namen (szenarien.py), statt koerper_ab (zaehlte Ereignisse).
+                         # PAAR-Bauart: Default hier, Whitelist dort.
+        ("koerper_marge", 0.02),
+        ("koerper_schwelle", 0.65),
+        ("koerper_stimmen", 3),
+                         # Stufe KW12 Punkt 1 (Freigabe ED004 21:46:18): die Melde-Schalter der Koerper-Erkennung, ab
+                         # Werk aus (nur Anzeige); Namen an einer Stelle in core.koerperweg.MELDE_SCHALTER.
+        ("koerper_meldet_frigate", False),
+        ("koerper_meldet_pushover", False),
+        ("koerper_meldet_telegram", False),
+        ("koerper_meldet_ha", False),
+                         # Stufe KW14 Punkt 1 (Freigabe ED004 21:46:18): Marken der Anwesenheit aus dem Koerper-Namen.
+        ("koerper_meldet_anwesenheit", False),
+                         # Stufe KW13 Punkt 2 (Entscheid 7, Freigabe ED004 21:46:18): wann der Personen-Lernlauf
+                         # startet, hand (Werk, nur auf der Seite Koerperbilder), taeglich (mit der Wartung) oder sofort
+                         # (nach jedem geeigneten Ereignis); Werte in der Whitelist. PAAR-Bauart: Default hier.
+        ("koerper_lauf", "hand"),
         ("urteil_kante", _erk_start_v["k"]),
                          # BLICKFENSTER (User-Entscheid 03.09. abends, geeicht
                          # an den vier Testbett-Clips): Anker + Unterstuetzung
@@ -2180,8 +2221,9 @@ def load_config(path):
                          # Bilder. False = SCHLANK und damit der Produkt-Default fuer fremde
                          # Installationen (Bilder nur fuer die Laufzeit des Durchgangs,
                          # danach bleiben Siegerbild + Urteils-Protokoll). True = SAMMEL:
-                         # alle beurteilten Crops bleiben rollierend liegen und sind unter
-                         # /person/kontrolle anschaubar. Nie im Code entschieden, immer hier.
+                         # alle beurteilten Crops bleiben rollierend liegen. Seit Stufe KW6
+                         # des Bauplans analysen/bauplan_koerperweg_neu.md liest ihn nur noch
+                         # das geparkte Vision. Nie im Code entschieden, immer hier.
                          ("diagnostic_collection", False),
                          # .217 (V3): kein-Votum-Gitter des Vision-Laufs auch
                          # im Schlank-Modus behalten (30-Tage-Verfall bleibt).
@@ -2237,7 +2279,7 @@ def load_config(path):
                          ("vision_meldung", False),      # Nachzuegler-Info nach dem Urteil
                          ("vision_alarm_unbestaetigt", False),
                          # Vision-STIMME (Fix vision-stimme-2): Urteil = EINE
-                         # zusaetzliche Stuetze Richtung koerper_ab bei
+                         # zusaetzliche Stimme Richtung koerper_stimmen bei
                          # Namensgleichheit (szenarien.py). Default-Paar ist
                          # PFLICHT: ein Whitelist-Bool ohne Paar hier ist die
                          # stille Store-Falle der .171-Erstkontrolle (Seite
@@ -2255,8 +2297,9 @@ def load_config(path):
                          # Whitelist-Eintrag dort. Stufen-Quelle: KETTE_STUFEN.
                          ("person_pfad", "immer"),
                          ("vision_pfad", "immer"),
-                         # P1 (.202): RSS-Schwelle des personwork-Prozesses (Koerper-
-                         # Urteile/Ernte). 3072 = traegt das Median-Event (M3: 266
+                         # P1 (.202): RSS-Schwelle des personwork-Prozesses (seit Stufe
+                         # KW3/KW6 des Bauplans analysen/bauplan_koerperweg_neu.md der eigene
+                         # Koerper-Prozess: Cutter und Abfragebild). 3072 = traegt das Median-Event (M3: 266
                          # Frames) vollstaendig; p95-Monster (960 Frames = 15,7 GB
                          # Umsatz) laufen in die 10.08.-Degradation statt in den OOM.
                          ("personwork_rss_max_mb", 3072),
@@ -2264,8 +2307,8 @@ def load_config(path):
                          # cpu = Default (35 ms/Bild gemessen, Decode dominiert den
                          # Pfad); openvino:GPU/NPU nur nach Messung — 11.08. toetete
                          # ein zusaetzlicher iGPU-Kontext die Waechter. PAAR-Bauart:
-                         # Default hier, Whitelist-Eintrag in der Tabelle; gelesen
-                         # von core/personmodell._person_backend (Config-Store).
+                         # Default hier, Whitelist-Eintrag in der Tabelle; der Dienst gibt
+                         # den Wert mit dem Auftrag an core/koerperschnitt (Stufe KW3).
                          ("person_backend", "cpu"),
                          ("worker_rss_max_mb", WORKER_RSS_WERK_MB),  # Neustart-Schwelle (VmRSS des Workers;
                          # warm real ~1,9 GB [adaface/GPU] — 2048 liess nur 10 % Luft und riss im
@@ -2402,7 +2445,7 @@ def load_config(path):
             _log.info(f"debug was on from a previous run — reset to off ({_dbg_grund}); "
                       "enable it at runtime in the configuration page")
         sys.stderr.flush()
-    # ENV-Bruecke Frigate-URL (#18 carlsmith360): personlern-Kette und sync_refs
+    # ENV-Bruecke Frigate-URL (#18 carlsmith360): sync_refs und die Subprozesse
     # lesen die Frigate-Adresse aus der ENV — normale Installationen setzen sie
     # aber NUR im UI (Store, eben eingemischt). Ohne Export sahen diese Pfade
     # nie eine URL ('unknown url type: /api/...'); bei uns maskierte die
@@ -3367,7 +3410,7 @@ def job_latten(cfg, camera):
 
 
 def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=None,
-                koerper=False, info=None, clip_quelle="live", clip_alter_min=None,
+                info=None, clip_quelle="live", clip_alter_min=None,
                 puls=None, personenzahl=None, ereignis_start=None, cache_only=False):
     # Bauplan K3, Stufe KP3: `personenzahl` (gueltige Zahl oder None, Service.process ueber
     # core.personenzahl) geht als Job-Feld {eid: Zahl} an den Worker; None = kein fruehes Ende.
@@ -3407,21 +3450,11 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
     _kd = int(cfg.get("live_kalib_max") or 0)
     kalib = ({"deckel": _kd, "data_dir": cfg["data_dir"], "kamera": camera}
              if _kd else {"deckel": 0, "data_dir": "", "kamera": ""})
-    # Z5 (konzept_frames v2 §4): der Koerper-Abnehmer faehrt im selben Frame-Lauf
-    # mit — EIN Decode statt zwei. Scharf-Zustand kommt als JOB-FELD (der Worker
-    # soll nie fuer sich entscheiden), das RAM-Budget als Deckel. Nur im Worker-Weg,
-    # weil nur dort der Deckel gilt.
-    _koerper = bool(koerper and worker is not None)
+    # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW6 Punkt 1: der Koerper-Abnehmer, der im selben Frame-Lauf
+    # mitfuhr (Job-Feld `koerper`), ist ausgebaut; der Koerperweg schneidet sein Bild im eigenen Koerper-Prozess.
     felder = {"eids": [eid], "labels": [camera], "persons": list(persons),
               "dir": event_dir, "latten": latten, "kalib": kalib,
-              "koerper": _koerper, "debug": bool(cfg.get("debug"))}
-    if _koerper:
-        # .528, bewusst MIT `or 4096`: das hier ist kein WAECHTER, sondern das
-        # Abtast-BUDGET des Koerper-Wegs (er degradiert daran, statt in den OOM zu
-        # laufen). „Kein Budget" hiesse hier nicht „keine Regel", sondern
-        # ungebremstes Abtasten — deshalb faellt eine 0 hier auf den Werkswert
-        # zurueck, waehrend sie bei der Wache (WorkerProzess._rss_grenze) AUS heisst.
-        felder["koerper_rss_max_mb"] = int(cfg.get("worker_rss_max_mb") or 4096)
+              "debug": bool(cfg.get("debug"))}
     logpfad = os.path.join(event_dir, "analyze.log")
     if worker is not None:
         # W2: Job in den persistenten Worker statt Prozess-Start je Event (~85 % der CPU
@@ -3654,11 +3687,10 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                     info["frist_gerissen"] = True
             # Telemetrie fuer den W2-Soak (CPU/Event, Peak-RSS) — greifbar per grep.
             # Z5: vmhwm_mb ist die SPITZE im Job (die rss_mb-Schwelle sieht nur den
-            # Stand danach), koerper_* der zusatz-Rueckweg des zweiten Abnehmers.
+            # Stand danach). Das Feld koerper= des zweiten Abnehmers ist mit Stufe KW6
+            # des Bauplans analysen/bauplan_koerperweg_neu.md entfallen.
             lf.write(f"verifyd-worker: cpu_s={antwort.get('cpu_s')} rss_mb={antwort.get('rss_mb')} "
-                     f"vmhwm_mb={antwort.get('vmhwm_mb')} koerper={antwort.get('koerper_crops')}"
-                     f"{'[' + str(antwort.get('koerper_degradiert')) + ']' if antwort.get('koerper_degradiert') else ''}"
-                     f"{'/' + str(antwort.get('koerper_ausfall')) if antwort.get('koerper_ausfall') else ''}\n")
+                     f"vmhwm_mb={antwort.get('vmhwm_mb')}\n")
     else:
         env = dict(os.environ, OV_DEVICE=cfg["ov_device"], FRIGATE_URL=cfg["frigate_url"],
                    SCRATCH_DIR=os.path.join(cfg["data_dir"], "clips"))
@@ -8724,6 +8756,12 @@ class Service:
         self.last_seen = self._load_last_seen()   # Person -> ts letzte Bestaetigung; aus dem Log
                                                   # rekonstruiert, sonst Push-Salve nach Neustart
         self.own_writes = self._load_own_writes() # eids mit VON UNS gesetztem sub_label (Echo-Freiheit)
+        # Stufe KW12 Punkt 4 (Bauplan analysen/bauplan_koerperweg_neu.md): eids, deren letzte eigene Schreibung ein
+        # Koerper-Name ist (ein Gesichts-Name darf ihn ersetzen), die Kennungen mit Koerper-Zeile readonly und die in
+        # der Spur eingereihten Koerper-Auftraege; die beiden Mengen leben nur im Speicher.
+        self.own_writes_koerper = self._load_own_writes_koerper()
+        self._koerper_nur_lesen = set()
+        self._koerper_eingereiht = set()
         # .534 (B9): welche noch offenen Frigate-Ereignisse schon EINMAL gemeldet
         # sind. Ohne den Merker stuende die Zurueckstell-Zeile bei jedem Sweep
         # wieder da — bei einem Ereignis, das eine Stunde offen bleibt, waeren
@@ -8770,8 +8808,6 @@ class Service:
         self._price_key = None
         self._price_restored = False
         self._price_lock = threading.RLock()
-        self._pw_prio_lock = threading.Lock()     # P1: Vorrang-Zaehler der Live-Spur
-        self._pw_live_offen = 0
         self._review_lock = threading.Lock()      # W3: laufende Lazy-Browser-Kopien (ein Bau je Clip)
         self._review_laeuft = set()
         self._review_fehler = {}                  # ed -> ts letzter Fehlschlag: /video zeigt dann eine
@@ -8866,8 +8902,9 @@ class Service:
         # die Regel N-1 in der Vergabestelle laesst per Bau immer einen Platz frei,
         # solange eine andere Klasse wartet. Wer wartet, meldet sich dort an.)
         # Nachbesserung W1b: der Koerper-Strang (_person_live) laeuft in einem
-        # daemon-Thread, der self.lock UEBERLEBT (voller Decode + Pose + DINOv2 +
-        # SVM in-Prozess). 'Live laeuft' ist deshalb self.lock ODER dieser
+        # daemon-Thread, der self.lock UEBERLEBT (seit Stufe KW5 des Bauplans
+        # analysen/bauplan_koerperweg_neu.md wartet er auf das Abfragebild aus dem
+        # eigenen Koerper-Prozess). 'Live laeuft' ist deshalb self.lock ODER dieser
         # Zaehler > 0 (_live_aktiv) — self.lock allein uebersah genau die
         # CPU-schwersten Installationen (Koerper-Strang opt-in, Issue-#21-Klasse).
         self._personlive_lock = threading.Lock()
@@ -8950,6 +8987,23 @@ class Service:
                     except Exception:
                         _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         return eids
+
+    def _load_own_writes_koerper(self):
+        """Die Kennungen, deren letzte Zeile ohne readonly im Schreibprotokoll die Quelle koerper traegt (Stufe KW12
+        Punkt 4c), gelesen beim Start. -> Menge"""
+        letzte = {}
+        p = self._writes_pfad()
+        if os.path.exists(p):
+            with open(p) as f:
+                for l in f:
+                    try:
+                        d = json.loads(l)
+                    except Exception:
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
+                        continue
+                    if isinstance(d, dict) and d.get("eid") and not d.get("readonly"):
+                        letzte[d["eid"]] = d.get("quelle")
+        return {eid for eid, q in letzte.items() if q == "koerper"}
 
     def _writes_append(self, **d):
         with self._writes_sperre(), open(self._writes_pfad(), "a") as f:
@@ -9067,8 +9121,10 @@ class Service:
                     self.log.info(f"{ziel}: read-only — would correct sub_label '{alt}' -> '{r['name']}' "
                                   f"({r['grund']}, recomputed with {eid}), Frigate NOT modified")
                     continue
-                self._writes_append(eid=ziel, label=r["name"], score=_score(cos), cos=cos, berichtigt=alt,
-                                    grund=r["grund"])
+                with self.__dict__.setdefault("_eigen_schreib_schloss", threading.Lock()):   # Stufe KW12 Punkt 4
+                    self._writes_append(eid=ziel, label=r["name"], score=_score(cos), cos=cos, berichtigt=alt,
+                                        grund=r["grund"])
+                    (self.__dict__.get("own_writes_koerper") or set()).discard(ziel)   # Punkt 4d
                 self.log.info(f"{ziel}: name assignment correction sub_label '{alt}' -> '{r['name']}' "
                               f"({r['grund']}, recomputed with {eid})")
                 self._spur(f"sub_label {ziel}",
@@ -9080,7 +9136,9 @@ class Service:
             return berichtigt
         top = (((zuordnung or {}).get(eid) or {}).get("name")
                or max(entry["bestaetigt"], key=lambda p: (entry["ours"].get(p) or {}).get("max") or 0))
-        if eid in self.own_writes or entry["frigate"].get("label") == top:
+        # Stufe KW12 Punkt 4c: eine eigene Koerper-Schreibung haelt die Gesichts-Schreibung nicht auf
+        if ((eid in self.own_writes and eid not in (self.__dict__.get("own_writes_koerper") or ()))
+                or entry["frigate"].get("label") == top):
             return berichtigt                 # schon von uns geschrieben / Frigate sagt es selbst
         if nachhol and entry["frigate"].get("label"):
             self.log.info(f"{eid}: catch-up — Frigate meanwhile carries "
@@ -9092,8 +9150,10 @@ class Service:
             self._writes_append(eid=eid, label=top, score=score, cos=cos, readonly=True)
             self.log.info(f"{eid}: read-only — would set sub_label -> '{top}' ({score}), Frigate NOT modified")
             return None
-        self._writes_append(eid=eid, label=top, score=score, cos=cos)
-        self.own_writes.add(eid)
+        with self.__dict__.setdefault("_eigen_schreib_schloss", threading.Lock()):   # Stufe KW12 Punkt 4
+            self._writes_append(eid=eid, label=top, score=score, cos=cos)
+            self.own_writes.add(eid)
+            (self.__dict__.get("own_writes_koerper") or set()).discard(eid)
 
         # W3 Stufe 1 (.399): der Versand laeuft in der Spur, nicht unter dem
         # Analyse-Lock. Beschluss + writes-Protokoll stehen (oben, unveraendert
@@ -9111,8 +9171,10 @@ class Service:
     def _sublabel_target(self, eid, name, score):
         """Der Zielname einer Wiederholung (Stufe FX3): `label` und `score` der letzten Zeile des Schreibprotokolls fuer
         diese Kennung, Zeilen mit `readonly` zaehlen nicht; so gewinnt eine inzwischen beschlossene Berichtigung auch dann,
-        wenn sie selbst nicht schreiben konnte. -> (Name, Wert); ohne solche Zeile mit WARNING der uebergebene Name"""
-        letzte = None
+        wenn sie selbst nicht schreiben konnte. Stufe KW12 Punkt 4e: dazu die Namen der Koerper-Zeilen dieser Kennung (ohne
+        readonly), die eine Wiederholung ersetzen darf. -> (Name, Wert, Menge der Koerper-Namen); ohne solche Zeile mit
+        WARNING der uebergebene Name"""
+        letzte, koerper = None, set()
         p = self._writes_pfad()
         if os.path.exists(p):
             with open(p) as f:
@@ -9124,10 +9186,12 @@ class Service:
                         continue
                     if d.get("eid") == eid and not d.get("readonly"):
                         letzte = d
+                        if d.get("quelle") == "koerper" and d.get("label"):
+                            koerper.add(d["label"])
         if letzte is None:
             self.log.warning(f"{eid}: sub_label retry finds no line in the write log, keeping '{name}'")
-            return name, score
-        return letzte["label"], letzte["score"]
+            return name, score, koerper
+        return letzte["label"], letzte["score"], koerper
 
     def _sublabel_attempt(self, eid, name, score, senden, versuch=1):
         """Ein Versuch des Hauptwegs in der Melde-Spur (Stufe FX3). Ab dem zweiten Versuch gilt der Zielname des
@@ -9136,13 +9200,15 @@ class Service:
         einen Versuch. -> None (zaehlt als gesendet) oder `_SPUR_UNCOUNTED`; wirft beim endgueltigen Scheitern"""
         try:
             if versuch > 1:
-                name, score = self._sublabel_target(eid, name, score)
+                name, score, koerper = self._sublabel_target(eid, name, score)
                 ist = api(self.cfg, f"/api/events/{eid}").get("sub_label")
                 if ist == name:
                     self.log.info(f"{eid}: sub_label '{name}' is already in Frigate at attempt {versuch}, "
                                   f"not written again")
                     return None
-                if ist:
+                if ist in koerper:                    # Stufe KW12 Punkt 4e: der eigene Koerper-Name weicht
+                    self.log.info(f"{eid}: sub_label retry replaces our own body name in Frigate")
+                elif ist:
                     self.log.info(f"{eid}: sub_label retry '{name}' NOT written — Frigate carries '{ist}' "
                                   f"(a name already in Frigate is not overwritten by a retry)")
                     return self._SPUR_UNCOUNTED
@@ -9389,7 +9455,10 @@ class Service:
         # Pruefung statt als guter Vorsatz — jeder Loeschpfad muss sie passieren:
         #   faces/       die gelernten Gesichter (bis zum Umzug E4 der Altbestand, danach
         #                der abgeleitete Personenordner)
-        #   personlern/  Personenmodell + abgenommenes Trainingsmaterial
+        #   personlern/  der alte Bestand des ausgebauten Koerper-Lernlaufs (Modell,
+        #                Lernbilder, Laeufe, Vision-Galerien); er geht nur ueber den
+        #                Papierkorb (daten_aufraeumen, Bauplan analysen/bauplan_koerperweg_neu.md
+        #                Stufe KW6 Punkt 3, Entscheid N), nie direkt aus diesem Job
         #   backups/     alte Master-Sicherungen aus Versionen vor dem Schnitt E3d (das
         #                taegliche Master-Backup entfiel mit I4); sie liegen und bleiben
         #   dazu die Orte der Referenz-Quelle, gelesen vom Modul (I6, Bauplan
@@ -10040,8 +10109,7 @@ class Service:
         Personen-Schnappschuss und schreiben ihn am Ende weg — der QS-Runner
         einen Bericht mit Alt-Namen, die Bestands-Suche `vorschlaege_<alt>.json`,
         Sammeln/Reorganisieren `learn/gesichter.jsonl`, der Frigate-Export die
-        `<Person>/<Datei>`-Merker, Lernlauf und Personen-Lauf ein Lauf-Manifest
-        mit dem Label. Blockieren ist hier richtiger als nebenher umschreiben:
+        `<Person>/<Datei>`-Merker, der Lernlauf ein Lauf-Manifest mit dem Label. Blockieren ist hier richtiger als nebenher umschreiben:
         die Guards liegen alle schon vor, und ein abgelehnter Klick kostet den
         Nutzer Sekunden, ein halb migrierter Bestand kostet ihn Vertrauen.
 
@@ -10061,9 +10129,6 @@ class Service:
             blocker.append("pool reorganisation")
         if getattr(self, "_sync_job_aktiv", False):
             blocker.append("frigate sync")
-        _pt = getattr(self, "_personlauf_thread", None)
-        if _pt is not None and _pt.is_alive():
-            blocker.append("person run")
         try:
             from core import lernlauf as _ll_b
             _lauf, _fehler = _ll_b.lauf_lesen(self.cfg["data_dir"])
@@ -10157,7 +10222,6 @@ class Service:
                     "worker_stoppen": self.worker_stoppen,
                     "last_seen_umhaengen": self._last_seen_umhaengen,
                     "qs_neu": (lambda: self.qs_neu_starten(sofort=True)),
-                    "training": self._personmodell_neu,
                     # E3b-3b: kein Griff refcache_neu mehr — das Umbenennen schreibt nur
                     # Bindung-Zeilen in den Katalog, die Matrizen-Datei wird nicht umgeschrieben.
                 }
@@ -10198,24 +10262,6 @@ class Service:
             if isinstance(getattr(self, "_vs_laeuft", None), dict) \
                     and alt in self._vs_laeuft:
                 self._vs_laeuft[neu] = self._vs_laeuft.pop(alt)
-
-    def _personmodell_neu(self):
-        """Koerper-Modell nach dem Umbenennen der Trainings-Label neu bauen —
-        das ist der Weg, der svm.pkl korrekt erzeugt (core/personlive zieht
-        per mtime-Pruefung selbst nach). Ein Pickle mit fremder Klassenliste
-        von Hand zu flicken waere unnoetig riskant. Laeuft nur, wenn es
-        ueberhaupt ein Modell gibt, und im Hintergrund (Sekunden auf CPU)."""
-        def _job():
-            try:
-                from core import personmodell as _pm
-                if not (_pm.status_lesen(self.cfg["data_dir"]) or {}).get("personen"):
-                    return
-                _pm.trainieren(self.cfg["data_dir"])
-                self.log.info("person model retrained after rename")
-            except Exception as e:
-                self.log.error(f"person model retrain after rename failed: "
-                         f"{type(e).__name__}: {e}")
-        threading.Thread(target=_job, daemon=True).start()
 
     # ENTFERNT 0.1.0.45 (User 27.07.): suslik loescht NIE in Frigate. Richtung Frigate gibt
     # es nur Holen (Import) und Schicken (Export) — eine Fern-Loeschung muesste zu 100 %
@@ -10344,12 +10390,15 @@ class Service:
         """06:00-Job: QS-Bericht + Crops-Retention + Datenordner-Aufraeumen (Schritt „data cleanup“, daten_aufraeumen,
         Stufen DK1 bis DK3) +
         Altdaten-Aufraeumen + Update-Pruefung + (monatlich)
-        Rotation; beim Start laeuft alles einmal sofort. Das Auffangnetz-Sammeln ist mit Stufe V1b
+        Rotation; beim Start laeuft alles einmal sofort, ausser dem taeglichen Personen-Lernlauf (Stellung taeglich von
+        koerper_lauf, Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW13 Punkt 2d): er steht erst ab dem zweiten
+        Durchgang am Ende der Jobs, also um 06:00, nie beim Dienststart. Das Auffangnetz-Sammeln ist mit Stufe V1b
         abgebaut (Bauplan analysen/bauplan_verbraucher_unbekannt.md, Entscheid 12): die Unbekannten
         kommen ueber den Verbraucher der Unbekannt-Stapel, kein zweiter Clip-Durchlauf.
         Ein taegliches Master-Backup gibt es nicht mehr (Bauplan analysen/bauplan_refquelle_einbau.md,
         Stufe E3 Punkt 4, I4): die Vollsicherung /backup_voll leistet dasselbe."""
         def lauf():
+            erster = True                                # Stufe KW13 Punkt 2d: der Durchgang beim Dienststart
             while True:
                 # JEDER Schritt in eigenem try/except: vorher hing alles an EINEM try — eine
                 # Exception im ersten Schritt (z.B. QS-Bericht) uebersprang stillschweigend
@@ -10364,13 +10413,17 @@ class Service:
                         # die drei Stellen, die bisher unbegrenzt wuchsen.
                         ("stale data cleanup", self.alt_aufraeumen),
                         ("update check", self.update_check)]
+                jobs += [("body recognition catch-up", self._koerper_nachzug)] * any(self.cfg.get(k) for k in __import__("core.koerperweg", fromlist=["MELDE_SCHALTER"]).MELDE_SCHALTER)   # Stufe KW12 Punkt 3c
                 if datetime.datetime.now().day == 1:
                     jobs.append(("deckung rotation", self.deckung_rotieren))
+                if not erster and self.cfg.get("koerper_lauf") == "taeglich":
+                    jobs.append(("body image cutter", self._cutter_taeglich))
                 for name, fn in jobs:
                     try:
                         fn()
                     except Exception as e:
                         self.log.error(f"maintenance job '{name}' failed: {e}")
+                erster = False
                 jetzt = datetime.datetime.now()
                 ziel = jetzt.replace(hour=6, minute=0, second=0, microsecond=0)
                 if ziel <= jetzt:
@@ -12836,6 +12889,28 @@ class Service:
         # Tabelle wie der Bild-Deckel); ein laengeres Fenster koennte der Deckel nie zu Ende fuehren.
         "tuer_fenster": (int, 0, max(_registry.SAMPLE_DECKEL_WERK.values()), "door window in frames: when a face reaches the door bar of the analysis worker for a person it has not recognised yet in this event, the worker looks at every following frame instead of only the sampled ones, for this many frames; a new such face inside the window extends it. Afterwards it continues on the normal sampling grid. FACTORY VALUE 20, measured on real events. How many door frames one event may use at most is fixed per image and equals the factory value of the frame cap (sample_deckel). 0 switches the door off"),
         "stapel_stimmen": (int, 1, 10, "votes until recognized: how many valid faces of an event have to vote for the same person before the analysis worker names that person. A face votes for its best person when its recognition score reaches the vote bar of the analysis worker; faces that fail the size, quality, head-pose or feature-norm bars do not vote. The votes may come from anywhere in the clip, and two faces in the same picture give two votes. A face whose best and second-best person lie too close together gives no vote, see stapel_abstand. FACTORY VALUE 3"),
+        # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW1 Punkt 5: Werkswert 6 in load_config
+        "koerper_auswahl_stimmen": (int, 1, 20, "body images: how many votes the recognised person needs at least before the video of an event counts as suitable for body images. Besides that, the event must show exactly one person, no vote for anyone else and no unknown face. FACTORY VALUE 6, a proposal, not measured"),
+        # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW2 Punkt 5: Werkswerte 10 und 50 in load_config
+        "koerper_max_tage": (int, 1, 30, "body images: how many days a body image is kept. Clothes change, so older pictures leave the store in the daily data cleanup and go to the trash, the oldest first. FACTORY VALUE 10, not measured"),
+        "koerper_max_je_person": (int, 5, 200, "body images: how many body images one person may have at most. When there are more, the oldest ones go to the trash in the daily data cleanup. FACTORY VALUE 50, not measured"),
+        # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW3 Punkt 5: Werkswerte 3, 0.5 und an in load_config
+        "koerper_bilder_je_video": (int, 1, 10, "body images: how many body images the cutter keeps from one video at most, spread evenly over the time the person was seen. FACTORY VALUE 3, not measured"),
+        "koerper_anker_min": (float, 0.0, 1.0, "body images: how close at least one cut picture must be to the person picture of the recognised face in the same event (body fingerprint, 0 to 1). If no picture gets there, the cutter drops all pictures of that video, because it might not show the recognised person. FACTORY VALUE 0.5, not measured"),
+        "koerper_sichtpruefung": (bool, None, None, "body images: new body images wait for your check before they count (on, the default). Off: new pictures count right away"),
+        # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW5 Punkt 6: Werkswerte 0.02 und 0.65 in load_config; Stufe KW12
+        # R2 und Punkt 1: koerper_stimmen (Werk 3) statt koerper_ab und die vier Melde-Schalter (Werk aus)
+        "koerper_marge": (float, 0.0, 0.5, "body recognition: the margin of the calibration. The strongest match between valid body images of two different persons plus this margin is the calibrated threshold. It can only raise the floor (koerper_schwelle), never lower it. FACTORY VALUE 0.02, taken from the old person model, not measured on body images"),
+        "koerper_schwelle": (float, 0.0, 0.99, "body recognition: the floor of the threshold. An event without a recognised face gets a body name only when a body picture cut from its video is at least this close to a valid body image of that person (body fingerprint, 0 to 1). The calibration from your images can only raise it. FACTORY VALUE 0.65, measured on one installation without a wrong name, not measured elsewhere. 0 = only the calibrated threshold, which needs valid images of at least two persons"),
+        "koerper_stimmen": (int, 1, 10, "body recognition: how many body votes one walk-through must give the same person before the name counts. A vote is one query picture of an event that reaches the threshold for that person; one video gives at most koerper_bilder_je_video votes, and the votes of all events of the walk-through add up. The name counts on a walk-through without a recognised face, and next to a face only when the face names the same person. FACTORY VALUE 3"),
+        "koerper_meldet_frigate": (bool, None, None, "body recognition: write the body name to Frigate as sub label of the events it counts for (off by default). Works only with sub_label_schreiben on; a name already in Frigate is never overwritten, and a face name found later replaces the body name. Also on the Recognition page"),
+        "koerper_meldet_pushover": (bool, None, None, "body recognition: send a Pushover notification once per walk-through and person when the body name counts (off by default). Works only with Pushover set up; quiet within anwesenheit_cooldown of the last sighting. Also on the Recognition page"),
+        "koerper_meldet_telegram": (bool, None, None, "body recognition: send a Telegram message once per walk-through and person when the body name counts (off by default). Works only with telegram_modus not aus; quiet within anwesenheit_cooldown of the last sighting. Also on the Recognition page"),
+        "koerper_meldet_ha": (bool, None, None, "body recognition: publish an MQTT message on the topic koerper_erkannt for Home Assistant once per walk-through and person when the body name counts (off by default). Works only with mqtt_publish on and a broker set up; the message carries quelle koerper. Also on the Recognition page"),
+        # Stufe KW14 Punkt 1: Werkswert aus in load_config
+        "koerper_meldet_anwesenheit": (bool, None, None, "body recognition: show the body name on the Presence page and in the presence bar on the Today page, as its own state \"via person recognition\" for the events the body name counts for (off by default). It sends nothing outside, unlike anwesenheit_push; red still means confirmed by face or the live watcher. Off: no new marks, the old ones stay until the presence files are trimmed. Also on the Recognition page"),
+        # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW13 Punkt 2: Werkswert hand in load_config
+        "koerper_lauf": (list, ["hand", "taeglich", "sofort"], None, "person learning run: hand (default) = only when you start it on the Body images page; taeglich = once a day with the daily maintenance, over all suitable events that are still waiting; sofort = right after each suitable event — then one cut runs for each suitable event at the same time as the analysis of the next events, in the separate body process (on a CPU installation it shares the cores with the analysis). Also on the Body images page"),
         "stapel_abstand": (float, 0.0, 0.5, "minimum lead per face: a face only votes when its best person beats the second-best person by at least this value; if the two lie closer together, the face votes for nobody. Applies to the analysis worker and to the live watcher, including the preliminary name of the watcher's first notification. FACTORY VALUE 0.075, measured on real events. 0 switches the rule off"),
         "katalog_guete_kante_min": (int, _KANTE_LO, _KANTE_HI, "catalogue bar (face size): the smallest face, in pixels of its shorter box side, a learning run keeps. FACTORY VALUE 25, the same number the recognition side has used as its vote floor since 0.1.0.400 (measured on field data: correct votes live at 30-49 px on overview cameras, the nonsense cases at 11-19 px; 70 would kill correct ones, 25 costs none). Raise it if your learning material is full of faces that are simply too small to learn anything from; 0 switches the axis off. Per-camera values on the calibration page win over this one"),
         "pruef_guete_t_min": (float, 0.0, 1.0, "catalogue check bar (recognisability): below this, the catalogue check flags a stored picture — together with a feature norm below the learning-stock floor it becomes a removal suggestion. It only looks at pictures you already have and never removes anything by itself; per-camera values on the calibration page win over this one, and pictures without a quality score are never flagged"),
@@ -12932,7 +13007,7 @@ class Service:
         # Ketten-Schalter (Issue #21): Enum aus KETTE_STUFEN (eine Quelle fuer
         # Default, Whitelist und UI-Dropdown). "aus" ueberspringt den Weg an
         # der QUELLE — die teuren Rechnungen starten gar nicht erst.
-        "person_pfad": (list, KETTE_STUFEN, None, "person (body) recognition path: immer = runs on every analyzed event once the person model is armed (today's behavior) | nur_wenn_gesicht_leer = the expensive person judgment (embedding) only starts when the FACE path could NOT confirm everyone on the walk-through — one unconfirmed or unclear person and it runs; body pictures are still collected during the analysis so the judgment has material when it is needed | aus = the path never starts by itself: no body pictures are collected and no person judgment is computed (the biggest saving on weak CPUs); a re-analysis you start yourself keeps working"),
+        "person_pfad": (list, KETTE_STUFEN, None, "person (body) recognition path: an event without a recognised face and with exactly one person gets a body name when a body picture cut from its video is close enough to a valid picture on the Body images page; it needs at least one valid picture there. The name is shown (Today, walk-throughs, appearances); it notifies only on the ways you switch on (koerper_meldet_frigate, koerper_meldet_pushover, koerper_meldet_telegram, koerper_meldet_ha, all off by default). The cut runs in its own background process, one event at a time; an event that does not get its turn in time gets no body name. immer = every such event is checked | nur_wenn_gesicht_leer = only when the FACE path could NOT confirm everyone on the walk-through | aus = the path never starts by itself and no body picture is cut for recognition (the biggest saving on weak CPUs)"),
         "vision_pfad": (list, KETTE_STUFEN, None, "vision detect path: immer = a run starts automatically at the end of every walk-through, as long as vision detect itself is switched on (today's behavior) | nur_wenn_gesicht_leer = the automatic run only starts when the FACE path could NOT confirm everyone on the walk-through | aus = no automatic vision runs at all; runs you start yourself on the Vision page keep working"),
         "diagnostic_collection": (bool, None, None, "keep every JUDGED body image for inspection (Person -> Judged images): on = images of all passes stay for 30 days, roughly 20-40 MB a day; off (default) = they only live while the pass is running, then only the winning image and the verdict log remain"),
         "vision_gitter_behalten": (bool, None, None, "keep the candidate grid image of vision runs that ended WITHOUT a verdict, even in lean mode: it is the only evidence to judge later whether a 'neither' was right; grids still expire with the normal 30-day trim (default: off)"),
@@ -13012,6 +13087,15 @@ class Service:
                     return False, f"'{key}': ungueltiger Wert", False
                 if typ is not bool and not (lo <= w <= hi):
                     return False, f"'{key}': erlaubt {lo}–{hi}", False
+            # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW9 Punkt 4: solange Vision geparkt ist, laesst sich
+            # die Stufe vision_pfad nicht einschalten; abgelehnt vor dem Schreiben des Stores, kein Neustart. "aus"
+            # geht durch. Ein schon gespeicherter Wert bleibt stehen und wirkt nicht (Punkt 5).
+            if key == "vision_pfad" and w != "aus":
+                from core import vision as _vis
+                _v_ok, _v_grund = _vis.vision_verfuegbar()
+                if not _v_ok:
+                    self.log.warning(f"CONFIG rejected: '{key}' = {w!r} — {_v_grund}")
+                    return False, _sprache.t("vision.geparkt_satz"), False
             angewendet[key] = w
         if not angewendet and _fa_neu is None:
             return False, "keine Aenderung", False
@@ -13602,47 +13686,6 @@ class Service:
         threading.Thread(target=lauf, name="steckbriefe",
                          daemon=True).start()
 
-    def start_backbone_migration(self):
-        """.203: Personen-Modell EINMALIG auf das Standard-Backbone heben
-        (dinov2 -> omz0277, User-Entscheid 15.08.). Ein Alt-Modell wuerde
-        sonst draussen ewig weiterlaufen, weil trainieren() nur nach
-        Review-Abschluss/Loeschung feuert — fremde Nutzer reviewen ggf. nie
-        wieder (Automatik-Regel: die Software uebernimmt das selbst).
-        Hintergrund-Thread, Sekunden bis wenige Minuten auf schwacher CPU;
-        das Alt-Modell urteilt bis zum atomaren status-Wechsel weiter.
-        Fehlschlag wird SICHTBAR vermerkt (.141-Klasse), nie still."""
-        from core import personmodell as _pm
-        try:
-            st = _pm.status_lesen(self.cfg["data_dir"])
-        except Exception:
-            st = None
-        if not st or not st.get("bilder"):
-            return                      # kein Modell -> nichts zu migrieren
-        if st.get("backbone") == _pm.BACKBONE_STANDARD:
-            return
-
-        def lauf():
-            try:
-                self.log.info(f"person model: migrating backbone "
-                         f"{st.get('backbone') or _pm.BACKBONE_ALT} -> "
-                         f"{_pm.BACKBONE_STANDARD} (one-time re-training)")
-                neu = _pm.trainieren(self.cfg["data_dir"])
-                ei = neu.get("eichung") or {}
-                self.log.info(f"person model: backbone migration done — "
-                         f"{neu.get('modell')}, threshold "
-                         f"{neu.get('schwelle')} ({ei.get('art', '?')})")
-            except Exception as e:
-                self.log.error(f"!! person model backbone migration failed: "
-                         f"{type(e).__name__}: {e}")
-                try:
-                    _pm.fehler_vermerken(self.cfg["data_dir"],
-                                         f"backbone migration: "
-                                         f"{type(e).__name__}: {e}")
-                except Exception:
-                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
-        threading.Thread(target=lauf, name="backbone-migration",
-                         daemon=True).start()
-
     def live_quittungen_uebernehmen(self, status):
         """Engine-Ergebnisse (Quelltest-Block, Last-Messung) in den Store —
         der SCHREIBWEG bleibt beim Dienst (_cfg_lock), die Engine quittiert
@@ -14167,7 +14210,58 @@ class Service:
         from core import vision as _vis
         block = _vis.block_migrieren(self.cfg.get("vision") or {})
         prot = self._vision_datei("vision_test.json")
-        return block, prot, _vis.vorbedingungen(self.cfg["data_dir"], block, prot)
+        vor = _vis.vorbedingungen(self.cfg["data_dir"], block, prot)
+        # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW6 Punkt 4: Vision ist geparkt; der Grund reist mit
+        # (`geparkt`), die Seiten zeigen ihn, der Schalter bleibt zu.
+        ok, grund = _vis.vision_verfuegbar()
+        if not ok:
+            vor.update(erfuellt=False, geparkt=grund)
+        return block, prot, vor
+
+    def vision_geparkt_html(self):
+        """Der rote Hinweis der Vision-Seiten, solange Vision geparkt ist (Bauplan Koerperweg neu, KW6 Punkt 4).
+        -> HTML-Karte mit dem Grund oder "" """
+        from core import vision as _vis
+        if _vis.vision_verfuegbar()[0]:
+            return ""
+        return ('<div class="card" style="border:1px solid var(--crit);color:var(--crit)">'
+                + html.escape(_sprache.t("vision.geparkt_satz")) + "</div>")
+
+    def vision_parken(self):
+        """Steht vision.aktiv an, waehrend Vision geparkt ist: einmal auf aus setzen, mit WARNING (Bauplan Koerperweg neu,
+        KW6 Punkte 4 und 6, Fehler laut). Traegt der Config-Store den Eintrag, wird er dort auf aus geschrieben, mit
+        Audit-Zeile. Steht er nur im laufenden Wert (aus der yaml, load_config liest den Block auch dort), wird nur der
+        laufende Wert auf aus gesetzt: in die yaml schreibt der Dienst nicht, der Store bleibt unberuehrt, keine
+        Audit-Zeile. Steht er nirgends an, geschieht nichts.
+        -> True, wenn umgestellt"""
+        from core import vision as _vis
+        ok, grund = _vis.vision_verfuegbar()
+        if ok:
+            return False
+        with _cfg_lock:
+            store = _lade_config_store(self.cfg)
+            block = dict(store.get("vision") or {})
+            im_store = bool(block.get("aktiv"))
+            if not im_store and not (self.cfg.get("vision") or {}).get("aktiv"):
+                return False
+            if im_store:
+                block["aktiv"] = False
+                store["vision"] = block
+                _store_schreiben(_config_store_pfad(self.cfg), store)
+        self.cfg["vision"] = dict(self.cfg.get("vision") or {}, aktiv=False)
+        self.log.warning(f"VISION detect switched off: {grund}")
+        if not im_store:
+            return True
+        try:
+            audit = os.path.join(self.cfg["data_dir"], "config", "config_audit.jsonl")
+            os.makedirs(os.path.dirname(audit), exist_ok=True)
+            with open(audit, "a") as f:
+                f.write(json.dumps({"ts": round(time.time(), 1), "aenderungen": {"vision.aktiv": [True, False]},
+                                    "auto": f"vision parked (stage KW6): {grund}"}, ensure_ascii=False) + "\n")
+        except Exception as e:                                 # noqa: BLE001
+            self.log.error(f"VISION parked: audit line not written ({type(e).__name__}: {e}) — vision is off "
+                           "either way")
+        return True
 
     def _vision_datei(self, name):
         try:
@@ -14242,9 +14336,14 @@ class Service:
         return bool(person) and person in self._galerie_personen()
 
     def vision_galerie_lage(self, person="", groesse=None, neu=False):
-        from core import personernte as _pe
+        from core import vision as _vis
         from core import visiongalerie as _vg
         dd = self.cfg["data_dir"]
+        if not _vis.vision_verfuegbar()[0]:
+            # Bauplan Koerperweg neu, KW6 Punkt 4: geparkt — dieselbe Lage ohne Personen und ohne Lernlaeufe, nichts
+            # wird nachgerechnet oder geschrieben, das archivierte Modul wird nicht gerufen.
+            return _vg.wizard_lage(dd, lambda *_a, **_k: [], [], person, groesse, neu)
+        from core import personernte as _pe          # noqa: PLC0415  seit KW6 archiviert, nur hinter dem Tor
         # Schaerfe einmalig nachziehen (§6.4): der Wizard liest nur, gerechnet
         # wird genau hier und genau einmal je Bild.
         _vg.schaerfe_nachziehen(dd, _pe.laeufe_lesen)
@@ -14261,8 +14360,12 @@ class Service:
         fuellen die Vielfalts-Deckel des Kurators (.161), damit der Nachruecker
         nicht den Tag oder das Ereignis doppelt, das der Nutzer gerade behalten
         hat."""
-        from core import personernte as _pe
+        from core import vision as _vis
         from core import visiongalerie as _vg
+        ok, grund = _vis.vision_verfuegbar()
+        if not ok:
+            return False, grund                        # KW6 Punkt 4: geparkt, nichts geschrieben
+        from core import personernte as _pe          # noqa: PLC0415  seit KW6 archiviert, nur hinter dem Tor
         if not self._galerie_person_ok(person):
             return False, "unknown person"
         dd = self.cfg["data_dir"]
@@ -14292,7 +14395,11 @@ class Service:
     def vision_galerie_vergessen(self, person):
         """Das Ablehn-Gedaechtnis dieser Person leeren (Ruecknahme bleibt
         moeglich, wie beim bestehenden Abnahme-Muster)."""
+        from core import vision as _vis
         from core import visiongalerie as _vg
+        ok, grund = _vis.vision_verfuegbar()
+        if not ok:
+            return False, grund                        # KW6 Punkt 4: geparkt, nichts geschrieben
         if not self._galerie_person_ok(person):
             return False, "unknown person"
         for s in list(_vg.abgelehnt_lesen(self.cfg["data_dir"], person)):
@@ -14303,7 +14410,11 @@ class Service:
         """Abnahme: Kopien + Herkunfts-Manifest (§6.6). `auswahl` ist die
         Lesereihenfolge der Zellen als Schluessel (lauf_id/datei), None fuer
         eine Luecke."""
-        from core import personernte as _pe
+        from core import vision as _vis
+        ok, grund = _vis.vision_verfuegbar()
+        if not ok:
+            return False, grund                        # KW6 Punkt 4: geparkt, nichts geschrieben
+        from core import personernte as _pe          # noqa: PLC0415  seit KW6 archiviert, nur hinter dem Tor
         from core import visiongalerie as _vg
         if not self._galerie_person_ok(person):
             return False, "unknown person"
@@ -14328,8 +14439,13 @@ class Service:
 
     def vision_schalter(self, an):
         """E4-Gate: einschalten nur mit ALLEN Vorbedingungen (>=2 abgenommene
-        Galerien, gruener Test, Kandidaten-Quelle). Ausschalten geht immer."""
+        Galerien, gruener Test, Kandidaten-Quelle). Ausschalten geht immer.
+        Seit Stufe KW6 des Bauplans analysen/bauplan_koerperweg_neu.md (Punkt 4) lehnt das Einschalten mit dem Grund
+        ab, solange Vision geparkt ist."""
         block, _prot, vor = self.vision_lage()
+        if an and vor.get("geparkt"):
+            self.log.warning(f"VISION detect not switched on: {vor['geparkt']}")
+            return False, _sprache.t("vision.geparkt_satz")
         if an and not vor["erfuellt"]:
             # .362 (Feld-Fund Tester B): uebersetzte Antwort statt EN-Literal.
             # Drei literale t()-Aufrufe je Code (kein dynamischer Key,
@@ -14437,8 +14553,9 @@ class Service:
         Urteil laeuft GENAU EINMAL, wenn der Durchgang wirklich vorbei ist.
         Frueher zu urteilen hiesse, ueber einen halben Durchgang zu urteilen —
         genau der Fehler, den das Szenario-Prinzip verbietet."""
-        if not eid or not (self.cfg.get("vision") or {}).get("aktiv"):
-            return
+        from core import vision as _vis
+        if not eid or not (self.cfg.get("vision") or {}).get("aktiv") or not _vis.vision_verfuegbar()[0]:
+            return                               # KW6 Punkt 4: geparkt startet nichts
         pk = (self._kontroll_speicher(eid, entry) or {}).get("pass_key")
         if not pk:
             return
@@ -14534,7 +14651,13 @@ class Service:
         sich dort gegenseitig ausbremsen und den Deckel doppelt verbrauchen.
 
         .164: VOR dem Single-Flight faellt ein etwaiger Waisen-Stand dieses
-        Durchgangs — sonst blockierte ein toter Lauf den Start fuer immer."""
+        Durchgangs — sonst blockierte ein toter Lauf den Start fuer immer.
+        Seit Stufe KW6 (Bauplan analysen/bauplan_koerperweg_neu.md, Punkt 4) startet geparkt kein Lauf."""
+        from core import vision as _vis
+        ok, grund = _vis.vision_verfuegbar()
+        if not ok:
+            self.log.warning(f"VISION run for pass {pass_key} not started: {grund}")
+            return False, grund
         self.vision_waisen(pass_key)
         with self._vision_lock:
             if self._vision_flug is None:
@@ -14737,8 +14860,8 @@ class Service:
         nichts nachgerechnet."""
         import datetime
         import szenarien as _sz
-        from core import personlive as _plv
-        from core import personmodell as _pmz
+        from core import koerperweg as _kw
+        from core import vision as _vis
         from core import visionurteil as _vu
         dd = self.cfg["data_dir"]
         by_eid = {}
@@ -14760,15 +14883,13 @@ class Service:
         # einem Lauf, den es nicht mehr gibt.
         if pass_key:
             self.vision_waisen(pass_key)
-        kmap = _plv.treffer_karte(dd)
+        # Stufe KW5 (Bauplan analysen/bauplan_koerperweg_neu.md Punkt 3): die Koerper-Treffer aus der Treffer-Datei des
+        # neuen Koerperwegs, die Stimmen-Schwelle koerper_stimmen (Stufe KW12) aus der Config — DIESELBE Quelle wie /heute und
+        # /auftritte (ohne sie fuhr die Passliste den Signatur-Default und driftete von /heute weg, Randbefund der
+        # vision-stimme-2-Drittkontrolle).
+        kmap = _kw.treffer_karte(dd)
         vmap = _vu.protokoll_karte(dd)      # nur URTEILE (Karte+Liste+Stimme)
-        # Stuetzen-Schwelle aus DERSELBEN Quelle wie /heute und /auftritte
-        # (status_lesen feuer_ab, Fallback personlive.FEUER_AB) — ohne sie
-        # fuhr die Passliste den Signatur-Default und driftete von /heute
-        # weg, sobald ein Nutzer die Feuer-Regel unter Person -> Modell-
-        # Status verstellt (Randbefund der vision-stimme-2-Drittkontrolle).
-        kab = int((_pmz.status_lesen(dd) or {}).get("feuer_ab")
-                  or _plv.FEUER_AB)
+        kab = int(self.cfg["koerper_stimmen"])
         passe, treffer = [], None
         for tag in range(3):
             t0 = (datetime.datetime.now().replace(hour=0, minute=0, second=0,
@@ -14791,8 +14912,13 @@ class Service:
                     treffer = s
         sicht = None
         if treffer is not None:
-            zeilen = next((p["zeilen"] for p in _plv.kontrolle_lesen(dd)
-                           if p["pass_key"] == str(pass_key)), [])
+            # Bauplan Koerperweg neu, KW6 Punkt 4: der Kontroll-Speicher des alten Koerper-Urteils
+            # (core.personlive) ist archiviert; geparkt gibt es keine Kontroll-Zeilen.
+            zeilen = []
+            if _vis.vision_verfuegbar()[0]:
+                from core import personlive as _plv  # noqa: PLC0415  seit KW6 archiviert, nur hinter dem Tor
+                zeilen = next((p["zeilen"] for p in _plv.kontrolle_lesen(dd)
+                               if p["pass_key"] == str(pass_key)), [])
             # V4b: der LAUF-Stand (Erzaehl-Schritte + Urteil), nicht nur das
             # Urteil — die Spalte zeigt waehrend eines Laufs mit, was passiert.
             sicht = _vu.dreiwege(treffer, zeilen, kmap, _vu.lauf_lesen(dd, pass_key),
@@ -15626,9 +15752,14 @@ class Service:
         nicht unterscheiden, sonst ist ein Worker unsichtbar oder ueberlebt einen
         Neustart als Waise (das ist die Exit-139-Bootfenster-Klasse). Die Methode
         bleibt in der Mehrzahl stehen, weil die Stoppwege ueber sie schleifen und
-        sich an einem zweiten Prozess (kaeme je einer zurueck) nichts aendern muesste."""
-        w = getattr(self, "_dienst_obj", None)
-        return [w] if w is not None else []
+        sich an einem zweiten Prozess (kaeme je einer zurueck) nichts aendern muesste.
+
+        Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW3 Punkt 3 (Entscheid B): der
+        eigene Koerper-Prozess (`_personwork`) steht seitdem mit darin, sobald er angelegt
+        ist, damit `worker_stoppen` und `worker_hart_stoppen` ihn vor einem Neustart
+        mitnehmen."""
+        return [w for w in (getattr(self, "_dienst_obj", None),
+                            getattr(self, "_personwork_obj", None)) if w is not None]
 
     def worker_stoppen(self):
         """Worker beenden+wait — VOR execv (neustart) und am --once-Ende. Sonst liefe eine
@@ -15692,104 +15823,44 @@ class Service:
 
     # ------------------------------------------- Koerper-/Personlauf-Jobs
     def _personwork(self):
-        """Der Worker fuer Koerper-Urteile und Personlauf-Ernte — seit E3.1 DERSELBE
-        Prozess wie fuer alles andere.
+        """Der eigene Koerper-Prozess: eine WorkerProzess-Instanz mit worker.py, beim
+        ersten Auftrag angelegt, eigene RSS-Schwelle `personwork_rss_max_mb` (so bis .526).
 
-        Bis .526 war das ein ZWEITER WorkerProzess (P1, .202, konzept_speicher.md §3)
-        mit eigener RSS-Schwelle. Der Grund dafuer ist mit dem neuen Dienst entfallen
-        und war in Wahrheit ein Symptom: zwei Compute-Prozesse auf einer Karte sind
-        genau die Kontext-Kollision, gegen die der Umbau gebaut ist (W2-B3, Feldbeleg
-        CUDA-OOM 4x, iGPU-Kosinus 0,9997 -> 0,857 bei vier offenen Modellen). Im
-        Dienst laufen `koerper` und `personlauf_ernte` als Hintergrund-Jobs auf dem
-        EINEN Hintergrund-Strang — einer zur Zeit, genau wie vorher, nur ohne den
-        zweiten Kontext und ohne das zweite Speicher-Konto.
+        Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW3 Punkt 3, Entscheid B des
+        Eigentuemers 20.11.2026 16:42:49 („Wir machen das im eigenen Prozess."): alle schwere
+        Koerper-Arbeit laeuft losgeloest vom Worker der Analysen. Der Prozess startet beim
+        ersten Auftrag (`WorkerProzess.job`), endet nach Leerlauf (worker.py, WORKER_IDLE_S),
+        und ein Haenger trifft nur ihn: reisst die Frist, schiesst `WorkerProzess.job` diese
+        Prozessgruppe, nie den Worker der Analysen. Seit E3.1 lief hier der Worker-Dienst mit.
+        Die alten Typen `koerper` und `personlauf_ernte` und die Vorrang-Spur
+        `personwork_job_live` sind mit Stufe KW6 entfallen; Auftraege kommen nur noch ueber
+        `personwork_job_batch`.
 
-        EHRLICHE FOLGE: `personwork_rss_max_mb` wirkt damit nicht mehr als eigene
-        Schwelle (es gibt keinen zweiten Prozess, der sie reissen koennte). Die
-        Speicher-Zusage des einen Prozesses kommt mit E3.2 aus der Formel; der
-        Config-Wert bleibt bis zum Aufraeumzug stehen, statt still zu verschwinden.
-
-        Die Vorrang-Spur (`personwork_job_live` vor `personwork_job_batch`) bleibt
-        unveraendert: sie ist eine Reihenfolge-Regel des Dienstes, keine Eigenschaft
-        des Prozesses."""
-        return self.worker_dienst()
-
-    def personwork_job_live(self, job, timeout_s):
-        """Vorrang-Spur (konzept_speicher.md L5): Live-Urteile melden sich an,
-        BEVOR sie am Job-Lock warten — Batch-Einreiher lassen sie vor.
-
-        .536 B4.4: DIESER WEG IST JETZT KUNDE DER VERGABESTELLE, Klasse `live`.
-        Bis .535 nahm er ueberhaupt keinen Platz — er war der Vergabestelle
-        unsichtbar, rechnete aber auf demselben EINEN Hintergrund-Strang wie
-        Sammeln und Ernte. Seine einzige Reihenfolge-Regel war `_pw_live_offen`
-        (live vor batch), also eine Rangfolge, die es im Verhalten gab, aber
-        nirgends in Log, /health oder GPU-Kachel. Genau diese unsichtbare dritte
-        Vergabe-Ebene macht die Klasse sichtbar.
-
-        Warum eine EIGENE Klasse und nicht `interaktiv`: dahinter wartet kein
-        Mensch, sondern eine Automatik (die laufende Analyse stoesst das Urteil
-        an). Klick-Gleichrang waere derselbe Fehler, den das Konzept bei `refqs`
-        ruegt. Warum nicht `bg`: dann waere der Auftrag „live vor batch"
-        verloren. Die Platz-Frist ist die JOB-Frist dieses Urteils
-        (`analyse_timeout_s` beim Aufrufer) — kein zweiter Zeitbegriff.
-
-        EHRLICHE FOLGE, ausdruecklich benannt (Bauplan §5 R-2): bekommt der
-        Live-Job das bg-Konto nicht, weil ein langer Hintergrund-Job darauf
-        sitzt, wartet er bis zu seiner Frist. Das war vorher genauso — er stand
-        dann in der Job-Schlange des Workers statt hier —, nur unsichtbar."""
-        w = self._personwork()
-        if w is None:                         # Legacy-Modus (`worker: false`)
-            self.log.warning("body judgment skipped: the persistent worker is disabled "
-                     "(config 'worker'), and the body path runs only as a job")
-            return None
-        with self._pw_prio_lock:
-            self._pw_live_offen += 1
-        try:
-            with self._plaetze.wartend("live"), \
-                    self._plaetze.platz(job.get("eid") or "body judgment",
-                                        art="live", timeout_s=timeout_s) as nr:
-                if nr is None:
-                    self.log.error(f"body judgment: no free background slot within "
-                             f"{timeout_s}s — no verdict for this event "
-                             f"(typ={job.get('typ')})")
-                    return None
-                return w.job(job, timeout_s,
-                             puls=self._plaetze.puls_fuer(nr))
-        finally:
-            with self._pw_prio_lock:
-                self._pw_live_offen -= 1
+        EHRLICHE GRENZE (Entscheid P): rechnet der Fingerabdruck nicht auf der CPU
+        (`person_backend`), oeffnet dieser Prozess einen eigenen Rechenkontext neben dem
+        Worker, mit dem Risiko der Kontext-Kollision (W2-B3); ab Werk cpu."""
+        w = getattr(self, "_personwork_obj", None)
+        if w is None:
+            w = self.__dict__.setdefault("_personwork_obj", WorkerProzess(
+                self.cfg, log=self.log, rss_key="personwork_rss_max_mb",
+                rss_default=3072, name="personwork"))
+        return w
 
     def personwork_job_batch(self, job, timeout_s, versuche=2):
-        """Batch-Spur (Nachanalyse, Personlauf-Ernte): wartet, solange ein
-        Live-Job angemeldet ist (strikte Prioritaet ohne Preemption), und
-        wiederholt einen gestorbenen Job genau EINMAL — danach gilt er als
-        vergiftet (laut, konzept_speicher.md §3).
+        """Auftrag an den eigenen Koerper-Prozess (Cutter, Abfragebild): wiederholt einen
+        gestorbenen Job bis `versuche` — danach gilt er als vergiftet (laut,
+        konzept_speicher.md §3).
 
-        .536 B4.4: auch dieser Weg ist Kunde der Vergabestelle, Klasse `bg` —
-        stille Nachanalyse und Personlauf-Ernte sind Hintergrundarbeit wie
-        Sammeln. Platz-Frist = Job-Frist des Aufrufers.
-
-        DIE 120-s-WARTESCHLEIFE BLEIBT STEHEN (Bauplan §7.1 Punkt 4, bewusst):
-        sie ist mit der Kontoordnung redundant — `live` steht dort ueber `bg`,
-        also laesst der Rang denselben Vorrang walten —, schadet aber nicht und
-        deckt die Rueckfahrkarten-Stellung ab, in der es kein bg-Konto gibt.
-        WICHTIG ist ihre REIHENFOLGE: sie laeuft VOR der Platznahme. Wuerde sie
-        innerhalb der Platz-Klammer warten, hielte dieser Job das Konto fest,
-        waehrend er auf den Live-Job wartet, der genau dieses Konto braucht —
-        eine Verklemmung, die es vor .536 nicht geben konnte."""
+        .536 B4.4: dieser Weg ist Kunde der Vergabestelle, Klasse `bg` — Hintergrundarbeit
+        wie Sammeln. Platz-Frist = Job-Frist des Aufrufers. Die Warteschleife auf die
+        Vorrang-Spur `personwork_job_live` ist mit ihr in Stufe KW6 des Bauplans
+        analysen/bauplan_koerperweg_neu.md entfallen."""
         w = self._personwork()
         if w is None:                         # Legacy-Modus (`worker: false`)
             self.log.warning(f"body/person job skipped: the persistent worker is disabled "
                      f"(config 'worker') — typ={job.get('typ')}")
             return None
         for v in range(1, versuche + 1):
-            frist = time.monotonic() + 120
-            while time.monotonic() < frist:
-                with self._pw_prio_lock:
-                    frei = self._pw_live_offen == 0
-                if frei:
-                    break
-                time.sleep(0.5)
             with self._plaetze.wartend("bg"), \
                     self._plaetze.platz(job.get("eid") or job.get("lauf_id")
                                         or "body/person job",
@@ -15807,6 +15878,128 @@ class Service:
         self.log.error(f"personwork job POISONED after {versuche} attempts — skipped "
                  f"(typ={job.get('typ')}, eid={job.get('eid') or job.get('lauf_id')})")
         return None
+
+    def cutter_starten(self, personen=None, n_je_person=1, ausloeser="hand"):
+        """Den Cutter starten (Bauplan Koerperweg neu, Stufe KW3 Punkt 4; Stufe KW13 Punkt 2b): von Hand und taeglich je
+        Person die neuesten geeigneten, nicht bearbeiteten Videos aus der Akte (core.koerperweg.cutter_auswahl;
+        n_je_person None = alle), automatisch (ausloeser "auto") genau die vorgemerkten Kennungen aus `_cutter_warte`,
+        die es unter `_cutter_schloss` uebernimmt und leert. Je Video ein Auftrag `koerperschnitt` im eigenen
+        Koerper-Prozess mit versuche=1, Bilder ueber body_add (offen bei koerper_sichtpruefung, sonst gueltig), Ausfaelle
+        ueber body_event_done. Ein Lauf zur Zeit, in einem eigenen Faden, an dessen Ende der Nachlauf (ausloeser "auto",
+        Punkt 2c); der Stand (`_cutter_stand`: geprueft, behaltene Bilder, Ausfaelle nach Grund, Ausloeser) ist fuer
+        Seite und Log; fehlt das Pose-Modell, startet der Lauf nicht (WARNING, Grund im Stand). personen leer oder None =
+        alle Personen. -> (True, Stand) gestartet; (False, Grund) nicht gestartet"""
+        from core import akte as _akte
+        from core import frames as _frames
+        from core import koerperschnitt as _ks
+        from core import koerperweg as _kw
+        from core import livewache as _lw
+        from core import refquelle as _rq
+        cfg, dd = self.cfg, self.cfg["data_dir"]
+        auto = ausloeser == "auto"
+        nein = None                                      # (Grund, DEBUG-Zeile): erst nach dem Schloss geloggt (B1)
+        with self.__dict__.setdefault("_cutter_schloss", threading.Lock()):
+            if (getattr(self, "_cutter_stand", None) or {}).get("laeuft"):
+                nein = ("a person learning run is already running",
+                        "automatic body image cutter waits: a person learning run is already running")
+            elif auto:                                   # die ganze Warteliste, Kennung -> Person
+                gemerkt, self._cutter_warte = self.__dict__.get("_cutter_warte") or {}, {}
+                if not gemerkt:
+                    nein = ("no event noted for an automatic run", "automatic body image cutter: no event noted")
+                personen = sorted(set(gemerkt.values()))
+            if nein is None:
+                stand = {"laeuft": True, "start": time.time(), "ende": None, "personen": list(personen or []),
+                         "n_je_person": None if n_je_person is None else int(n_je_person), "videos_offen": 0,
+                         "videos": 0, "bilder": 0, "ausfaelle": {}, "grund": None, "ausloeser": ausloeser}
+                self._cutter_stand = stand
+        if nein is not None:
+            if auto:
+                self.log.debug(nein[1])
+            return False, nein[0]
+        if not _lw.pose_verfuegbar():
+            stand.update(laeuft=False, ende=time.time(), grund=_ks.GRUND_POSE)
+            self.log.warning(f"body image cutter not started: {_ks.GRUND_POSE} — no body image can be cut")
+            return False, _ks.GRUND_POSE
+        if auto:
+            auswahl = [(person, eid) for eid, person in gemerkt.items()]
+        else:
+            try:                                         # Punkt 2b (O1387): ein Fehler hier liess `laeuft` stehen
+                von, bis = _kw.cutter_fenster(stand["start"], cfg["koerper_max_tage"])
+                auswahl = _kw.cutter_auswahl(_akte.sicht(self.log_path).heute(von, bis)[0], _rq.body_events(cfg),
+                                             cfg, personen, n_je_person, von)
+            except Exception as e:                       # noqa: BLE001  laut in Stand und Log, kein Lauf
+                grund = f"{type(e).__name__}: {e}"
+                stand.update(laeuft=False, ende=time.time(), grund=grund)
+                self.log.error(f"body image cutter not started: the events could not be read ({grund})")
+                self.cutter_starten(ausloeser="auto")
+                return False, grund
+        zustand = _rq.basis.BODY_STATES[0 if cfg["koerper_sichtpruefung"] else 1]
+        stand["videos_offen"] = len(auswahl)
+        wie = {"auto": " automatically", "taeglich": " by the daily maintenance"}.get(ausloeser, "")
+        je = "all" if n_je_person is None else f"up to {int(n_je_person)}"
+        self.log.info(f"body image cutter started{wie}: {len(auswahl)} video(s), {je} per person, "
+                      f"persons: {len(personen or []) or 'all'}")
+
+        def _lauf():
+            try:
+                if auto:                                 # inzwischen bearbeitete Kennungen ueberspringen (Punkt 2b)
+                    bearbeitet = _rq.body_events(cfg)
+                    auswahl[:] = [(p, e) for p, e in auswahl if e not in bearbeitet]
+                    stand["videos_offen"] = len(auswahl)
+                for person, eid in auswahl:
+                    try:
+                        _frames.clip_holen(eid, data_dir=dd, frigate_url=cfg.get("frigate_url") or "",
+                                           quelle="cutter", tor_n=clip_tor_aus_cfg(cfg),
+                                           tor_deckel_s=clip_tor_deckel_s_aus_cfg(cfg),
+                                           vod=_frames.vod_an(cfg.get("clip_vod")), erzeugung=True,
+                                           erzeugung_deckel_s=clip_erzeugung_deckel_s_aus_cfg(cfg))
+                    except Exception as e:                       # noqa: BLE001  der Grund geht in den Stand
+                        grund, detail, bilder = _ks.GRUND_CLIP_HOLEN, f"{type(e).__name__}: {e}", []
+                    else:
+                        try:
+                            antwort = self.personwork_job_batch(_ks.auftrag(cfg, eid, person, "cutter"),
+                                                                _ks.EVENT_ZEITWACHE_S + 60, versuche=1)
+                        finally:
+                            _frames.frei(eid, dd)
+                        grund, detail, bilder = _ks.antwort_lesen(antwort)
+                    neu = 0
+                    for b in bilder:
+                        try:
+                            neu += bool(_rq.body_add(cfg, b["png"], _ks.schublade_felder(person, eid, b,
+                                                                                        zustand))["neu"])
+                        except Exception as e:                   # noqa: BLE001  laut im Stand und im Log
+                            grund, detail = _ks.GRUND_ABLAGE, f"{type(e).__name__}: {e}"
+                    if not neu and (grund or not bilder):        # ohne Bild in der Schublade: Merker mit Grund
+                        _rq.body_event_done(cfg, eid, person, grund or _ks.GRUND_ABLAGE)
+                    stand["videos"] += 1
+                    stand["bilder"] += neu
+                    if grund:
+                        stand["ausfaelle"][grund] = stand["ausfaelle"].get(grund, 0) + 1
+                        self.log.debug(f"body image cutter: one video dropped — {grund} ({detail})")
+            except Exception as e:                               # noqa: BLE001  ein Lauf darf den Dienst nie kosten
+                stand["grund"] = f"{type(e).__name__}: {e}"
+                self.log.error(f"body image cutter stopped early: {stand['grund']}")
+            finally:
+                stand.update(laeuft=False, ende=time.time())
+                self.log.info(f"body image cutter finished: {stand['videos']} of {len(auswahl)} video(s) checked, "
+                              f"{stand['bilder']} image(s) kept, drop-outs by reason: {stand['ausfaelle'] or 'none'}")
+                self.cutter_starten(ausloeser="auto")    # Punkt 2c: der Nachlauf nimmt, was inzwischen vorgemerkt ist
+        threading.Thread(target=_lauf, daemon=True, name="koerper-cutter").start()
+        return True, stand
+
+    def _cutter_vormerken(self, eid, person):
+        """Ein geeignetes Ereignis fuer den automatischen Lernlauf vormerken (Stufe KW13 Punkt 2a): unter `_cutter_schloss`
+        in die Warteliste (Kennung -> Person), danach das Zeichen des Auswerters; mehr nicht im Analysefaden. -> None"""
+        with self.__dict__.setdefault("_cutter_schloss", threading.Lock()):
+            self.__dict__.setdefault("_cutter_warte", {})[eid] = person
+        self._koerper_wecken()
+
+    def _cutter_taeglich(self):
+        """Job der Wartung (Stufe KW13 Punkt 2d): der taegliche Lernlauf ueber alle wartenden geeigneten Ereignisse.
+        -> None; startet er nicht, eine INFO-Zeile mit dem Grund"""
+        ok, grund = self.cutter_starten(n_je_person=None, ausloeser="taeglich")
+        if not ok:
+            self.log.info(f"daily body image cutter not started — {grund}")
 
     # ------------------------------------------------- Lern-Lauf (E1): Selbstmessung
     _wanduhr_start_lock = threading.Lock()        # Klassen-Lock: Doppelstart-Rennen (F2.2)
@@ -23449,8 +23642,10 @@ class Service:
         Papierkorb, Anlern-Warteschlange kuerzen, das fruehere Nutzungsjournal einmal in den Papierkorb (Bauplan
         analysen/bauplan_weniger_schreiben_d.md Stufe D1 Punkt 6, an der Stelle des Kuerzens aus DK3 Punkt 1), dann die
         Teile der Stufe DK3 (Archiv der Ereignisakte, Schreibprotokoll nach Frigate; die Unbekannt-Schlange raeumt der
-        Verbraucher in seiner Runde, core.unbekannt_verbraucher.stuecke_raeumen), Papierkorb leeren; je Teil eigener
-        Fang und eine INFO-Zeile mit Zahlen (das alte Nutzungsjournal nur, wenn eines lag), ein Fehler eine ERROR-Zeile.
+        Verbraucher in seiner Runde, core.unbekannt_verbraucher.stuecke_raeumen), die Alterung der Koerperbilder (Bauplan
+        analysen/bauplan_koerperweg_neu.md Stufe KW2 Punkt 3), der alte Ordner personlern/ in den Papierkorb (ebenda
+        Stufe KW6 Punkt 3), Papierkorb leeren; je Teil eigener Fang und eine INFO-Zeile mit Zahlen (das alte
+        Nutzungsjournal, die Koerperbilder und personlern/ nur, wenn etwas lag), ein Fehler eine ERROR-Zeile.
         -> None"""
         import anlernen as _al_d
         from core import lernlauf as _ll_d
@@ -23523,6 +23718,46 @@ class Service:
                           f"({q['unlesbar']} without a readable time kept)")
         except Exception as e:
             self.log.error(f"data cleanup: sub_label write log not trimmed ({type(e).__name__}: {e})")
+        try:                                            # Bauplan Koerperweg neu KW12 Punkt 11b: Merk-Datei der Meldungen
+            from core import koerperweg as _kw_d
+            q = _kw_d.meldungen_kuerzen(self.cfg["data_dir"], jetzt, self.cfg["aufbewahrung_tage"], rq_cfg)
+            self.log.info(f"data cleanup: body recognition notification log trimmed — {q['entfernt']} of "
+                          f"{q['zeilen']} line(s) older than {self.cfg['aufbewahrung_tage']} days moved to the trash, "
+                          f"{q['behalten']} kept")
+        except Exception as e:
+            self.log.error(f"data cleanup: body recognition notification log not trimmed ({type(e).__name__}: {e})")
+        try:                                            # Bauplan Koerperweg neu KW2 Punkt 3: Alterung der Koerperbilder
+            r = _rq_d.body_age({**rq_cfg, "koerper_max_tage": self.cfg.get("koerper_max_tage"),
+                                "koerper_max_je_person": self.cfg.get("koerper_max_je_person")}, jetzt)
+            if r is not None:                           # ohne Schublade keine Zeile (Muster altes Nutzungsjournal)
+                self.log.info(f"data cleanup: body images — {r['bilder']} moved to the trash ({r['alter']} older than "
+                              f"{self.cfg['koerper_max_tage']} days, {r['deckel']} over "
+                              f"{self.cfg['koerper_max_je_person']} per person), {r['zeilen']} line(s), "
+                              f"{r['ereignisse']} old processed event(s), {r['verwaist']} file(s) without a line, "
+                              f"day {r['tag']}")
+        except Exception as e:
+            self.log.error(f"data cleanup: body images not aged ({type(e).__name__}: {e})")
+        try:                                            # Bauplan Koerperweg neu KW6 Punkt 3 (Entscheid N): alter Bestand
+            # Der Ordner des ausgebauten Koerper-Lernlaufs (Modell, Lernbilder, Laeufe, Vision-Galerien) geht als Ganzes
+            # in den Tagesordner des Papierkorbs (selbes Dateisystem, Umbenennen; liegt dort schon einer, mit Zaehler,
+            # nie ueberschrieben); empty_trash loescht ihn nach der Papierkorbfrist. Keine Marke: der Schritt wirkt auch,
+            # wenn eine alte Sicherung den Ordner zurueckbringt. Ohne Ordner keine Zeile (Muster altes Nutzungsjournal).
+            alt_dir = os.path.join(self.cfg["data_dir"], "personlern")
+            if os.path.isdir(alt_dir):
+                tag_dir = _rq_d.trash_dir(rq_cfg, jetzt)[1]
+                n_alt = len(os.listdir(alt_dir))
+                os.makedirs(tag_dir, exist_ok=True)
+                ziel = basis = os.path.join(tag_dir, "personlern")
+                n = 1
+                while os.path.lexists(ziel):            # derselbe Name am selben Tag zweimal: nie ueberschreiben
+                    n += 1
+                    ziel = f"{basis}.{n}"
+                os.rename(alt_dir, ziel)
+                self.log.info(f"data cleanup: old person-learn folder personlern/ moved to the trash — {n_alt} "
+                              f"entries, day {os.path.basename(tag_dir)}, folder {os.path.basename(ziel)}")
+        except Exception as e:
+            self.log.error(f"data cleanup: old person-learn folder personlern/ not moved to the trash "
+                           f"({type(e).__name__}: {e})")
         try:
             r = _rq_d.empty_trash(rq_cfg, jetzt)
             self.log.info(f"data cleanup: trash emptied — {len(r['geleert'])} day folder(s) older than "
@@ -24950,21 +25185,9 @@ class Service:
             # brauchen diese Zeile nicht mehr.
             _z_vorlauf = time.monotonic()      # Bauplan Namensliste N1: Ende des Vorlaufs (Spalte vorlauf)
             self.log.debug(f"{eid} ({camera}, Frigate={f_label} {f_score}): analysis running ...")
-            # Ketten-Schalter (Issue #21): Stufe EINMAL je Lauf lesen. "aus"
-            # ueberspringt den Koerper-Strang an der QUELLE (kein --koerper im
-            # Job -> analyze sammelt keine Crops, unten startet kein Urteil).
-            # EINE laute Zeile je Lauf — und nur, wenn der Strang sonst
-            # gelaufen waere (Modell scharf); sonst waere die Zeile Rauschen.
+            # Ketten-Schalter (Issue #21): Stufe EINMAL je Lauf lesen; der
+            # Entscheid ueber die Koerper-Abfrage faellt nach der Analyse.
             kette_person = self.kette_stufe("person")
-            _koerper_will = (not nachhol and self._koerper_scharf())
-            if _koerper_will and kette_person == "aus":
-                # .511: die Absicht ("eine laute Zeile je Lauf") war richtig,
-                # der Feldfall nicht bedacht: wer person_pfad dauerhaft auf aus
-                # stehen hat, bekommt dieselbe Konstante je Ereignis — 18.071
-                # Mal in zwei Tagen. Der Stufen-Stand steht im Startblock und
-                # auf der Ketten-Seite, die Zeile ist nur die Wiederholung.
-                self.log.debug(f"{eid}: person path off (person_pfad=aus) — no body "
-                           f"crops collected, no person judgment started")
             t0 = time.time()
             # Nachbesserung W7: run_analyze meldet ueber `info`, wie lange der
             # Job am Analyse-Slot WARTETE (Ernte/Sammle/Wanduhr-Roundtrip halten
@@ -25033,11 +25256,6 @@ class Service:
                                   # Nachfolger auf demselben Platz nicht kuenstlich
                                   # lebendig pulsen (Maskierung des Waechters).
                                   puls=self._plaetze.puls_fuer(_platz_nr),
-                                  # Z5: EINMAL vor dem Job entschieden — waehrend
-                                  # der Analyse ist der Scharf-Zustand nicht mehr
-                                  # abfragbar (anderer Prozess). Nur Live-Laeufe:
-                                  # nur sie rufen unten _person_live.
-                                  koerper=(_koerper_will and kette_person != "aus"),
                                   info=_ainfo,
                                   # .287 [clipdbg]: Quelle + Event-Alter (jetzt
                                   # minus ENDEzeit) fuer die Clip-Debug-Zeilen.
@@ -25383,6 +25601,11 @@ class Service:
             import szenarien as _szenarien   # .356: EINE Definition der
             #                       Gesichtsguete (gesicht_gut_zaehlen) — dieselbe
             #                       Funktion liest spaeter die Durchgangs-Regel.
+            # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW1 Punkt 4: die Koerper-Marke aus der Ergebniszeile des
+            # Workers und der Personenzahl; die Gruppen nimmt sie vom Worker, nicht aus der Stapel-Datei (die behaelt bei
+            # einer Re-Analyse ihre alten Zeilen). None = keine Marke (alte Ergebniszeile, kein Ergebnis).
+            from core import koerperweg as _koerperweg
+            _koerper_marke = _koerperweg.marke_bauen(res, _pzahl)
             entry = {
                 # Schema 3 (W1): +frames_gelesen/+frames_soll/+frames_fehlen — Leser greifen
                 # ueber .get() zu, Schema-2-Bestandszeilen bleiben unveraendert lesbar.
@@ -25449,6 +25672,8 @@ class Service:
                    if res is not None
                    and "stimmen_verworfen_unmessbar" in ((res.get("urteil_guete")) or {})
                    else {}),
+                # KW1 Punkt 4: nur wenn die Marke gebaut werden konnte (additiv, Leser per .get())
+                **({"koerper_marke": _koerper_marke} if _koerper_marke is not None else {}),
                 # Warum diese Zeile `fehler` heisst. Additiv und nur auf
                 # Fehler-Zeilen; die Codes stehen in registry.VERWURF_GRUENDE
                 # (EINE Aufzaehlung, Leser: Ereignisseite und Catch-up-Log).
@@ -25626,8 +25851,10 @@ class Service:
             if not nachhol:
                 self.publish_erkennung(entry)     # kein Live-Echo fuer alte Ereignisse
                 _m7.append(("mqtt", time.monotonic()))
-                # PE4 (stufe2.md): Koerper-Strang — eigener, losgeloester
-                # Urteilsweg, nur wenn der User ihn scharf geschaltet hat;
+                # Stufe KW5 (Bauplan analysen/bauplan_koerperweg_neu.md Punkt 1):
+                # die Koerper-Abfrage im eigenen Koerper-Prozess, nur wenn die
+                # Schublade ein gueltiges Bild hat und das Ereignis ohne
+                # bestaetigtes Gesicht genau eine Person zeigt (_person_live);
                 # laeuft im Daemon-Thread, blockiert den Gesichts-Pfad nie.
                 # Ketten-Schalter davor (Issue #21): "aus" wurde schon VOR der
                 # Analyse laut uebersprungen (eine Zeile je Lauf, steht oben);
@@ -25649,7 +25876,7 @@ class Service:
                              f"confirmed the whole pass "
                              f"(person_pfad=nur_wenn_gesicht_leer)")
                 else:
-                    self._person_live(entry.get("eid"), entry)
+                    self._person_live(entry.get("eid"), entry, _pzahl)
                 # V4 (konzept_vision.md §7): dritter Weg, Auslöser auf
                 # PASS-Ebene und erst am Durchgangs-Ende (Debounce). Nur ein
                 # Timer-Start, keine Arbeit, kein Lock — die Analyse laeuft
@@ -25659,15 +25886,12 @@ class Service:
                 # .161: Nachanalyse AUF WUNSCH eines Durchgangs. Sie faehrt den
                 # bestehenden Nachhol-Weg (stumm, keine Alarme, kein Live-Echo,
                 # kurzer Timeout) — mit der EINEN Ausnahme, dass der
-                # Koerper-Strang laufen darf: nur er legt die beurteilten Bilder
-                # in den Kontroll-Speicher, und genau die fehlen dem Nutzer.
-                # Vision wird bewusst NICHT angestossen: der Nutzer entscheidet
-                # selbst, wann er den (kostenpflichtigen) Lauf startet.
-                # still=True (.163): NUR das Bild ablegen. Ohne diesen Schalter
-                # meldete die Nachanalyse eines Durchgangs von gestern per
-                # Telegram, als stuende die Person gerade vor der Tuer
-                # (Live-Bug 09.08. 08:19).
-                self._person_live(entry.get("eid"), entry, still=True)
+                # Koerper-Weg laufen darf. Vision wird bewusst NICHT angestossen:
+                # der Nutzer entscheidet selbst, wann er den (kostenpflichtigen)
+                # Lauf startet. Seit Stufe KW5 meldet der Koerper-Weg nie (nur
+                # Anzeige), die fruehere Stille-Sperre (.163) entfaellt damit. Seit KW12 meldet er auf Wunsch,
+                # aus einem Nachhol-Lauf aber nie (nachhol reist mit).
+                self._person_live(entry.get("eid"), entry, _pzahl, nachhol)
             _m7.append(("person", time.monotonic()))
             # .408 Anwesenheits-Marke (Konzept §3, Quelle A): zwischen fertigem
             # entry und dem Akte-Append, UNABHAENGIG von nachhol — der
@@ -25686,6 +25910,11 @@ class Service:
             _m7.append(("record", time.monotonic()))
             with self.lock: self.processed.add(eid)
             _m7.append(("processed", time.monotonic()))
+            # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW13 Punkt 2a: in der Stellung sofort ein geeignetes
+            # Live-Ereignis (kein Nachhol-Lauf, keine Support-Einspielung) vormerken; starten tut der Auswerter.
+            if (cfg.get("koerper_lauf") == "sofort" and not nachhol and not _einspiel.ist_reanalyse(marke)
+                    and _koerperweg.eignet_sich(entry, cfg)[0]):
+                self._cutter_vormerken(eid, entry["bestaetigt"][0])
             # Bauplan analysen/bauplan_fix_0113.md Entscheid 7, Stufe F4 Punkt 3: nach der Buchung ein Zeiger auf den
             # Unbekannt-Stapel des Ereignisses (die Stapel-Datei ist die Aufzeichnung, gelesen ueber die eine
             # Lesefunktion), nur wenn sie mindestens eine Gruppe nennt; ein Schreibfehler kostet nie die Analyse.
@@ -27074,25 +27303,26 @@ class Service:
                                         eid, entry)
 
 
-    def _person_live(self, eid, entry=None, still=False):
-        """PE4: Koerper-Urteil im Hintergrund (core/personlive) — Meldung
-        traegt die Kennzeichnung 'person recognition, not face'
-        (User-Anforderung 04.08.). Kommt nur zum Zug, wenn der User den
-        Strang auf /person/modell scharf geschaltet hat.
-
-        `still=True` (Nachanalyse eines VERGANGENEN Durchgangs, .163): der Lauf
-        legt nur das beurteilte Bild ab und schweigt danach vollstaendig. Die
-        Sperre liegt ZWEIMAL: `plv.urteilen(still=True)` kann konstruktiv kein
-        Melde-Objekt zurueckgeben, und dieser Mantel betritt den Melde-Block
-        gar nicht erst. Zwei Ebenen, weil genau hier am 09.08. eine Funktion
-        mit zwei Wirkungen scharf geschaltet und nur an eine gedacht wurde."""
-        if not eid or not self._koerper_scharf():
+    def _person_live(self, eid, entry, personenzahl, nachhol=0):
+        """Ausloeser der Koerper-Abfrage (Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW5 Punkt 1): fuer ein
+        Ereignis ohne bestaetigtes Gesicht mit Frigate-Personenzahl genau 1 (core.koerperweg.abfrage_noetig) und eine
+        Schublade mit mindestens einem gueltigen Bild (core.kette.koerper_scharf) startet ein eigener Faden die Abfrage
+        im Koerper-Prozess (_person_lauf); die Analyse wartet nie auf ihn. Seit Stufe KW12 Punkt 2 reisen entry und
+        nachhol mit (gemeldet wird nur auf Wunsch, aus einem Nachhol-Lauf nie).
+        -> None"""
+        from core import koerperweg as _kw
+        noetig, grund = _kw.abfrage_noetig(entry, personenzahl)
+        if not eid or not noetig:
+            self.log.debug(f"{eid}: body query not started — {grund}")
+            return
+        if not self._koerper_scharf():
+            self.log.debug(f"{eid}: body query not started — no valid body image yet")
             return
         import threading
 
         def lauf():
             try:
-                self._person_lauf(eid, entry, still)
+                self._person_lauf(eid, entry, nachhol)
             finally:
                 # W1b: Zaehler IMMER raeumen — sonst haelt ein einziger
                 # Fehlerfall die Wanduhr-Messung fuer immer im Warten.
@@ -27112,103 +27342,280 @@ class Service:
                 self._personlive_aktiv -= 1
             raise
 
-    def _person_lauf(self, eid, entry, still):
-        """Rumpf des Koerper-Urteils (aus _person_live.lauf ausgelagert, W1b:
-        der Mantel fuehrt jetzt den Aktiv-Zaehler fuer _live_aktiv).
-        P1 (.202, konzept_speicher.md): das URTEIL laeuft nicht mehr hier im
-        Main (5 Ausfaelle am 15.08.), sondern als Job im personwork-Prozess —
-        Live-Urteile auf der Vorrang-Spur, stille Nachanalyse auf der
-        Batch-Spur. Melde-/Kontroll-Folgen bleiben HIER: dieser Prozess
-        kennt MQTT, Pushover und Telegram, der Arbeiter nicht."""
+    def _person_lauf(self, eid, entry, nachhol):
+        """Rumpf der Koerper-Abfrage im Faden von _person_live (Stufe KW5 Punkte 1 bis 4): Clip holen, Auftrag
+        koerperschnitt mit Art abfrage ueber personwork_job_batch mit versuche=1 (bekommt er bis zur Frist keinen Platz,
+        faellt die Abfrage dieses Ereignisses mit WARNING aus; eine Schlange fuer spaeter gibt es nicht), die
+        Abfragebilder gegen die gueltigen Bilder der Schublade (core.koerperweg.vergleichen) und das Ergebnis in die
+        Treffer-Datei. Stufe KW12 Punkt 3a: mit Namen und mindestens einem Melde-Schalter an ein Anstoss des
+        Auswerters mit dem Abfragebild des Werts. Kein Personenname im Dienst-Log. -> None"""
+        from core import frames as _frames
+        from core import koerperschnitt as _ks
+        from core import koerperweg as _kw
+        from core import livewache as _lw
+        from core import refquelle as _rq
+        cfg, dd = self.cfg, self.cfg["data_dir"]
         try:
-            job = {"typ": "koerper", "data_dir": self.cfg["data_dir"],
-                   "eid": eid, "still": bool(still),
-                   "kontrolle": self._kontroll_speicher(eid, entry),
-                   "log": os.path.join(self.cfg["data_dir"], "events",
-                                       str(eid).replace("/", "_"),
-                                       "personlive.log")}
-            timeout = int(self.cfg.get("analyse_timeout_s") or 600)
-            antwort = (self.personwork_job_batch(job, timeout) if still
-                       else self.personwork_job_live(job, timeout))
-            if antwort is None:
-                _log.error(f"[personlive] personwork job failed/timeout ({eid}) — "
-                      f"no body verdict for this event")
+            if not _lw.pose_verfuegbar():
+                self.log.warning(f"{eid}: body query skipped — {_ks.GRUND_POSE}, so no body name for this event")
                 return
-            u = antwort.get("u")
-            if still:
-                # Zweite, unabhaengige Sperre. KEIN Personenname im
-                # Dienst-Log (Log-Vertrag §9) — die Zeile sagt nur, dass
-                # gearbeitet und geschwiegen wurde.
-                _log.info("[personlive] quiet re-analysis: judged image "
-                      "stored, nothing announced, live state untouched")
+            try:
+                _frames.clip_holen(eid, data_dir=dd, frigate_url=cfg.get("frigate_url") or "",
+                                   quelle="koerper_abfrage", tor_n=clip_tor_aus_cfg(cfg),
+                                   tor_deckel_s=clip_tor_deckel_s_aus_cfg(cfg),
+                                   vod=_frames.vod_an(cfg.get("clip_vod")), erzeugung=True,
+                                   erzeugung_deckel_s=clip_erzeugung_deckel_s_aus_cfg(cfg))
+            except Exception as e:                       # noqa: BLE001  laut im Log, das Ereignis bleibt ohne Namen
+                self.log.warning(f"{eid}: body query dropped — {_ks.GRUND_CLIP_HOLEN} ({type(e).__name__}: {e})")
                 return
-            # .249 (Kosinus-raus): Wortstufe an der GEEICHTEN Koerper-Latte
-            # (status.json: schwelle + fremd_max — das Band ist hier
-            # MESSBASIERT, kein Default-Heuristik-Band).
-            # Sprach-Stufe 4 (Eintrittspunkt (b)): das WORT geht uebersetzt
-            # raus (§6.4), die KENNUNG _vt_stufe bleibt unangetastet — sie
-            # ist es, die additiv im MQTT-Payload steht (Additiv-Regel).
+            try:
+                antwort = self.personwork_job_batch(_ks.auftrag(cfg, eid, None, "abfrage"),
+                                                    _ks.EVENT_ZEITWACHE_S + 60, versuche=1)
+            finally:
+                _frames.frei(eid, dd)
+            grund, detail, bilder = _ks.antwort_lesen(antwort)
+            if grund in (_ks.GRUND_KEINE_ANTWORT, _ks.GRUND_JOB):
+                self.log.warning(f"{eid}: body query dropped — {grund} ({detail}); no body name for this event")
+                return
+            if grund or not bilder:
+                self.log.info(f"{eid}: body query without a body picture — {grund or 'no picture'} ({detail})")
+                return
+            erg = _kw.vergleichen([b["fingerabdruck"] for b in bilder],
+                                  _rq.body_read(cfg, states=(_rq.basis.BODY_STATES[1],)), cfg)
+            _kw.treffer_buchen(dd, eid, erg)
+            self.log.info(f"{eid}: body query done — {'a body name' if erg['person'] else 'no body name'} "
+                          f"(best {erg['score']}, threshold {erg['schwelle']}: {erg['grund']})")
+            if erg["person"] and any(cfg.get(k) for k in _kw.MELDE_SCHALTER):
+                self._koerper_anstossen(eid, entry, nachhol, bilder[erg["bild"]].get("png"), art="koerper")
+        except Exception as e:                           # noqa: BLE001  ein Faden darf den Dienst nie kosten
+            self.log.error(f"{eid}: body query failed ({type(e).__name__}: {e}) — no body name for this event")
+
+    # ------------------------------------------------------------------ Stufe KW12: der Auswerter
+    def start_koerper_auswerter(self):
+        """Startet den Auswerter der Koerper-Erkennung (Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW12 Punkt
+        3b): ein Faden rechnet die Gaenge der Reihe nach, nur auf Anstoss. -> None"""
+        self.__dict__.setdefault("_kaus_schloss", threading.Lock())
+        self.__dict__.setdefault("_kaus_warte", {})
+        self.__dict__.setdefault("_kaus_zeichen", threading.Event())
+        self._kaus_faden = threading.Thread(target=self._koerper_auswerter_schleife, daemon=True,
+                                            name="koerper-auswerter")
+        self._kaus_faden.start()
+
+    def _koerper_anstossen(self, eid, entry, nachhol, png, art="koerper", tag=None):
+        """Einen Anstoss in die Sammlung legen (Schluessel Kennung und Art, beim Nachzug Tag und Art; ein zweiter ersetzt
+        den ersten, ein Bild bleibt) und den Auswerter wecken (Stufe KW12 Punkt 3a). -> None"""
+        schluessel = (tag, art) if art == "nachzug" else (eid, art)
+        with self.__dict__.setdefault("_kaus_schloss", threading.Lock()):
+            warte = self.__dict__.setdefault("_kaus_warte", {})
+            if png is None:
+                png = (warte.get(schluessel) or {}).get("png")
+            warte[schluessel] = {"eid": eid, "entry": entry, "nachhol": nachhol, "png": png, "art": art, "tag": tag}
+        self._koerper_wecken()
+
+    def _koerper_wecken(self):
+        """Weckt den Auswerter; ohne gestarteten Auswerter (Proben, --once) nimmt es die Sammlung und rechnet den Gang im
+        rufenden Faden (Stufe KW12 Punkt 3d). -> None"""
+        if "_kaus_faden" in self.__dict__:
+            self._kaus_zeichen.set()
+            return
+        with self.__dict__.setdefault("_kaus_schloss", threading.Lock()):
+            anstoesse, self._kaus_warte = self.__dict__.get("_kaus_warte") or {}, {}
+        self._koerper_gang(anstoesse)
+
+    def _koerper_nachzug(self):
+        """Job der Wartung (Stufe KW12 Punkt 3c): je ein Anstoss ohne Ereignis fuer heute und gestern; er traegt
+        Frigate-Eintraege nach und meldet nie. -> None"""
+        heute = datetime.date.today()
+        for tag in (heute, heute - datetime.timedelta(days=1)):
+            self._koerper_anstossen(None, None, True, None, art="nachzug", tag=tag.toordinal())
+
+    def _koerper_auswerter_schleife(self):
+        """Der Faden: auf das Zeichen warten (ohne Frist), die Sammlung nehmen und das Zeichen im selben Schloss loeschen,
+        EIN Gang; ein Fehler kommt laut ins Log, der Faden lebt weiter. -> None (endet nicht)"""
+        while True:
+            self._kaus_zeichen.wait()
+            with self._kaus_schloss:
+                anstoesse, self._kaus_warte = self._kaus_warte, {}
+                self._kaus_zeichen.clear()
+            try:
+                self._koerper_gang(anstoesse)
+            except Exception as e:                       # noqa: BLE001  der Faden darf nie enden
+                self.log.error(f"body recognition: evaluation round failed ({type(e).__name__}: {e})")
+
+    def _koerper_gang(self, anstoesse):
+        """Ein Gang des Auswerters (Stufe KW12 Punkt 3b): je Kalendertag der Anstoesse der Vorfilter, fuer die Tage, die
+        ihn bestehen, ein Lesen der Akte, je Tag die Durchgaenge und je Durchgang mit Koerper-Namen _koerper_melden.
+        -> None"""
+        if self.__dict__.get("_cutter_warte"):           # Stufe KW13 Punkt 2a: der Start des automatischen Lernlaufs
+            self.cutter_starten(ausloeser="auto")
+        if not anstoesse:
+            return
+        import szenarien as _sz
+        from core import akte as _akte
+        from core import koerperweg as _kw
+        cfg = self.cfg
+        tage = {}
+        for a in anstoesse.values():
+            e = a.get("entry") or {}
+            tage.setdefault(a["tag"] if a.get("tag") is not None else _akte._tag(e.get("start") or e.get("ts", 0)),
+                            []).append(a)
+
+        def beginn(tag):
+            return datetime.datetime.combine(datetime.date.fromordinal(tag), datetime.time()).timestamp()
+        try:
+            karte, ab = _kw.treffer_karte(cfg["data_dir"]), int(cfg["koerper_stimmen"])
+            rechnen = sorted(t for t in tage if t is not None and _kw.moegliche_personen(karte, beginn(t), ab))
+            zeilen = dict(_akte.sicht(self.log_path).heute(beginn(rechnen[0]), beginn(rechnen[-1] + 1))[0]
+                          if rechnen else {})
+        except Exception as e:                           # noqa: BLE001
+            self.log.error(f"body recognition: round not evaluated — {len(anstoesse)} trigger(s) "
+                           f"({type(e).__name__}: {e})")
+            return
+        for a in anstoesse.values():                     # die Zeile des Anstosses gilt, wenn sie neuer ist (Codex H2)
+            e = a.get("entry")
+            alt = zeilen.get((e or {}).get("eid")) if e else None
+            if e and e.get("eid") and (alt is None or not isinstance(alt.get("ts"), (int, float))
+                                       or (e.get("ts") or 0) > alt["ts"]):
+                zeilen[e["eid"]] = e
+        for tag in rechnen:
+            try:
+                liste = _sz.szenarien_des_tages(zeilen, beginn(tag), beginn(tag + 1), cfg, {}, koerper_map=karte,
+                                                koerper_ab=ab)
+                namen = [_kw.koerper_namen(d, karte, ab) for d in liste]
+                sichtungen = _kw.koerper_sichtungen(liste, namen)
+                for d, n in zip(liste, namen):
+                    if n:
+                        im = {x.get("eid") for x in d.get("evs") or ()}
+                        self._koerper_melden(d, n, [a for a in tage[tag] if a.get("eid") in im],
+                                             {"karte": karte, "sichtungen": sichtungen, "zeilen": zeilen})
+            except Exception as e:                       # noqa: BLE001  die Anstoesse des Tags gelten als verarbeitet
+                self.log.error(f"body recognition: day {datetime.date.fromordinal(tag)} not evaluated — "
+                               f"{len(tage[tag])} trigger(s) ({', '.join(sorted({a['art'] for a in tage[tag]}))}), "
+                               f"{type(e).__name__}: {e}")
+
+    def _koerper_melden(self, durchgang, namen, anstoesse, tag_daten):
+        """Die Wege eines Durchgangs mit Koerper-Namen (Stufe KW12 Punkte 4 bis 9): Frigate-Eintrag fuer jede Kennung, der
+        er fehlt; Pushover, Telegram und HA nur aus einem frischen Koerper-Anstoss, einmal je Durchgang und Person.
+        Stufe KW14 Punkt 3: davor die Marken der Anwesenheit (unabhaengig von dry_alert, Alter und Ruhezeit); sind die
+        vier Melde-Schalter aus, endet es danach. Keine Personennamen im Log. -> None"""
+        from core import koerperweg as _kw
+        cfg, karte, zeilen = self.cfg, tag_daten["karte"], tag_daten["zeilen"]
+        if cfg.get("koerper_meldet_anwesenheit"):
+            for p, eids in sorted(namen.items()):
+                _anw.koerper_markieren(cfg, p, [zeilen[e] for e in eids if e in zeilen], log=self.log)
+        an = [k for k in _kw.MELDE_SCHALTER if cfg.get(k) and k != "koerper_meldet_anwesenheit"]
+        if not an:
+            return
+        if self.dry_alert:
+            self.log.info(f"DRY-BODY: {', '.join(sorted({e for v in namen.values() for e in v}))} — ways {an}")
+            return
+        if "koerper_meldet_frigate" in an and cfg.get("sub_label_schreiben"):
+            nur_lesen = frigate_read_only(cfg)
+            merker = self._koerper_nur_lesen if nur_lesen else self._koerper_eingereiht
+            for p, eids in sorted(namen.items()):
+                for e in eids:
+                    sc = (karte.get(e) or {}).get("score")
+                    if e in self.own_writes or e in merker:
+                        continue
+                    merker.add(e)
+                    if nur_lesen:
+                        self._writes_append(eid=e, label=p, score=sc, cos=None, readonly=True, quelle="koerper")
+                        self.log.info(f"{e}: read-only — would set the body name as sub_label, Frigate NOT modified")
+                    else:
+                        self._spur(f"body sub_label {e}", lambda e=e, p=p, sc=sc: self._koerper_frigate(e, p, sc))
+        koerper = [a for a in anstoesse if a.get("art") == "koerper"]
+        frisch = [a for a in koerper if not a.get("nachhol") and time.time() - ((a.get("entry") or {}).get("start")
+                                                                                 or (a.get("entry") or {}).get("ts")
+                                                                                 or 0) <= ALT_EREIGNIS_S]
+        wege = [k for k in an if k != "koerper_meldet_frigate"]
+        if koerper and not frisch:
+            self.log.info(f"{koerper[0]['eid']}: no body notification — the trigger is a catch-up or the event began "
+                          f"more than {int(ALT_EREIGNIS_S)} s ago")
+        # gemeldet wird eine Person nur aus einem frischen Koerper-Anstoss eines ihrer Ereignisse (Punkt 3c, Grenze: ein
+        # erst durch ein spaeteres Gesicht gueltiger Name bekommt Eintraege, aber keine Koerper-Meldung)
+        melden = {p: eids for p, eids in namen.items() if any(a.get("eid") in eids for a in frisch)}
+        if not melden or not wege:
+            if melden and "koerper_meldet_frigate" in an and not cfg.get("sub_label_schreiben"):
+                for p, eids in sorted(melden.items()):   # Frigate allein ohne Einrichtung: nur die INFO von _koerper_senden
+                    self._koerper_senden(_kw.meldung_inhalt(durchgang, eids, koerper, karte), p, eids, an)
+            return
+        with self._zustand_lock:
+            gesehen = dict(self.last_seen)
+        for p, eids, neu in _kw.meldung_merken(cfg["data_dir"], durchgang, melden, gesehen, tag_daten["sichtungen"],
+                                               float(cfg["anwesenheit_cooldown"]), wege):
+            if neu:
+                self._koerper_senden(_kw.meldung_inhalt(durchgang, eids, koerper, karte), p, eids, an)
+
+    def _koerper_frigate(self, eid, person, score):
+        """Der Frigate-Auftrag eines Koerper-Namens in der Spur (Stufe KW12 Punkt 4a): nie ueber einen Namen in Frigate;
+        die Zeile im Schreibprotokoll und die Mengen unter dem Schloss der eigenen Schreibung, der POST danach.
+        -> None (gesendet) oder _SPUR_UNCOUNTED"""
+        behalten = False
+        try:
+            if api(self.cfg, f"/api/events/{eid}").get("sub_label"):
+                behalten = True                          # bleibt eingereiht: kein Gang fragt Frigate dafuer noch einmal
+                self.log.info(f"{eid}: body name NOT written — Frigate already carries a name")
+                return self._SPUR_UNCOUNTED
+            with self.__dict__.setdefault("_eigen_schreib_schloss", threading.Lock()):
+                if eid in self.own_writes:               # eine Gesichts-Schreibung ist inzwischen beschlossen
+                    return self._SPUR_UNCOUNTED
+                self._writes_append(eid=eid, label=person, score=score, cos=None, quelle="koerper")
+                self.own_writes_koerper.add(eid)
+                self.own_writes.add(eid)
+            api_post(self.cfg, f"/api/events/{eid}/sub_label", {"subLabel": person, "subLabelScore": score})
+            self.log.info(f"{eid}: body name written to Frigate as sub_label ({score})")
+            return None
+        finally:
+            if not behalten:
+                self._koerper_eingereiht.discard(eid)
+
+    def _koerper_senden(self, m, person, eids, wege):
+        """Eine Koerper-Meldung einer Person ueber die eingeschalteten Wege (Stufe KW12 Punkte 5 bis 7); m aus
+        core.koerperweg.meldung_inhalt; wege sind die eingeschalteten Schalter (Frigate schreibt der Gang). Ein Weg ohne
+        eingerichteten Kanal gibt eine INFO-Zeile (auch fuer Frigate allein, _koerper_melden); Pushover meldet die Annahme
+        mit INFO, HA die Nicht-Annahme mit WARNING, eine Sammelzeile gibt es nicht. -> None"""
+        cfg, eid = self.cfg, m["eid"]
+        bereit = {"koerper_meldet_frigate": bool(cfg.get("sub_label_schreiben")),
+                  "koerper_meldet_pushover": _melden.pushover_bereit(cfg)[0],
+                  "koerper_meldet_telegram": _melden.telegram_an(cfg),
+                  "koerper_meldet_ha": bool(cfg.get("mqtt_publish") and (cfg.get("mqtt") or {}).get("host"))}
+        for w in wege:
+            if not bereit[w]:
+                self.log.info(f"{eid}: {w} switched on but not set up — nothing sent")
+        wege = [w for w in wege if bereit[w] and w != "koerper_meldet_frigate"]
+        jpg = None
+        if m["png"] and {"koerper_meldet_pushover", "koerper_meldet_telegram"} & set(wege):
+            try:
+                import cv2
+                import numpy as np
+                ok, puffer = cv2.imencode(".jpg", cv2.imdecode(np.frombuffer(m["png"], np.uint8), cv2.IMREAD_COLOR))
+                if not ok:
+                    raise ValueError("imencode returned False")
+                jpg = puffer.tobytes()
+            except Exception as e:                       # noqa: BLE001  die Meldung geht dann ohne Bild
+                self.log.warning(f"{eid}: body notification without picture ({type(e).__name__}: {e})")
+        _ar = _areas_mod.kamera_areas(_areas_mod.normalisieren(cfg.get("areas")), m["camera"])
+        if "koerper_meldet_pushover" in wege:
             _melden.sprache_aktivieren()
-            _vt_wort, _vt_stufe = "", None
-            if u:
-                try:
-                    from core import personmodell as _pm2
-                    from core import vertrauen as _vt
-                    _st = _pm2.status_lesen(self.cfg["data_dir"]) or {}
-                    _band = None
-                    if _st.get("schwelle") and _st.get("fremd_max"):
-                        _band = max(0.0, float(_st["schwelle"])
-                                    - float(_st["fremd_max"]))
-                    _vt_stufe = _vt.stufe(u["score"], _st.get("schwelle"),
-                                          _band)
-                    _vt_wort = _vt.label_sprachig(_vt_stufe)
-                except Exception:
-                    _vt_wort, _vt_stufe = "", None
-                # MQTT fuer HA-Automationen (User 04.08.): JEDER Treffer
-                # ueber der Schwelle auf ein eigenes Topic — das Feld
-                # feuer sagt, ob die Feuer-Regel erfuellt war. "stufe"
-                # ADDITIV (.249): bestehende Schluessel byte-gleich.
-                _payload = {
-                    "eid": eid, "person": u["person"],
-                    "score": u["score"], "stuetzen": u["stuetzen"],
-                    "feuer": bool(u.get("feuer")),
-                    "quelle": "person_recognition",
-                    "ts": round(time.time(), 1),
-                    # "start" ADDITIV (Bauplan neueste_zuerst, Stufe LZ1 Punkt 4): die Ereigniszeit der Ergebniszeile;
-                    # "ts" behaelt seinen eigenen Zeitaufruf.
-                    "start": (entry or {}).get("start")}
-                if _vt_stufe is not None:
-                    _payload["stufe"] = _vt_stufe
-                self._mqtt_pub(_melden.topic(self.cfg, "person_erkennung"),
-                               json.dumps(_payload, ensure_ascii=False))
-            if u and u.get("feuer"):
-                text = _sprache.t(
-                    "meldung.person.satz", name=u["person"],
-                    wort=_vt_wort or _sprache.t("meldung.person.wort_ersatz"),
-                    n=u["stuetzen"])
-                if str(self.cfg.get("alert_stil") or "worte") == "worte_zahlen":
-                    text += " " + _sprache.t("meldung.person.zahl",
-                                             score=u["score"])
-                push(self.cfg, _sprache.t("meldung.person.titel"), text,
-                     attachment=u.get("bild"))
-                # Telegram EXAKT wie die Gesichtsseite (User 04.08.:
-                # allgemeine Einstellungen gelten fuer BEIDE Straenge):
-                # _telegram_clip transkodiert mit der Guete-Einstellung,
-                # telegram_inhalt bild/video und telegram_modus greifen.
-                if self.cfg.get("telegram_modus", "aus") in ("direkt",
-                                                             "beide"):
-                    will_video = self.cfg.get("telegram_inhalt",
-                                              "video") != "bild"
-                    vid = self._telegram_clip(eid) if will_video else None
-                    cap = text + ("\n" + _sprache.t("meldung.video_ersatz.satz")
-                                  if will_video and not vid else "")
-                    telegram_video(self.cfg, vid, cap,
-                                   crop=u.get("bild"))
-                _log.info(f"[personlive] NOTIFICATION {u}")
-            elif u:
-                _log.info(f"[personlive] hit without firing {u}")
-        except Exception as e:
-            _log.error(f"[personlive] error: {e}")
+            titel = _sprache.t("meldung.titel.kategorie", wort=_kat_wort("erkannt"))
+            msg = _sprache.t("meldung.koerper.satz", name=person, zusatz=_sprache.t("heute.pass.via_koerper"),
+                             kamera=f"{m['camera']}{' · ' + ' + '.join(_ar) if _ar else ''}",
+                             zeit=datetime.datetime.fromtimestamp(m["ts"]).strftime("%H:%M"))
+
+            def _push():
+                if not push(cfg, titel, msg, jpg, log=self.log):
+                    self.log.error(f"{eid}: body notification REJECTED by Pushover (status!=1) — check token/user")
+                    return self._SPUR_UNCOUNTED          # die Spur zaehlt die Ablehnung nicht als gesendet
+                self.log.info(f"{eid}: body notification sent via Pushover")
+            self._spur(f"body push {eid}", _push)
+        if "koerper_meldet_telegram" in wege:
+            self._telegram_melden("koerper", {"eid": eid, "camera": m["camera"], "start": m["ts"], "ts": m["ts"],
+                                              "ours": {}}, [person], bild_quelle=lambda *_a: jpg)
+        if "koerper_meldet_ha" in wege and not self._mqtt_pub(_melden.topic(cfg, "koerper_erkannt"), json.dumps(
+                {"eid": eid, "camera": m["camera"], "areas": _ar, "ts": m["ts"],
+                 "personen": [{"name": person, "cos": None, "win": None, "score": m["score"]}],
+                 "quelle": "koerper", "eids": list(eids)}, ensure_ascii=False)):
+            self.log.warning(f"{eid}: body notification NOT delivered to Home Assistant (MQTT)")
 
     def _alarm_slot_nehmen(self, now):
         """Cooldown pruefen UND belegen, in einem Schritt (E0b).
@@ -29078,6 +29485,7 @@ def make_handler(svc):
                     saetze = _rq_pl.read_catalog({"data_dir": cfg["data_dir"]})["personen"].get(p, [])
                     gruende = []
                     n_bilder, _weg = _al_pl.entferne_referenzen([(p, r) for r in saetze], gruende)
+                    _rq_pl.body_remove_person({"data_dir": cfg["data_dir"]}, p)   # Koerperbilder ins Archiv (KW2)
                     if gruende:
                         svc.log.warning(f"PERSON DELETE: {len(gruende)} reference set(s) of {p} not "
                                         f"archived — " + "; ".join(sorted(set(gruende))))
@@ -30089,317 +30497,33 @@ def make_handler(svc):
                 except Exception as e:
                     _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
-            if pfad == "/personlauf/urteil":
-                # PE2: Klick-Urteil (letzte Zeile je Datei gilt), fsync-los
-                # bewusst — flush reicht, Muster Klick-Server.
-                from core import personernte as _pe
-                try:
-                    _d1 = self._body_json(4096, default={}, erwartet=dict)
-                    if _d1 is _ABGEWIESEN:
-                        return
-                    _lid = str(_d1.get("lauf_id") or "")
-                    _dat = str(_d1.get("datei") or "")
-                    _urt = _d1.get("urteil")
-                except (ValueError, TypeError):
-                    _lid = _dat = ""
-                    _urt = None
-                if (_urt not in ("ok", "falsch") or not _lid or not _dat
-                        or "/" in _lid or "/" in _dat or ".." in _lid
-                        or ".." in _dat):
-                    return self._send(400, json.dumps({"ok": False}),
-                                      "application/json")
-                _up = os.path.join(_pe.lauf_dir(cfg["data_dir"], _lid),
-                                   "urteile.jsonl")
-                if not os.path.isdir(os.path.dirname(_up)):
-                    return self._send(404, json.dumps({"ok": False}),
-                                      "application/json")
-                with open(_up, "a") as _f:
-                    _f.write(json.dumps({"datei": _dat, "urteil": _urt})
-                             + "\n")
-                    _f.flush()
-                return self._send(200, json.dumps({"ok": True}),
-                                  "application/json")
-            if pfad == "/person/einstellungen":
-                # .114: Schwelle + Feuer-Regel aus der Model-status-Seite —
-                # Validierung (Grenzen) liegt in personmodell.einstellungen_setzen.
-                from core import personmodell as _pm
-                _d6 = self._body_json(4096, default={}, erwartet=dict)
-                if _d6 is _ABGEWIESEN:
+            if pfad == "/koerperbilder/cutter":
+                # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW3 Punkt 4: den Cutter von Hand starten.
+                # Koerper {"personen": [Name, ...] oder leer (alle), "videos": Videos je Person, ganze Zahl ab 1}.
+                _dk = self._body_json(4096, default={}, erwartet=dict)
+                if _dk is _ABGEWIESEN:
                     return
-                _ok6, _erg6 = _pm.einstellungen_setzen(cfg["data_dir"], _d6)
-                return self._send(200 if _ok6 else 400, json.dumps(
-                    {"ok": _ok6, "msg": _erg6 if isinstance(_erg6, str) else "saved"},
-                    ensure_ascii=False), "application/json")
-            if pfad == "/person/schalter":
-                # PE4 Aktivierungs-Gate: Arm/Disarm nur mit Modell.
-                from core import personmodell as _pm
-                _d5 = self._body_json(1024, default={}, erwartet=dict)
-                if _d5 is _ABGEWIESEN:
-                    return
-                try:
-                    _an = bool(_d5.get("scharf"))
-                except (ValueError, TypeError):
-                    return self._send(400, json.dumps({"ok": False}),
-                                      "application/json")
-                _ok5, _erg5 = _pm.scharf_setzen(cfg["data_dir"], _an)
-                if not _ok5:
-                    return self._send(409, json.dumps(
-                        {"ok": False, "msg": str(_erg5)}),
-                        "application/json")
-                return self._send(200, json.dumps({"ok": True,
-                                                   "scharf": _an}),
-                                  "application/json")
-            if pfad == "/personlauf/loeschen":
-                # PE2b: Einzelbild- oder Lauf-Loeschung (Crop weg, Manifest-
-                # Grabstein bleibt; neuer Lauf kann jederzeit neu ernten).
-                # .146 (User 07.08.: 'fremde muessen auch geloescht werden
-                # koennen'): {"fremd": <datei>} loescht aus personlern/fremd/
-                # — Containment + Endungs-Vertrag, danach dasselbe
-                # Re-Training wie bei Personen-Bildern (FREMD_MIN-Regel
-                # greift von selbst, faellt der Pool unter 5).
-                from core import personernte as _pe
-                try:
-                    _d2 = self._body_json(4096, default={}, erwartet=dict)
-                    if _d2 is _ABGEWIESEN:
-                        return
-                    _lid = str(_d2.get("lauf_id") or "")
-                    _dat = _d2.get("datei")
-                    _frd = _d2.get("fremd")
-                except (ValueError, TypeError):
-                    _lid, _dat, _frd = "", None, None
-                if _frd is not None:
-                    _frd = str(_frd)
-                    _wurz = os.path.normpath(os.path.join(
-                        cfg["data_dir"], "personlern", "fremd"))
-                    _voll = os.path.normpath(os.path.join(_wurz, _frd))
-                    if (not _voll.startswith(_wurz + os.sep)
-                            or not _frd.lower().endswith(_reg.BILD_ENDUNGEN)
-                            or not os.path.isfile(_voll)):
-                        return self._send(400, json.dumps({"ok": False}),
-                                          "application/json")
-                    os.remove(_voll)
-                    # .147: Grabstein im Ursprungs-Lauf, damit der
-                    # Bestands-Skip das Event WIEDER anbieten darf.
-                    _pe.fremd_grabstein(cfg["data_dir"], _frd)
-                    _n3 = 1
-                elif (not _lid or "/" in _lid or ".." in _lid
-                        or (_dat is not None
-                            and ("/" in str(_dat) or ".." in str(_dat)))):
-                    return self._send(400, json.dumps({"ok": False}),
-                                      "application/json")
-                else:
-                    _n3 = _pe.loeschen(cfg["data_dir"], _lid,
-                                       str(_dat) if _dat else None)
-                # Ganzer-Lauf-Verwurf des Laufs, der gerade auf Review
-                # wartet (User 04.08.: schlechtes Ergebnis muss komplett
-                # verwerfbar sein) -> Wizard wieder freigeben.
-                if _frd is None and _dat is None:
-                    from core import personlauf as _pl
-                    _zv = _pl.zustand_lesen(cfg["data_dir"])
-                    if _zv and str(_zv.get("lauf_id")) == _lid \
-                            and _zv.get("phase") == "abnahme":
-                        _zv.update(phase="fertig", abgenommen=0,
-                                   verworfen=_n3)
-                        _pl.zustand_schreiben(cfg["data_dir"], _zv)
-                # PE3: Loeschung wirkt sofort -> Re-Training (Sekunden)
-                import threading as _th
-
-                def _pm_train2():
-                    try:
-                        from core import personmodell as _pm
-                        _pm.trainieren(cfg["data_dir"])
-                    except Exception as e:
-                        # .141 Panel-MUSS: der Fehlschlag wird SICHTBAR
-                        # (Modell-Karte), nicht nur eine Container-Logzeile —
-                        # die Karte zeigte sonst den Alt-Stand als aktuell.
-                        _log.error(f"[personmodell] training failed: {e}")
-                        try:
-                            from core import personmodell as _pmf
-                            _pmf.fehler_vermerken(
-                                cfg["data_dir"], f"{type(e).__name__}: {e}")
-                        except Exception:
-                            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
-                _th.Thread(target=_pm_train2, daemon=True,
-                           name="personmodell").start()
-                return self._send(200, json.dumps({"ok": True,
-                                                   "geloescht": _n3}),
-                                  "application/json")
-            if pfad == "/personlauf/abnahme_fertig":
-                # PE2-Abschluss (User: "wo bestaetige ich das?"): Urteile in
-                # den Bestand stempeln, Lauf -> fertig, Formular wieder frei.
-                from core import personlauf as _pl
-                from core import personernte as _pe
-                _zf = _pl.zustand_lesen(cfg["data_dir"])
-                if not _zf or _zf.get("phase") != "abnahme":
-                    return self._send(409, json.dumps(
-                        {"ok": False, "msg": _sprache.t("antwort.personlauf_kein_review")},
-                        ensure_ascii=False), "application/json")
-                _lid = str(_zf.get("lauf_id") or "")
-                _falsch = set()
-                _up = os.path.join(_pe.lauf_dir(cfg["data_dir"], _lid),
-                                   "urteile.jsonl")
-                if os.path.exists(_up):
-                    for l in open(_up):
-                        if l.strip():
-                            _u = json.loads(l)
-                            (_falsch.add if _u["urteil"] == "falsch"
-                             else _falsch.discard)(_u["datei"])
-                _nok, _nfalsch = _pe.abnahme_anwenden(cfg["data_dir"], _lid,
-                                                      _falsch)
-                _zf.update(phase="fertig", abgenommen=_nok,
-                           verworfen=_nfalsch)
-                # .147: bestaetigte FREMD-Bilder wandern in den Pool —
-                # das folgende Training liest ihn von selbst.
-                if _zf.get("person") == "FREMD":
-                    _zf["fremd_uebernommen"] = _pe.fremd_uebernehmen(
-                        cfg["data_dir"], _lid)
-                _pl.zustand_schreiben(cfg["data_dir"], _zf)
-                # PE3: nach jedem Review-Abschluss automatisch trainieren
-                import threading as _th
-
-                def _pm_train():
-                    try:
-                        from core import personmodell as _pm
-                        _pm.trainieren(cfg["data_dir"])
-                    except Exception as e:
-                        # .141 Panel-MUSS: der Fehlschlag wird SICHTBAR
-                        # (Modell-Karte), nicht nur eine Container-Logzeile —
-                        # die Karte zeigte sonst den Alt-Stand als aktuell.
-                        _log.error(f"[personmodell] training failed: {e}")
-                        try:
-                            from core import personmodell as _pmf
-                            _pmf.fehler_vermerken(
-                                cfg["data_dir"], f"{type(e).__name__}: {e}")
-                        except Exception:
-                            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
-                _th.Thread(target=_pm_train, daemon=True,
-                           name="personmodell").start()
-                return self._send(200, json.dumps(
-                    {"ok": True, "abgenommen": _nok, "verworfen": _nfalsch}),
+                _pk, _nk = _dk.get("personen") or [], _dk.get("videos", 1)
+                if (not isinstance(_pk, list) or not all(isinstance(x, str) and x.strip() for x in _pk)
+                        or isinstance(_nk, bool) or not isinstance(_nk, int) or _nk < 1):
+                    return self._send(400, json.dumps({"ok": False, "msg": "personen must be a list of names, "
+                                                       "videos a whole number from 1"}), "application/json")
+                _okk, _erk = svc.cutter_starten([x.strip() for x in _pk], _nk)
+                return self._send(200 if _okk else 409, json.dumps(
+                    {"ok": _okk, "stand": _erk} if _okk else {"ok": False, "msg": _erk}, ensure_ascii=False),
                     "application/json")
-            if pfad == "/personlauf_abbruch":
-                # PE1 (User-Wunsch 04.08.): laufenden Person-Learn-Lauf
-                # stoppen — Geerntetes bleibt, fahren() liest die Phase
-                # vor jedem Event.
-                from core import personlauf as _pl
-                _za = _pl.zustand_lesen(cfg["data_dir"])
-                if not _za or _za.get("phase") not in ("vorbereitung",
-                                                       "ernte"):
-                    return self._send(409, json.dumps(
-                        {"ok": False, "msg": _sprache.t("antwort.personlauf_kein_lauf")},
-                        ensure_ascii=False), "application/json")
-                _za["phase"] = "abbruch"
-                _pl.zustand_schreiben(cfg["data_dir"], _za)
-                return self._send(200, json.dumps({"ok": True}),
-                                  "application/json")
-            if pfad == "/personlauf_start":
-                # PE1 B4 (stufe2.md): Person-Learn-Lauf starten — Bindung
-                # EINMAL beim Anlegen (core/personlauf), Ernte inline im
-                # Hintergrund-Thread; EIN Lauf zur Zeit (Zustands-Phase).
-                # Worker-Job-Umbau folgt mit dem Einback-Port (PE1 B5).
-                from core import personlauf as _pl
-                try:
-                    _d = self._body_json(4096, default={}, erwartet=dict)
-                    if _d is _ABGEWIESEN:
-                        return
-                    _ev = int(_d.get("events") or 0)
-                    _person = str(_d.get("person") or "").strip()
-                except (ValueError, TypeError):
-                    _ev, _person = 0, ""
-                if _ev <= 0 or _ev > svc.LERNLAUF_EVENTS_MAX:
-                    return self._send(400, json.dumps(
-                        {"ok": False,
-                         "msg": _sprache.t("antwort.events_bereich",
-                                           max=svc.LERNLAUF_EVENTS_MAX)},
-                        ensure_ascii=False), "application/json")
-                _z0 = _pl.zustand_lesen(cfg["data_dir"])
-                # aktiv = Phase sagt aktiv UND der Thread lebt wirklich —
-                # nach einem Dienst-Neustart ist die Disk-Phase sonst eine
-                # Geisterbremse (Neustart-Resume laeuft ueber die eids).
-                _lebt = bool(getattr(svc, "_personlauf_thread", None)
-                             and svc._personlauf_thread.is_alive())
-                if _z0 and _z0.get("phase") in ("vorbereitung", "ernte") \
-                        and _lebt:
-                    return self._send(409, json.dumps(
-                        {"ok": False,
-                         "msg": _sprache.t("antwort.personlauf_aktiv")},
-                        ensure_ascii=False), "application/json")
-                import threading as _th
-                # Sofort-Feedback (User-Fund 04.08.: Bindung dauert 1-2 min,
-                # die Seite zeigte solange den ALTEN Zustand): Vorbereitungs-
-                # Phase schreiben, BEVOR der Thread startet.
-                _pl.zustand_schreiben(cfg["data_dir"], {
-                    "schema": 1, "phase": "vorbereitung", "person": _person,
-                    "wunsch_n": _ev, "ts": time.time()})
-
-                # Echtes Resume (Ehrlichkeits-Fix 04.08.): gleicher Auftrag
-                # nach Unterbrechung setzt DENSELBEN Lauf fort (eids-Skip
-                # greift nur innerhalb eines Laufs), sonst neuer Lauf.
-                _wieder = bool(_z0 and not _lebt and _z0.get("events_liste")
-                               and _z0.get("phase") in ("vorbereitung",
-                                                        "ernte")
-                               and _z0.get("person") == _person
-                               and _z0.get("wunsch_n") == _ev)
-
-                def _pl_lauf():
-                    # Feld-Fund 28.08. (Tester-A-Log): diese Route schrieb KEINE
-                    # einzige Dienst-Log-Zeile — ein Person-Lauf war per
-                    # Ferndiagnose unsichtbar (ein nackter 'personwork
-                    # started' um 11:28 liess sich nicht einmal einem Lauf
-                    # zuordnen). Start und Ende je eine Zeile.
-                    svc.log.info(f"person learn run "
-                            f"{'resumed' if _wieder else 'started'}: "
-                            f"{_ev} events for {_person or 'all named'}")
-                    try:
-                        if _wieder:
-                            _z = dict(_z0, phase="ernte")
-                            _pl.zustand_schreiben(cfg["data_dir"], _z)
-                        else:
-                            _z = _pl.anlegen(cfg["data_dir"], _ev, _person)
-
-                        def _fs(k, von, okz, bilder):
-                            _z["fortschritt"] = {"events": k, "von": von,
-                                                 "bilder": bilder,
-                                                 "ts": time.time()}
-                            _pl.zustand_schreiben(cfg["data_dir"], _z)
-                        # P1 (.202): Ernte-Events als personwork-Jobs (Batch-
-                        # Spur) statt inline im Main — zweite 4-GB-Tuer zu.
-                        def _ernte_job(_j):
-                            _a = svc.personwork_job_batch(
-                                {"typ": "personlauf_ernte",
-                                 "data_dir": cfg["data_dir"],
-                                 "lauf_id": _z["lauf_id"], "job": _j},
-                                _pl.EVENT_ZEITWACHE_S + 60)
-                            return _a.get("r") if _a else None
-                        _pl.fahren(cfg["data_dir"], _z, _fs,
-                                   ernte_job=_ernte_job)
-                        _zf = (_pl.zustand_lesen(cfg["data_dir"]) or {})
-                        _ff = _zf.get("fortschritt") or {}
-                        _evn = _ff.get('events', '?')
-                        svc.log.info(f"person learn run finished: "
-                                f"{_evn} events, "
-                                f"{_ff.get('bilder', '?')} images harvested"
-                                + (f" — only {_evn} CONFIRMED passes exist in "
-                                   f"the window; the run learns from events "
-                                   f"where a face was already recognized, so "
-                                   f"name faces first and re-run later"
-                                   if isinstance(_evn, int) and _evn < 20 else ""))
-                    except Exception as e:
-                        svc.log.error(f"person learn run FAILED: "
-                                f"{type(e).__name__}: {str(e)[:120]}")
-                        try:
-                            _z2 = _pl.zustand_lesen(cfg["data_dir"]) \
-                                or {"schema": 1}
-                            _z2["phase"] = "fehler"
-                            _z2["fehler"] = f"{type(e).__name__}: {str(e)[:180]}"
-                            _pl.zustand_schreiben(cfg["data_dir"], _z2)
-                        except Exception:
-                            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
-                svc._personlauf_thread = _th.Thread(
-                    target=_pl_lauf, daemon=True, name="personlauf")
-                svc._personlauf_thread.start()
-                return self._send(200, json.dumps({"ok": True}),
-                                  "application/json")
+            if pfad in ("/koerperbilder/bestaetigen", "/koerperbilder/verwerfen", "/koerperbilder/entfernen"):
+                # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW4 Punkte 1 und 4: neue Bilder annehmen oder
+                # verwerfen (Koerper {"ids": [bild_id, ...]}), ein Bild des Vorrats ins Archiv (Koerper {"id": bild_id}).
+                from routes import koerperbilder as _r_kb
+                _dkb = self._body_json(65536, default={}, erwartet=dict)
+                if _dkb is _ABGEWIESEN:
+                    return
+                if pfad == "/koerperbilder/entfernen":
+                    _stkb, _akb = _r_kb.entfernen(cfg, _dkb)
+                else:
+                    _stkb, _akb = _r_kb.zustand_setzen(cfg, _dkb, pfad == "/koerperbilder/bestaetigen")
+                return self._send(_stkb, json.dumps(_akb, ensure_ascii=False), "application/json")
             if pfad == "/lernlauf_start":
                 # E2: Lauf anlegen — atomar via core.lernlauf, UNTER dem Starter-Lock
                 # (zwei gleichzeitige POSTs waren ein check-then-act-Rennen, F2.2).
@@ -32498,13 +32622,13 @@ def make_handler(svc):
                 import szenarien as _szen
                 gap = int(cfg.get("szenario_gap_min", 5)) * 60   # auch unten (Besuchs-Buendelung) genutzt
                 try:                  # Koerper-Treffer je Event (Zuschreibung + Ausweis)
-                    from core import personlive as _plv
-                    _kmap = _plv.treffer_karte(cfg["data_dir"])
-                    from core import personmodell as _pmz
-                    _kab = int((_pmz.status_lesen(cfg["data_dir"]) or {})
-                               .get("feuer_ab") or _plv.FEUER_AB)
+                    # Stufe KW5 (Bauplan analysen/bauplan_koerperweg_neu.md Punkt 3): Treffer-Datei des neuen
+                    # Koerperwegs, koerper_stimmen aus der Config (Stufe KW12, wie auftritte._koerper)
+                    from core import koerperweg as _kwh
+                    _kmap, _kab = _kwh.treffer_karte(cfg["data_dir"]), int(cfg["koerper_stimmen"])
                 except Exception:
-                    _kmap, _kab = {}, 2
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "no body hits on this page")
+                    _kmap, _kab = {}, None
                 try:                  # V4 (§7/E6): Vision-Urteil je Durchgang —
                     from core import vision as _visx       # Info auf der Karte
                     from core import visionurteil as _vu   # + Stimme der Zu-
@@ -32645,25 +32769,17 @@ def make_handler(svc):
                 # Ersetzt durch das Personen-Band + die ruhige Randspalte weiter unten.
 
                 # --- Personen-Chip (echter Crop, Fallback Initiale) ---
-                def _chip(name, eid, count=1, best=0.0, koerper=False, bild=True):
+                def _chip(name, eid, count=1, best=0.0, bild=True):
                     # bild=False (.412, §7 Pruefstein "Today-DOM < 150 <img>"):
                     # die Chips der KAMERAZEILEN tragen die Initiale statt des
                     # Crops — der Avatar steht schon in der Durchgangszeile,
                     # die Zeile sagt WER auf WELCHER Kamera; beim Tester lagen
                     # 317 der 441 Bilder genau in diesen Zeilen.
+                    # (Das Koerper-Bild unter personlern/treffer/ als Chip eines
+                    # koerper-zugeschriebenen Passes ist mit dem alten Koerperweg in
+                    # Stufe KW6 des Bauplans analysen/bauplan_koerperweg_neu.md entfallen.)
                     u = _crop_url(eid, name) if bild else None
-                    if not u and koerper and eid:
-                        # koerper-zugeschriebener Pass: statt Buchstabe das
-                        # BESTE Koerper-Bild des Durchgangs zeigen (User
-                        # 05.08.) — der Crop liegt tagesbestaendig unter
-                        # personlern/treffer/ (personlive schreibt ihn).
-                        ed = str(eid).replace("/", "_")
-                        if os.path.isfile(os.path.join(
-                                cfg["data_dir"], "personlern", "treffer",
-                                ed + ".jpg")):
-                            u = _kleinbild.adresse("/person/treffer/"
-                                                   + urllib.parse.quote(ed) + ".jpg")
-                    av = (f'<span class="avs"><img src="{u}" loading="lazy" alt=""></span>' if u
+                    av =(f'<span class="avs"><img src="{u}" loading="lazy" alt=""></span>' if u
                           else f'<span class="avs" style="background:{_av_farbe(name)}">'
                                f'{html.escape(name[:1].upper())}</span>')
                     cnt = f' <span class="sc">×{count}</span>' if count > 1 else ''
@@ -32720,8 +32836,7 @@ def make_handler(svc):
                     # im Tooltip; Reihenfolge nach bestem Treffer.
                     _pz, _prest = _r_heute.deckel(_r_heute.personen_reihenfolge(s["pers"]),
                                                   _auf.PASS_PERSONEN_MAX)
-                    mitte = ("".join(_chip(p, d["eid"], d["count"], d["best"],
-                                           koerper=d.get("quelle") == "koerper")
+                    mitte = ("".join(_chip(p, d["eid"], d["count"], d["best"])
                                      for p, d in _pz)
                              + _r_heute.plus_html([p for p, _d in _prest]))
                     if live:
@@ -33485,183 +33600,6 @@ def make_handler(svc):
                     if p.startswith(base + os.sep) and os.path.isfile(p):
                         return self._send(200, open(p, "rb").read(), "image/jpeg")
                 return self._send(404, "not found", "text/plain")
-            if path.startswith("/personlauf/bild/"):
-                # PE2: Crop-Auslieferung mit Containment (Muster /lernlauf/crop)
-                _rel = urllib.parse.unquote(path[len("/personlauf/bild/"):])
-                _lid, _, _datei = _rel.partition("/")
-                _wurz = os.path.normpath(os.path.join(cfg["data_dir"],
-                                                      "personlern"))
-                _voll = os.path.normpath(os.path.join(_wurz, _lid, "crops",
-                                                      _datei))
-                if _voll.startswith(_wurz + os.sep) and os.path.isfile(_voll):
-                    return self._send(200, open(_voll, "rb").read(),
-                                      "image/jpeg")
-                return self._send(404, b"gone")
-            if path.startswith("/personlauf/fremdbild/"):
-                # .145: Fremd-Pool-Ansicht — Auslieferung mit Containment
-                # (Muster /personlauf/bild), jpg/png nach Endung.
-                _datei = urllib.parse.unquote(
-                    path[len("/personlauf/fremdbild/"):])
-                _wurz = os.path.normpath(os.path.join(
-                    cfg["data_dir"], "personlern", "fremd"))
-                _voll = os.path.normpath(os.path.join(_wurz, _datei))
-                if _voll.startswith(_wurz + os.sep) and os.path.isfile(_voll):
-                    _e = os.path.splitext(_voll)[1].lower()
-                    _typ = {".png": "image/png",
-                            ".webp": "image/webp"}.get(_e, "image/jpeg")
-                    return self._send(200, open(_voll, "rb").read(), _typ)
-                return self._send(404, b"gone")
-            if path.startswith("/person/kontrolle/bild/"):
-                # Z8: Kontroll-Bild ausliefern. Containment wie /person/treffer
-                # (realpath-Wache), aber ein AUSBRUCHS-Versuch ist eine schlechte
-                # Anfrage (400) und kein fehlendes Bild (404) — die beiden Faelle
-                # zu vermischen hat schon einmal einen Fund verdeckt.
-                _b = os.path.realpath(os.path.join(cfg["data_dir"], "personlern",
-                                                   "kontrolle"))
-                _m = re.fullmatch(rf"/person/kontrolle/bild/({_reg.DATEI_RE})"
-                                  rf"/({_reg.DATEI_RE}\.jpg)",
-                                  urllib.parse.unquote(path))
-                if not _m:
-                    return self._send(400, b"bad path")
-                _p = os.path.realpath(os.path.join(_b, _m.group(1), _m.group(2)))
-                if not _p.startswith(_b + os.sep):
-                    return self._send(400, b"bad path")
-                if not os.path.isfile(_p):
-                    return self._send(404, b"gone")
-                return self._send(200, open(_p, "rb").read(), "image/jpeg")
-            if path == "/person/kontrolle":
-                import webui
-                # Z8 (konzept_frames.md §7): Kachel-Browser der BEURTEILTEN Bilder,
-                # je Durchgang gruppiert (Szenario-Prinzip), view-only. Was die Seite
-                # zeigt, entscheidet der Schalter diagnostic_collection — der Renderer
-                # bekommt ihn mit und erklaert den leeren Fall, statt ihn zu verschweigen.
-                from core import personlive as _plv
-                from routes import personwizard as _r_pw
-                inhalt = _r_pw.kontrolle_seite(
-                    _plv.kontrolle_lesen(cfg["data_dir"]),
-                    bool(cfg.get("diagnostic_collection")))
-                return self._send(200, webui.layout(
-                    _sprache.t("nav.person_kontrolle"), "/person/kontrolle", inhalt, self._banner()))
-            m = re.match(r"^/person/treffer/([\w.\-]+)\.jpg$", path)
-            if m:                # Koerper-Treffer-Crop (Chip-Bild, .120)
-                base = os.path.realpath(os.path.join(cfg["data_dir"],
-                                                     "personlern", "treffer"))
-                p = os.path.realpath(os.path.join(base, m.group(1) + ".jpg"))
-                if p.startswith(base + os.sep) and os.path.isfile(p):
-                    _daten, _typ = open(p, "rb").read(), "image/jpeg"
-                    from core import kleinbild as _kleinbild
-                    if _kleinbild.verlangt(qs):        # TY1 Punkt 2: Koerper-Chip der Seite Today
-                        _daten, _typ = _kleinbild.klein(_daten, _kleinbild.datei_schluessel(p), _typ)
-                    return self._send(200, _daten, _typ)
-                return self._send(404, b"gone")
-            if path == "/person/modell":
-                import webui
-                # PE3-Status als eigener Reiter im Person-Bereich (User).
-                from core import personlive as _plv
-                from core import personmodell as _pm
-                from routes import personwizard as _r_pw
-                # Standard-Werte der Feuer-Regel kommen aus personlive (eine
-                # Quelle, kein Streu-Literal); Grenzen aus personmodell.
-                regeln = {"fenster_s": _plv.FENSTER_S,
-                          "feuer_ab": _plv.FEUER_AB,
-                          "karenz_s": _plv.KARENZ_S,
-                          "schwelle_std": _plv.SCHWELLE_STD,
-                          "grenzen": _pm.REGEL_GRENZEN}
-                inhalt = _r_pw.modell_seite(_pm.status_lesen(cfg["data_dir"]),
-                                            regeln)
-                return self._send(200, webui.layout(
-                    _sprache.t("nav.person_modell"), "/person/modell", inhalt, self._banner()))
-            if path in ("/person", "/personlauf/bestand"):
-                import webui
-                # PE2b (User 04.08.: Anchors-Pendant fuer Personen), seit
-                # abends EIGENER Hauptbereich "Person" neben People (People
-                # = Gesichter, Person = Koerper-Bilder). Alte Learn-URL
-                # bleibt als Alias. .145 (User 07.08.): ?wer=<Gruppe> zeigt
-                # NUR deren Bilder (statt Bandwurm), Fremd-Pool als Eintrag.
-                from core import personernte as _pe
-                from core import personmodell as _pm
-                from routes import personwizard as _r_pw
-                _qd = urllib.parse.parse_qs(
-                    urllib.parse.urlparse(self.path).query)
-                _wer = (_qd.get("wer", [""])[0] or "").strip()
-                _fdir = os.path.join(cfg["data_dir"], "personlern", "fremd")
-                try:
-                    _fremd = sorted(
-                        (f for f in os.listdir(_fdir)
-                         if f.lower().endswith(_reg.BILD_ENDUNGEN)
-                         and os.path.isfile(os.path.join(_fdir, f))),
-                        reverse=True)
-                except OSError:
-                    _fremd = []
-                inhalt = _r_pw.bestand_seite(
-                    _pe.laeufe_lesen(cfg["data_dir"]),
-                    modell=_pm.status_lesen(cfg["data_dir"]),
-                    wer=_wer, fremd=_fremd)
-                return self._send(200, webui.layout(
-                    _sprache.t("nav.person"), "/person", inhalt, self._banner()))
-            if path == "/personlauf/abnahme":
-                import webui
-                # PE2 (User 04.08.: "haette ich jetzt nicht die Bilder
-                # pruefen sollen?"): Klick-Abnahme des letzten Laufs.
-                from core import personlauf as _pl
-                from core import personernte as _pe
-                from routes import personwizard as _r_pw
-                _z = _pl.zustand_lesen(cfg["data_dir"]) or {}
-                _lid = str(_z.get("lauf_id") or "")
-                _zeilen, _markiert = [], set()
-                if _lid:
-                    _mp = _pe.manifest_pfad(cfg["data_dir"], _lid)
-                    if os.path.exists(_mp):
-                        _zeilen = [json.loads(l) for l in open(_mp)
-                                   if l.strip()]
-                    _up = os.path.join(_pe.lauf_dir(cfg["data_dir"], _lid),
-                                       "urteile.jsonl")
-                    if os.path.exists(_up):
-                        for l in open(_up):
-                            if l.strip():
-                                _u = json.loads(l)
-                                (_markiert.add if _u["urteil"] == "falsch"
-                                 else _markiert.discard)(_u["datei"])
-                inhalt = _r_pw.abnahme_seite(_z, _zeilen, _markiert)
-                return self._send(200, webui.layout(_sprache.t("nav.personlauf"), "/personlauf",
-                                                    inhalt, self._banner()))
-            if path == "/personlauf":
-                import webui
-                # PE1 Baustein 2 (stufe2.md): Person-Learn-Wizard, Anzeige-
-                # Teil — Lauf/Worker-Job folgt als Baustein 3. Personen-
-                # Quelle = master_persons (seit E3b-2a die Referenz-Quelle,
-                # Lese-Stufe b, nicht mehr die Ordner unter <data_dir>/faces).
-                from routes import personwizard as _r_pw
-                _qd = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-                try:
-                    _pn = int((_qd.get("events", [""])[0] or "0") or 0)
-                except ValueError:
-                    _pn = 0
-                _pn = max(0, _pn)
-                _pp = (_qd.get("person", [""])[0] or "").strip()
-                _pers = master_persons(cfg)
-                # .147: "FREMD" ist reservierte Wahl (Fremd-Sammel-Lauf)
-                if _pp and _pp != "FREMD" and _pp not in _pers:
-                    _pp = ""
-                from core import personlauf as _pl
-                _z = _pl.zustand_lesen(cfg["data_dir"])
-                # Dienst-Neustart: Disk-Phase 'aktiv' ohne lebenden Thread =
-                # unterbrochen — Formular freigeben, Neustart resumed per eids
-                if _z and _z.get("phase") in ("vorbereitung", "ernte"):
-                    _lebt = bool(getattr(svc, "_personlauf_thread", None)
-                                 and svc._personlauf_thread.is_alive())
-                    if not _lebt:
-                        _z = dict(_z, phase="unterbrochen")
-                from core import personmodell as _pm
-                inhalt = _r_pw.wizard(_pers, _pn or None, _pp,
-                                      bilanz={"n": _pn} if _pn else None,
-                                      lauf=_z,
-                                      modell=_pm.status_lesen(cfg["data_dir"]))
-                _tickt = bool(_z and _z.get("phase") in ("vorbereitung",
-                                                         "ernte"))
-                return self._send(200, webui.layout(_sprache.t("nav.personlauf"), "/personlauf",
-                                                    inhalt, self._banner(),
-                                                    refresh=3 if _tickt else None))
             if path == "/lernlauf_status":                 # .260 Saeule-Widget (Poll)
                 # EINE Quelle: routes.lernwizard.lauf_status — dieselbe
                 # Rechnung, die die Seite rendert; das Browser-JS wendet die
@@ -34234,6 +34172,27 @@ def make_handler(svc):
                 except Exception:
                     d = {"phase": "-", "done": 0, "total": 0, "ts": 0}
                 return self._send(200, json.dumps(d), "application/json")
+            if path == "/koerperbilder/cutter":       # Bauplan Koerperweg neu KW3 Punkt 4: Stand des Cutter-Laufs
+                # Der Stand des letzten Laufs (geprueft, behaltene Bilder, Ausfaelle nach Grund, Grund eines
+                # Laufs, der nicht startete); ohne Lauf seit dem Start des Dienstes {"laeuft": false}. KW11 Punkt 4:
+                # dazu der Anteil fuer den Balken der Seite, gerechnet nur in routes/koerperbilder.lauf_anteil.
+                from routes import koerperbilder as _r_kb
+                _sk = getattr(svc, "_cutter_stand", None) or {"laeuft": False}
+                return self._send(200, json.dumps(dict(_sk, ausfaelle=dict(_sk.get("ausfaelle") or {}),
+                                                       anteil=_r_kb.lauf_anteil(_sk)),
+                                                  ensure_ascii=False), "application/json")
+            if path == "/koerperbilder":               # Bauplan Koerperweg neu KW4: Seite „Body images“ (Person)
+                import webui
+                # Vorrat je Person, Cutter mit Stand, Neue Bilder bei Sichtpruefung an; die Akte nur begrenzt
+                # (routes/koerperbilder.daten), nichts bei Frigate. Teilmenge: roter Hinweis und ERROR (ED008).
+                from routes import koerperbilder as _r_kb
+                inhalt = _r_kb.seite(cfg, svc.log_path, getattr(svc, "_cutter_stand", None))
+                return self._send(200, webui.layout(_sprache.t("nav.person"), "/koerperbilder", inhalt, self._banner()))
+            if path.startswith("/koerperbilder/bild/"):  # KW4 Punkt 4: ein Bild der Schublade (core.refquelle)
+                from core import refquelle as _rq_kb
+                _bkb = path[len("/koerperbilder/bild/"):]
+                _pkb = _rq_kb.body_image(cfg, _bkb[:-len(".png")]) if _bkb.endswith(".png") else None
+                return self._send(200, _pkb, "image/png") if _pkb is not None else self._send(404, b"gone")
             if path == "/person_umbenennen/status":   # .542: Fortschritt des Umbenenn-Zugs
                 # Der Zug laeuft ueber alle Event-Ordner (hier vierstellig) —
                 # der Knopf wartet also nicht, er pollt. Muster wie
@@ -34643,7 +34602,7 @@ def make_handler(svc):
                 _blk["api_key_gesetzt"] = bool(_blk.get("api_key"))
                 _blk.pop("api_key", None)          # Key verlaesst den Renderer nie
                 _lage = svc.vision_galerie_lage()
-                inhalt = _r_vision.seite(
+                inhalt = svc.vision_geparkt_html() + _r_vision.seite(   # KW6 Punkt 4: Grund rot oben
                     _blk, _vis.KACHELN, _vis.KACHEL_REIHE, _vor, _prot,
                     svc._vision_modelle(_blk),
                     _vis.MASCHINEN_ANKER,
@@ -34664,7 +34623,7 @@ def make_handler(svc):
                 _l = svc.vision_test_lage((_q.get("pass") or [""])[0])
                 return self._send(200, webui.layout(
                     _sprache.t("nav.erkennungstest"), "/erkennungstest",
-                    _r_vt.seite(_l["passe"], _l["pass_key"], _l["sicht"],
+                    svc.vision_geparkt_html() + _r_vt.seite(_l["passe"], _l["pass_key"], _l["sicht"],
                                 _l["laeuft"], nachanalyse=_l["nachanalyse"],
                                 lauffeld=_l["lauffeld"], laeufe=_l["laeufe"]),
                     self._banner(),
@@ -34683,10 +34642,10 @@ def make_handler(svc):
                 _l = svc.vision_galerie_lage(_p, _g or None,
                                              bool((_q.get("neu") or [""])[0]))
                 return self._send(200, webui.layout(
-                    _sprache.t("titel.vision_galerie"), "/vision", _r_vw.seite(**_l),
+                    _sprache.t("titel.vision_galerie"), "/vision", svc.vision_geparkt_html() + _r_vw.seite(**_l),
                     self._banner()))
             if path.startswith("/vision/galerie/bild/"):
-                # Galerie-KOPIE ausliefern, Containment wie /personlauf/bild
+                # Galerie-KOPIE ausliefern, Containment wie frueher /personlauf/bild (Stufe KW6 ausgebaut)
                 _rel = urllib.parse.unquote(path[len("/vision/galerie/bild/"):])
                 _pers, _, _datei = _rel.partition("/")
                 _wurz = os.path.normpath(os.path.join(cfg["data_dir"],
@@ -34713,7 +34672,6 @@ def make_handler(svc):
                 import webui                       #  Easy+Expert, EINE Seite)
                 from routes import erkennung as _r_erk
                 from core import livewache as _lw_e
-                from core import personmodell as _pm_e
                 _dflt, _g = _lw_e.guards_lesen(cfg, log=_logbuch.NULL)
                 # .207: die Kachel zeigte 0/0, waehrend /gesichter 4 Personen
                 # listete. Seit E3b-2a (Bauplan Referenz-Quelle einbauen) aus
@@ -34725,7 +34683,6 @@ def make_handler(svc):
                     {"an": sum(1 for g in _g.values() if g.get("enabled")),
                      "eingerichtet": len(_g)},
                     {"personen": _np, "bilder": _nb},
-                    _pm_e.status_lesen(cfg["data_dir"]),
                     n_areas=len(_areas_mod.normalisieren(cfg.get("areas"))))
                 return self._send(200, webui.layout(
                     _sprache.t("nav.erkennung"), "/erkennung", inhalt, self._banner()))
@@ -37117,6 +37074,7 @@ def main():
     except Exception as _kre:                                  # noqa: BLE001
         svc.log.warning(f"calibration reset failed ({type(_kre).__name__}: "
                 f"{_kre}) — will retry on next start, marker not advanced")
+    svc.start_koerper_auswerter()                 # Stufe KW12 Punkt 3b: vor der Wartung (Nachzug) und der Event-Queue
     svc.start_wartung()
     svc.start_stoerungswaechter()
     svc.start_plattenwache()                      # .313 Issue #25
@@ -37135,13 +37093,13 @@ def main():
     svc.start_live_aufsicht()             # Phase 4: Live-Engine-Supervisor (Autostart, wenn
     #                                       ein Waechter enabled ist; Standalone-Erkennung)
     svc.start_stream_steckbriefe()        # .186: echte Stream-Aufloesung je Kamera proben
-    svc.start_backbone_migration()        # .203: Alt-Modell einmalig auf omz0277 heben
     #                                       (Kachel-Kopf ohne Quelltest-Klick, User 13.08.)
     # .371 (User 29.08.): Read me first zeigt sich nach JEDEM Dienststart einmal.
     # Die Marke wird hier geloescht; gesetzt wird sie erst, wenn jemand die Seite
     # schliesst (core/readmefirst.py).
     from core import readmefirst as _rmf_start
     _rmf_start.start_zuruecksetzen(cfg["data_dir"], svc.log)
+    svc.vision_parken()                   # KW6 Punkt 4: ein gespeichertes vision.aktiv einmal aus
     svc.vision_waisen_start()             # .164: Laeufe schliessen, die der letzte
     #                                       Neustart mitten drin erwischt hat
     svc.bruecke_waisen_start()            # .524 Fix 12: angenommene, aber nie

@@ -39,17 +39,17 @@ _log = _logbuch.logger(__name__)
 def _koerper(cfg):
     """Koerper-Treffer-Karte + Stuetzen-Regel fuer die Zuschreibung —
     dieselbe Quelle wie /heute (Fusion Schritt 1; .119: auch hier, damit
-    Personen-Tagessicht und Today dieselben Passe zaehlen)."""
+    Personen-Tagessicht und Today dieselben Passe zaehlen). Seit Stufe KW5
+    (Bauplan analysen/bauplan_koerperweg_neu.md Punkt 3): die Karte aus der
+    Treffer-Datei des neuen Koerperwegs, seit Stufe KW12 koerper_stimmen aus der Config.
+    -> (Karte, koerper_stimmen); bei einem Fehler eine leere Karte (ohne Karte
+    liest szenarien die Zahl nicht)"""
     try:
-        from core import personlive as _plv
-        from core import personmodell as _pm
-        kmap = _plv.treffer_karte(cfg["data_dir"])
-        kab = int((_pm.status_lesen(cfg["data_dir"]) or {})
-                  .get("feuer_ab") or _plv.FEUER_AB)
-        return kmap, kab
+        from core import koerperweg as _kw
+        return _kw.treffer_karte(cfg["data_dir"]), int(cfg["koerper_stimmen"])
     except Exception:
-        _logbuch.swallowed(_log, _logbuch.WARNING, "returning ({}, 2)")
-        return {}, 2
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning no body hits")
+        return {}, None
 
 def _hhmm(t):
     return datetime.datetime.fromtimestamp(t).strftime("%H:%M")

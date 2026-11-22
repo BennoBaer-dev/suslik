@@ -34,7 +34,8 @@ GT_MAX_PERSONEN = 10
 
 def _pass_schluessel(start, kette=None):
     """DIE eine Schreibweise des Pass-/Render-Schluessels — dieselbe Formel,
-    die die Lern-Kette (prototyp/ernte_lauf ueber core/personlauf.py) und die
+    die die fruehere Lern-Kette (prototyp/ernte_lauf ueber core/personlauf.py, seit Stufe KW6 des Bauplans
+    analysen/bauplan_koerperweg_neu.md im Archiv) und die
     Render-Stellen in verifyd fuehren. Hier zentral, damit die Vision-Stimme
     kein weiteres Streu-Literal anlegt (qs_ebenen-Regel: Aufzaehlungen/Formeln
     aus der einen Quelle).
@@ -50,7 +51,7 @@ def _pass_schluessel(start, kette=None):
     Kette. Mit mehreren Ketten ist das moeglich — beim Feldtester entstehen im
     Kamera-Modus 232 Durchgaenge am Tag —, und dann teilten sich zwei
     verschiedene Durchgaenge ihren Vision-Kontrollordner
-    (`core/visionurteil` ueber `personlive.kontrolle_dir`), ihre
+    (`core/visionurteil` ueber `personlive.kontrolle_dir`, seit KW6 hinter dem Tor des geparkten Vision), ihre
     Pass-Bestaetigung und ihre Lern-Kette.
 
     WARUM EIN KUERZEL statt des Ketten-Namens: der Schluessel wird ein
@@ -225,7 +226,7 @@ def mit_gesicht(r):
 def pass_key(by_h, eid, cfg, gtmap=None, now=None):
     """Der Szenario-Schluessel EINES Events: die Startzeit des DURCHGANGS, zu
     dem es gehoert, in ganzen Sekunden ("%d") — dieselbe Schreibweise, die die
-    Lern-Kette schon fuehrt (core/personlauf.py: pass_key aus dem ersten Event
+    fruehere Lern-Kette fuehrte (core/personlauf.py, seit KW6 im Archiv: pass_key aus dem ersten Event
     eines Durchgangs). None = das Event liegt in keiner Gruppe.
 
     Gruppiert wird NICHT neu: die Antwort faellt aus szenarien_des_tages, der
@@ -423,10 +424,13 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
     Teil eines Durchgangs auf die ganze Person zu schliessen).
     None = Identitaet (All-Sicht).
     vision_map (Fix vision-stimme-2): pass_key -> juengstes Vision-Urteil
-    (visionurteil.protokoll_karte). None = bei Bedarf selbst laden, s.u."""
+    (visionurteil.protokoll_karte). None = bei Bedarf selbst laden, s.u.
+    koerper_ab (seit Stufe KW12 des Bauplans analysen/bauplan_koerperweg_neu.md, R2): die Zahl der STIMMEN, die
+    eine Person im Durchgang ohne Gesichts-Namen fuer einen Koerper-Namen braucht (core.koerperweg.stimmen_zaehlen
+    ueber ihre Treffer-Ereignisse); die Aufrufer reichen koerper_stimmen aus der Config herein."""
     now = now if now is not None else time.time()
     # Vision-STIMME (Fix vision-stimme-2, Rueckweg-Fall 10.08.): das
-    # Vision-Urteil eines Durchgangs zaehlt als EINE zusaetzliche Stuetze
+    # Vision-Urteil eines Durchgangs zaehlt als EINE zusaetzliche Stimme
     # Richtung koerper_ab, wenn es DIESELBE Person nennt wie der Koerper-Weg
     # (Regeln am Einsatzort unten). vision_map=None laedt die Urteils-Karte
     # selbst — so erben /auftritte und /pass die Stimme ohne eigenen Code
@@ -562,8 +566,8 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
         if not pers and koerper_map:
             # ZUSCHREIBUNG via Koerper-Strang (User 05.08., Fusion Schritt 1):
             # kein Gesicht im ganzen Durchgang, aber der Personen-Strang kennt
-            # die Person ueber mehrere Events (>= koerper_ab Stuetzen, Pendant
-            # zur Feuer-Regel) -> der Pass GEHOERT ihr: Karte zaehlt ihn, kein
+            # die Person mit genug Stimmen (>= koerper_ab Stimmen ueber ihre
+            # Treffer-Ereignisse, KW12 R2) -> der Pass GEHOERT ihr: Karte zaehlt ihn, kein
             # "no known person", kein Unknown-Besucher-Kandidat. quelle=
             # "koerper" haelt die Urteilsquelle fuer die Anzeige unterscheidbar;
             # Gesichts-Urteile je Event bleiben unangetastet.
@@ -572,6 +576,8 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
                 t3 = koerper_map.get(x.get("eid"))
                 if t3 and t3.get("person"):
                     khits.setdefault(t3["person"], []).append((x, t3))
+            from core import koerperweg as _kw          # KW12 R2: Stimmen je Person, nur Aufrufer mit Karte laden
+            _st = {p: _kw.stimmen_zaehlen(t for _x, t in h) for p, h in khits.items()}
             # Vision-STIMME: EIN Urteil je Durchgang = hoechstens EINE
             # Stuetze. Sie zaehlt nur, wenn (a) das Qualitaets-Sieb
             # (vision_stimme_gilt) haelt, (b) die genannte Person EIGENE
@@ -586,9 +592,9 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
             # Falsch-Zuschreibung, wo vorher NIEMAND zugeschrieben wurde).
             # (d) Materialtrennung: das Kandidaten-Gitter des Urteils muss
             # mindestens ein Event DIESES Passes enthalten, das nicht schon
-            # als Koerper-Treffer der Person zaehlt — die zweite Stuetze
+            # als Koerper-Treffer der Person zaehlt — die zusaetzliche Stimme
             # ruht auf eigenem Material, nicht auf denselben Pixeln
-            # (koerper_ab=2 soll genau Doppelzaehlung verhindern). Der
+            # (koerper_ab Stimmen sollen genau Doppelzaehlung verhindern). Der
             # Schluessel ist der exakte RENDER-Schluessel — dieselbe
             # Leseart wie die Vision-Fussnote der Karte, BEWUSST ohne
             # tolerante Suche (Befund B/C der .171-Zweitkontrolle: eine
@@ -599,8 +605,8 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
                 vz = vision_map.get(_pass_schluessel(g["start"], g.get("kette"))) or {}
                 vp = vision_stimme_gilt(vz)
                 if vp and vp in khits and all(
-                        len(khits[vp]) > len(h)
-                        for q, h in khits.items() if q != vp):
+                        _st[vp] > _st[q]
+                        for q in khits if q != vp):
                     gitter = {b.get("eid") for b in (vz.get("bilder") or [])
                               if b.get("eid")}
                     pass_eids = {x.get("eid") for x in evs_g}
@@ -620,12 +626,12 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
                 evs_g, int(_ab) if _ab is not None else FREMD_AB_GESICHTER)
             if _fremd:
                 for p, hits in khits.items():
-                    if len(hits) + (1 if p == stimme else 0) >= koerper_ab:
+                    if _st[p] + (1 if p == stimme else 0) >= koerper_ab:
                         verworfen.append({"name": p, "grund": _grund,
                                           "stuetzen": len(hits)})
                 khits = {}
             for p, hits in khits.items():
-                if len(hits) + (1 if p == stimme else 0) < koerper_ab:
+                if _st[p] + (1 if p == stimme else 0) < koerper_ab:
                     continue
                 _xt = lambda x: x.get("start") or x.get("ts") or 0
                 beste_x, beste_t = max(hits, key=lambda ht: ht[1].get("score") or 0)
@@ -637,10 +643,10 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
                            "letzt_cam": str(max(hits, key=lambda ht: _xt(ht[0]))[0]
                                             .get("camera", "?")),
                            "quelle": "koerper"}
-                if p == stimme and len(hits) < koerper_ab:
+                if p == stimme and _st[p] < koerper_ab:
                     # Ausweis fuer Anzeige/Nachvollzug: die Vision-Stimme hat
                     # diese Zuschreibung GETRAGEN. Nur wenn die Koerper-
-                    # Treffer allein NICHT reichten (len(hits) < koerper_ab)
+                    # Stimmen allein NICHT reichten (_st[p] < koerper_ab)
                     # — dann ist der Ausweis per Konstruktion wahr. Reichte
                     # der Koerper-Weg schon allein, bleibt die Karte bei
                     # "via person recognition" (Befund 1 der Drittkontrolle:

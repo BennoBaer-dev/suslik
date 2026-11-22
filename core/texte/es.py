@@ -78,6 +78,21 @@ T = {
         "lo recoge una actualización posterior.\n\n"
         "Me alegra recibir cualquier comentario, sobre todo cuando algo no "
         "cuadra.",
+    "readme.person.titel": "Reconocimiento de personas",
+    "readme.person.text":
+        "El reconocimiento de personas da un nombre a una persona cuando su cara no se ha reconocido o no se veía "
+        "ninguna cara. Es opcional. En la página Reconocimiento (tarjeta Reconocimiento corporal) lo activas y "
+        "eliges si funciona siempre o solo cuando no se ha reconocido ninguna cara.\n\n"
+        "Aprende de vídeos en los que el reconocimiento facial identificó a la persona con seguridad. A partir de "
+        "esta versión, suslik anota en cada vídeo nuevo si sirve para ello. Los vídeos anteriores no cuentan. En la "
+        "página Imágenes de cuerpo entero eliges si el aprendizaje se inicia a mano, una vez al día o enseguida.\n\n"
+        "De fábrica, un nombre vale cuando tres imágenes de los vídeos de un mismo paso encajan con la misma "
+        "persona. Aparece en "
+        "Hoy y en Apariciones y, si quieres, también en Frigate, en la página Presencia y como aviso propio por "
+        "Pushover, Telegram y Home Assistant. Estas vías las activas una a una; de fábrica están desactivadas.\n\n"
+        "Lo he rehecho todo. No pude trasladar el modelo ni las imágenes de entrenamiento del antiguo aprendizaje de "
+        "personas; las caras aprendidas se quedan. Si usabas el antiguo aprendizaje, el reconocimiento de personas "
+        "tiene que volver a aprender. Gracias por tu comprensión.",
         "readme.generell.titel": 'General',
     "readme.generell.text": 'Mi reconocimiento de recorridos depende de la detección de personas de Frigate. En cuanto Frigate avisa de una persona, me traigo el evento de persona entero. Un evento así dura unas veces pocos segundos y otras varios minutos. Lo reviso de principio a fin para encontrar a todas las personas que aparecen en él.\n\nQue el reconocimiento facial propio de Frigate esté activado no importa. Solo hace falta si quieres sincronizar caras con Frigate.\n\nLa comprobación nunca usa el stream de detección, sino la grabación, es decir el mejor stream que la cámara entrega a Frigate.\n\nUna comprobación arranca por dos vías. O por el evento de persona de Frigate, esa es la vía del recorrido. O por el vigilante en vivo: toma el stream en curso, directo de la cámara o por el proxy de Frigate, busca caras y arranca desde ahí.\n\nUna persona se reconoce por tres vías. Por la cara. Por la persona entera, solo a partir de la imagen, sin cara. Por un modelo de visión, y esa vía sigue en beta.\n\nAquí uso cámaras 4K con la tasa de imagen lo más alta posible, al menos 15 imágenes por segundo. El bitrate igual de alto. Un bitrate bajo deja borrosas las caras en movimiento.',
     "readme.aktuell.titel": 'En qué estoy trabajando',
@@ -377,8 +392,10 @@ T = {
     "konfiguration.kette.gesicht_erkl":
         "la vía del rostro es la columna vertebral de todo análisis — "
         "persona y visión dependen de su veredicto del recorrido",
-    "konfiguration.kette.grund_person":
-        "aún no hay un modelo de persona entrenado activo",
+    "konfiguration.kette.grund_person_vorrat":
+        "aún no hay ninguna imagen válida en la página Imágenes de cuerpo entero",
+    "konfiguration.kette.grund_person_pose":
+        "falta el modelo de pose, así que no se puede recortar ninguna imagen del cuerpo",
     "konfiguration.kette.grund_vision":
         "la detección de visión está desconectada",
     "konfiguration.kette.grund_aus": "desconectado aquí",
@@ -1132,20 +1149,25 @@ T = {
     "erkennung.gesicht.beweis_bilder": "{n} imágenes de referencia",
     "erkennung.gesicht.knopf_verwalten": "Gestionar personas …",
     "erkennung.koerper.titel": "Reconocimiento corporal",
-    "erkennung.koerper.satz":
-        "Reconoce a los miembros del hogar incluso cuando no se ve ningún "
-        "rostro, por complexión y postura — aprende por sí solo de las "
-        "imágenes revisadas.",
-    "erkennung.koerper.beweis_kein_modell":
-        "aún no hay modelo de persona — primero aprende y revisa",
-    "erkennung.status.kein_modell":
-        "inactivo (aún no hay un modelo de persona entrenado activo)",
+    "erkennung.koerper.satz": "Reconoce a los miembros del hogar incluso cuando no se ve ningún rostro, por complexión y postura. El aprendizaje de personas recorta para ello las imágenes de cuerpo entero de tus vídeos.",
+    "erkennung.status.kein_vorrat":
+        "inactivo (aún no hay ninguna imagen válida en la página Imágenes de cuerpo entero)",
+    "erkennung.status.pose_fehlt":
+        "inactivo (falta el modelo de pose, así que no se puede recortar ninguna imagen del cuerpo)",
     "erkennung.status.hier_aus": "inactivo (desconectado aquí)",
     "erkennung.status.vision_aus":
         "inactivo (la detección de visión está desconectada)",
-    "erkennung.koerper.link_modell": "estado del modelo",
-    "erkennung.koerper.knopf_status": "Estado del modelo …",
     "erkennung.koerper.knopf_register": "Registrar cuerpo …",
+    "erkennung.koerper.melden.titel": "Notifica a:",
+    "erkennung.koerper.melden.nur_anzeige": "solo mostrar",
+    "erkennung.koerper.melden.leer": "Nada seleccionado: el nombre solo se muestra.",
+    "erkennung.koerper.melden.nicht_eingerichtet": "no configurado",
+    "erkennung.koerper.melden.aria": "Canales de aviso del reconocimiento de personas",
+    "erkennung.koerper.melden.anwesenheit": "Página de presencia",
+    # Stufe KW12: Labels der Unteroptionen wie in en (die Hilfe zitiert sie englisch).
+    "erkennung.unter.immer": "Always",
+    "erkennung.unter.nur_ohne_gesicht": "Only if no face",
+    "erkennung.unter.wenn_noetig": "If needed",
     "erkennung.vision.titel": "Visión por IA",
     "erkennung.vision.beta": "Beta",
     "erkennung.vision.satz":
@@ -1166,6 +1188,8 @@ T = {
     "erkennung.areas.beweis_keine": "aún no hay áreas — todo cuenta",
     "erkennung.areas.knopf": "Gestionar áreas &#8230;",
     "erkennung.knopf_speichern": "Guardar + reiniciar",
+    "erkennung.save.sauber": "Todo guardado",
+    "erkennung.save.offen": "No guardado, guardar reinicia el servicio",
     # --------------------------------------------------- routes/faces ---
     "faces.titel": "Rostros",
     "faces.link_how": "Cómo funciona &#8230;",
@@ -1592,9 +1616,6 @@ T = {
     "nav.anker": "Anclas",
     "nav.lernen": "Sugerencias",
     "nav.person": "Imágenes de cuerpo entero",
-    "nav.person_kontrolle": "Imágenes evaluadas",
-    "nav.person_modell": "Estado del modelo",
-    "nav.personlauf": "Aprendizaje de persona",
     "nav.vision": "Detección de visión",
     "nav.live": "Vigilancia en directo",
     "nav.live_alerts": "Avisos en directo",
@@ -1650,7 +1671,6 @@ T = {
     # diesem Wert); jede Richtung prueft die Gate-Stufe Sprach-Deckung.
     "js.status.fehler": "error",
     "js.status.fehler_gross": "Error",
-    "js.status.fehler_detail": "error: {msg}",
     "js.status.ok": "ok",
     "js.status.speichern": "guardando …",
     "js.status.gespeichert": "guardado",
@@ -1774,8 +1794,6 @@ T = {
     # js.areas.entfernen_frage: "Default" ist zugleich Kennung der
     # Standard-Area (Anzeige==Kennung §8.2) — bleibt in jeder Sprache.
     "js.areas.entfernen_frage": "¿Quitar el área \"{name}\"? Sus cámaras vuelven a Default — nada más cambia.",
-    "js.personlauf.abbruch_frage": "¿Abortar este aprendizaje de persona? Las imágenes extraídas se conservan.",
-    "js.personlauf.verwerfen_frage": "¿Descartar por completo la ejecución {lid}? Todas sus imágenes se eliminan; una nueva ejecución puede volver a extraerlas en cualquier momento.",
     "js.vision.nicht_erreichbar": "no se pudo contactar con el servicio — no se guardó nada",
     "js.vision.gespeichert": "guardado — el reconocimiento usa esta conexión a partir de ahora",
     "js.vision.gespeichert_neustart": "guardado — el servicio se reinicia en un momento",
@@ -2336,6 +2354,9 @@ T = {
     "vision.schalter.knopf_aus": "Desactivar",
     "vision.schalter.knopf_an": "Activar",
     "vision.schalter.fehlt": "Aún pendiente:",
+    # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW6 Punkt 4: Vision geparkt (Seiten und Schalter).
+    "vision.geparkt_satz":
+        "Vision está en pausa en esta versión y no se puede activar. Volverá cuando se reconstruya sobre las nuevas imágenes de cuerpo entero.",
     "vision.schalter.fehlt_galerien": "{n} de {soll} galerias aprobadas — crea una en 'Crear una galeria'",
     "vision.schalter.fehlt_test": "una prueba de conexion en verde",
     "vision.schalter.fehlt_kandidaten": "imagenes juzgadas como fuente de candidatos — aparecen mientras corre un paso; activa la 'recogida de diagnostico' en Persona si quieres que se conserven",
@@ -2740,338 +2761,6 @@ T = {
         "Nada cambia por sí solo &mdash; la galería que aprobaste se "
         "queda exactamente como está hasta que crees y apruebes una "
         "nueva.",
-    # --- routes/personwizard.py ---
-    "personwizard.wer.alle": "todas las personas conocidas",
-    "personwizard.wer.fremde": "extraños",
-    "personwizard.titel":
-        "Aprendizaje de personas — reconocimiento corporal",
-    "personwizard.kopf.satz":
-        "Una segunda vía de reconocimiento independiente: aprende el "
-        "aspecto de una persona en su CONJUNTO (complexión, pelo, "
-        "postura) para reconocer a los miembros del hogar incluso cuando "
-        "no se ve ningún rostro.",
-    "personwizard.kopf.wie_titel":
-        "Cómo funciona — tú mantienes el control",
-    "personwizard.kopf.schritt1":
-        "1 · Tú eliges cuántos eventos repasar y a QUIÉN aprender a "
-        "reconocer (una persona o todas las conocidas).",
-    "personwizard.kopf.schritt2":
-        "2 · La ejecución extrae imágenes de cuerpo entero de tus "
-        "propias grabaciones. Una imagen solo se vincula a una persona "
-        "cuando lo demuestra un recorrido confirmado por rostro — "
-        "conservador a propósito.",
-    "personwizard.kopf.schritt3":
-        "3 · TÚ revisas cada imagen extraída; un clic descarta una "
-        "equivocada. No se aprende nada sin tu aprobación.",
-    "personwizard.kopf.schritt4":
-        "4 · El entrenamiento se ejecuta después en local en segundos, y "
-        "se mide un umbral de decisión para que los extraños queden por "
-        "debajo.",
-    "personwizard.kopf.tempo":
-        "Una nota sobre la velocidad: la extracción se ejecuta por ahora "
-        "en la CPU, así que ten paciencia si una ejecución tarda un poco "
-        "(unos 15&ndash;30 s por evento). Llevarla a la GPU/NPU está "
-        "previsto para una versión posterior.",
-    "personwizard.kopf.warum":
-        "Por qué primero al menos una persona: esta vía solo puede "
-        "distinguir personas después de haber aprendido — y de que tú "
-        "hayas revisado — el aspecto de al menos un miembro del hogar. "
-        "Hasta entonces el reconocimiento corporal permanece APAGADO y "
-        "nunca envía un aviso. Cuando más adelante avise "
-        "(Pushover/Telegram), el mensaje va marcado como procedente del "
-        "reconocimiento de persona, no del facial.",
-    "personwizard.vorb.titel": "Preparando la ejecución &hellip;",
-    "personwizard.vorb.zeile":
-        "vinculando los últimos {n} eventos con {wer} mediante "
-        "recorridos confirmados",
-    "personwizard.vorb.satz":
-        "Esto tarda un minuto o dos — la página se actualiza sola, la "
-        "extracción empieza justo después.",
-    "personwizard.ernte.stand":
-        "{events}/{von} eventos · {bilder} imágenes extraídas",
-    "personwizard.ernte.startet": "iniciando …",
-    "personwizard.ernte.titel": "Hay un aprendizaje de persona en marcha",
-    "personwizard.ernte.zeile":
-        "aprendiendo a reconocer a {wer} · {stand}",
-    "personwizard.ernte.satz":
-        "Esta página se actualiza sola. Una ejecución nueva se puede "
-        "iniciar cuando esta termine.",
-    "personwizard.ernte.knopf_abbruch": "Abortar ejecución",
-    "personwizard.ernte.abbruch_hinweis":
-        "las imágenes extraídas se conservan",
-    "personwizard.unterbrochen.titel":
-        "La última ejecución se interrumpió",
-    "personwizard.unterbrochen.satz":
-        "Probablemente un reinicio del servicio. Inicia abajo la misma "
-        "ejecución de nuevo — los eventos ya extraídos se omiten "
-        "automáticamente (reanudación), no se pierde nada.",
-    "personwizard.abnahme.titel":
-        "La última ejecución ha terminado — ahora te toca revisar",
-    "personwizard.abnahme.zeile":
-        "{n} imágenes extraídas para {wer} (ejecución {lauf}).",
-    "personwizard.abnahme.knopf": "Revisar las imágenes ahora",
-    "personwizard.abnahme.hinweis":
-        "termina la revisión para desbloquear la siguiente ejecución",
-    "personwizard.abnahme.knopf_verwerfen": "Descartar esta ejecución",
-    "personwizard.abnahme.verwerfen_hinweis":
-        "¿mal resultado? tíralo todo",
-    "personwizard.leer.verwaist":
-        "Omitidos a propósito: {liste} — estos nombres se eliminaron de "
-        "tus personas; sus eventos confirmados antiguos se quedan como "
-        "historial, pero no se extraen.",
-    "personwizard.leer.titel":
-        "La ejecución terminó sin imágenes — este es el porqué",
-    "personwizard.leer.satz":
-        "No se cambió nada; puedes iniciar otra ejecución abajo en "
-        "cualquier momento.",
-    "personwizard.fertig.verwaist":
-        "Omitidos a propósito: {liste} — personas eliminadas; sus "
-        "eventos confirmados antiguos no se extraen.",
-    "personwizard.fertig.fremd":
-        "{n} imágenes de extraños confirmadas han pasado al conjunto de "
-        "extraños — el próximo entrenamiento las usa de inmediato.",
-    "personwizard.fertig.titel": "Revisión terminada — material incorporado",
-    "personwizard.fertig.zeile":
-        "{abgenommen} imágenes aprobadas como material de aprendizaje, "
-        "{verworfen} descartadas (ejecución {lauf}).",
-    "personwizard.fertig.knopf": "Ver el material aprendido",
-    "personwizard.fehler.titel": "La última ejecución ha fallado",
-    "personwizard.auswahl.opt_alle": "Todas las personas conocidas",
-    "personwizard.auswahl.opt_fremde":
-        "Extraños — recoger imágenes de extraños",
-    "personwizard.auswahl.titel": "A quién aprender a reconocer",
-    "personwizard.auswahl.satz":
-        "Elige una persona para revisar en tandas pequeñas y centradas — "
-        "o todas a la vez. Las personas vienen de tu banco de rostros; "
-        "hacerlo de una en una mantiene la revisión corta.",
-    "personwizard.auswahl.fremde_satz":
-        "Extraños: extrae imágenes de los recorridos en los que no se "
-        "reconoció a nadie (recorridos solo por la calle, visitantes sin "
-        "confirmar). En la revisión confirmas cuáles son de verdad "
-        "extraños — van al conjunto de extraños y afinan el umbral de "
-        "decisión.",
-    "personwizard.umfang.knopf_letzte": "últimos {n}",
-    "personwizard.umfang.attr_eigen": "N propio",
-    "personwizard.umfang.knopf_go": "ir",
-    "personwizard.umfang.titel": "Alcance (eventos, no días)",
-    "personwizard.umfang.satz":
-        "Empieza en pequeño (50) — revisarás a mano cada imagen "
-        "extraída.",
-    "personwizard.bilanz.ohne":
-        "últimos {n} eventos de persona para {wer} — el balance de "
-        "vinculación se calcula al crear la ejecución",
-    # Zaehler-Split an der <b>-Grenze (§8.10): vor/nach rahmen die
-    # hervorgehobene Zahl, Rand-Leerzeichen gehoeren zum Wert.
-    "personwizard.bilanz.zahl_vor": "últimos {n} eventos de persona · ",
-    "personwizard.bilanz.zahl_nach":
-        " se pueden vincular con {wer} mediante recorridos confirmados",
-    "personwizard.bilanz.fremd": " · {n} candidatos a extraño",
-    "personwizard.bilanz.erkl_fremd":
-        "Los candidatos son recorridos en los que no se reconoció a "
-        "nadie — recorridos solo por la calle y visitantes sin "
-        "confirmar. Todo es una SOSPECHA hasta tu revisión; marca allí a "
-        "quien NO sea un extraño.",
-    "personwizard.bilanz.erkl":
-        "La vinculación es conservadora: solo cuentan los recorridos con "
-        "exactamente una persona confirmada por rostro. Todo lo que veas "
-        "después se puede descartar con un clic.",
-    "personwizard.bilanz.titel": "Tu selección",
-    "personwizard.bilanz.knopf": "Crear esta ejecución",
-    "personwizard.review.stempel": "MAL",
-    "personwizard.review.h_fremde": "Extraños",
-    "personwizard.review.frage_fremd":
-        "haz clic en cada imagen que NO sea un extraño (un miembro del "
-        "hogar, una visita conocida) o que no sirva. Un segundo clic lo "
-        "deshace. Todo se guarda al instante; las imágenes sin marcar se "
-        "incorporan como extraños confirmados y afinan el umbral de "
-        "decisión.",
-    "personwizard.review.frage":
-        "haz clic en cada imagen que esté MAL (no es esta persona o no "
-        "sirve). Un segundo clic lo deshace. Todo se guarda al instante; "
-        "las imágenes sin marcar cuentan como aprobadas.",
-    "personwizard.review.titel": "Revisar la extracción",
-    "personwizard.review.kopf": "Ejecución {lauf} — {frage}",
-    # Der Zeilenumbruch ist Teil des Originals (Template-Literal) und
-    # bleibt fuer die Byte-Treue im Wert.
-    "personwizard.review.zurueck": "&larr; volver al\nasistente",
-    "personwizard.review.knopf_fertig":
-        "Terminar la revisión — incorporar las aprobadas",
-    "personwizard.kontrolle.sammeln_titel":
-        "El modo de recogida está ACTIVADO",
-    "personwizard.kontrolle.sammeln_rest":
-        " — cada imagen evaluada se conserva 30 días para que puedas "
-        "comprobar las decisiones más tarde. Cuenta con unos "
-        "20&ndash;40 MB al día.",
-    "personwizard.kontrolle.schlank_titel": "Modo ligero (predeterminado)",
-    "personwizard.kontrolle.schlank_rest":
-        " — las imágenes evaluadas solo viven mientras hay un recorrido "
-        "en curso; después solo quedan la imagen ganadora y el registro "
-        "de veredictos de abajo. Es la opción predeterminada, respetuosa "
-        "con la privacidad, para una instalación nueva.",
-    "personwizard.kontrolle.titel": "Imágenes evaluadas",
-    "personwizard.kontrolle.satz":
-        "Lo que el reconocimiento corporal miró de verdad, un bloque por "
-        "recorrido: la imagen que evaluó, la clase que le salió, la "
-        "puntuación y de dónde vino la imagen. Útil cuando se pasó por "
-        "alto a una persona, o se reconoció a alguien que no debía.",
-    "personwizard.kontrolle.leer_titel": "Aún no hay nada registrado",
-    # Genus-Regel: Label unter einem Bild, nie generisch maskulin.
-    "personwizard.kontrolle.tag_fremd": "persona extraña",
-    "personwizard.kontrolle.tag_drueber": "por encima del umbral",
-    "personwizard.kontrolle.tag_drunter": "por debajo del umbral",
-    "personwizard.kontrolle.schwelle": " &middot; umbral {schwelle}",
-    "personwizard.kontrolle.kopfzeile.eins":
-        "{wann} — {judged} evaluadas, {n} imagen conservada",
-    "personwizard.kontrolle.kopfzeile.viele":
-        "{wann} — {judged} evaluadas, {n} imágenes conservadas",
-    "personwizard.tabelle.fremd_zeile": "Extraños (clase adicional)",
-    "personwizard.tabelle.kein_fremd":
-        "Aún no hay clase de extraños — el reconocimiento funciona mucho "
-        "mejor con una: las imágenes de extraños confirmadas enseñan al "
-        "modelo lo que NO pertenece y calibran el umbral de decisión.",
-    "personwizard.tabelle.q_eichung": "medido",
-    "personwizard.tabelle.q_user": "definido por ti",
-    "personwizard.tabelle.q_standard": "valor por defecto incorporado",
-    "personwizard.tabelle.f_modell": "Modelo activo",
-    "personwizard.tabelle.f_schwelle": "Umbral",
-    "personwizard.tabelle.f_scharf": "Armado",
-    "personwizard.tabelle.scharf_ja": "SÍ",
-    "personwizard.tabelle.scharf_ja_rest": " — evaluando en directo",
-    "personwizard.tabelle.scharf_nein": "no — sin armar",
-    "personwizard.tabelle.konf_vor":
-        "Mayor confusión entre grupos en la calibración: ",
-    "personwizard.tabelle.konf_nach":
-        " — la puntuación más alta que alguna imagen alcanzó para el "
-        "grupo EQUIVOCADO; cuanto más cerca de 1, más se parecen dos "
-        "grupos.",
-    "personwizard.tabelle.titel": "Grupos aprendidos",
-    "personwizard.karte.scharf": "Armado",
-    "personwizard.karte.unscharf": "Aún sin armar",
-    "personwizard.karte.fehler":
-        "El último intento de entrenamiento FALLÓ: {fehler} — esta "
-        "tarjeta muestra el modelo anterior.",
-    "personwizard.karte.titel": "Estado del modelo",
-    "personwizard.karte.zeile":
-        "entrenado {wann} en {dauer} s — {bilder} imágenes: {je} · "
-        "{modell} · ",
-    "personwizard.karte.link": "detalles",
-    "personwizard.bestand.titel":
-        "Material de persona — lo que se ha aprendido",
-    "personwizard.bestand.satz":
-        "Imágenes de cuerpo entero aprobadas por persona. Elige abajo un "
-        "grupo para ver sus imágenes; elimina una imagen suelta "
-        "(&times; en la miniatura) — una ejecución nueva siempre puede "
-        "volver a extraerlas. Las eliminaciones surten efecto en el "
-        "próximo entrenamiento.",
-    "personwizard.bestand.leer_titel": "Aún no hay material aprobado",
-    "personwizard.bestand.stark_titel": "Qué hace fuerte a este modelo",
-    "personwizard.bestand.chip_fremde": "Extraños ({n})",
-    "personwizard.bestand.zeigen_titel": "Mostrar imágenes de",
-    "personwizard.bestand.zeigen_satz":
-        "Elige un grupo — sus imágenes se abren abajo, las más recientes "
-        "primero.",
-    "personwizard.bestand.marker_tage.eins":
-        "solo {n} día — el reconocimiento mejora sobre todo con imágenes "
-        "de más días, distintas ropas y distinta luz",
-    "personwizard.bestand.marker_tage.viele":
-        "solo {n} días — el reconocimiento mejora sobre todo con "
-        "imágenes de más días, distintas ropas y distinta luz",
-    "personwizard.bestand.attr_loeschen": "eliminar esta imagen",
-    "personwizard.bestand.z_bilder": "{n} imágenes",
-    "personwizard.bestand.z_tage.eins": "{n} día",
-    "personwizard.bestand.z_tage.viele": "{n} días",
-    "personwizard.bestand.z_kameras.eins": "{n} cámara",
-    "personwizard.bestand.z_kameras.viele": "{n} cámaras",
-    "personwizard.modell.titel": "Modelo de persona — estado",
-    "personwizard.modell.satz":
-        "El modelo del reconocimiento corporal, entrenado con tus "
-        "imágenes aprobadas. Se reentrena automáticamente tras cada "
-        "revisión terminada y tras las eliminaciones.",
-    "personwizard.modell.leer_titel": "Aún no hay modelo",
-    "personwizard.modell.fremd_keine":
-        "aún ninguno — umbral medido solo entre tus personas",
-    "personwizard.modell.fremd_gesammelt":
-        "{n} recogidos — hacen falta {min} antes de que entren en el "
-        "entrenamiento y calibren el umbral",
-    "personwizard.modell.fremd_geeicht":
-        "{n} en el entrenamiento · umbral calibrado contra extraños "
-        "reales",
-    "personwizard.modell.fremd_ungeeicht":
-        "{n} en el entrenamiento — la calibración del umbral no se "
-        "ejecutó (mira la nota de abajo)",
-    "personwizard.modell.f_trainiert": "Entrenado",
-    "personwizard.modell.f_dauer": "Tiempo de entrenamiento",
-    "personwizard.modell.f_modell": "Modelo",
-    "personwizard.modell.f_bilder": "Imágenes en total",
-    "personwizard.modell.f_personen": "Personas",
-    "personwizard.modell.f_fremd": "Negativos de extraños",
-    "personwizard.modell.scharf_ja": "SÍ — evaluación en directo activa",
-    "personwizard.modell.scharf_nein": "no — aún sin armar",
-    "personwizard.modell.fehler":
-        "El último intento de entrenamiento FALLÓ ({zeit}): {fehler} — "
-        "el modelo que se muestra aquí es el anterior y no incluye tus "
-        "últimos cambios.",
-    "personwizard.modell.aktuell_titel": "Modelo actual",
-    "personwizard.modell.material_titel":
-        "Material de aprendizaje por persona",
-    "personwizard.modell.kopf_person": "persona",
-    "personwizard.modell.kopf_bilder": "imágenes aprobadas",
-    "personwizard.modell.kopf_anteil": "proporción",
-    "personwizard.modell.summe": "total",
-    "personwizard.modell.q_eichung": "medido con tu material",
-    # {pct} vorformatiert (round) aus der Route (§8.8).
-    "personwizard.modell.eich_fremd":
-        "Medido por validación cruzada de {folds} particiones sobre {n} "
-        "imágenes reservadas de tus personas más {n_fremd} extraños "
-        "confirmados: la mayor confianza como miembro del hogar que "
-        "alcanzó un extraño real fue {max} &rarr; umbral {schwelle}; el "
-        "{pct}% de las imágenes genuinas lo supera. La otra cara de la "
-        "moneda: {ueber} de tus propias imágenes alcanzarían ese umbral "
-        "para la persona EQUIVOCADA (máximo {vmax}).",
-    "personwizard.modell.eich_intern":
-        "Medido por validación cruzada de {folds} particiones sobre {n} "
-        "imágenes reservadas: mayor confianza para una persona "
-        "EQUIVOCADA {max} &rarr; umbral {schwelle}; el {pct}% de las "
-        "imágenes genuinas lo supera. Límite honesto: esto calibra ENTRE "
-        "tus personas aprendidas — aún no hay extraños reales en el "
-        "material.",
-    "personwizard.modell.regeln_titel": "Ajustes de decisión",
-    "personwizard.modell.schwelle_vor": "Umbral de decisión: ",
-    "personwizard.modell.r_fenster": "Ventana de disparo",
-    "personwizard.modell.r_feuer": "Eventos de apoyo para disparar",
-    "personwizard.modell.r_karenz": "Pausa tras un aviso",
-    "personwizard.modell.regeln_satz":
-        "Deja el umbral vacío para seguir automáticamente el valor "
-        "medido (se vuelve a medir con cada entrenamiento). La regla de "
-        "disparo: avisar solo tras este número de eventos de apoyo "
-        "dentro de la ventana, y después guardar silencio durante la "
-        "pausa.",
-    "personwizard.modell.knopf_speichern": "Guardar ajustes",
-    "personwizard.modell.satz_user":
-        "El umbral de decisión lo has definido tú ({schwelle})",
-    "personwizard.modell.satz_user_eich":
-        " — la calibración contra {n} extraños confirmados sería {alt}",
-    "personwizard.modell.satz_geeicht":
-        "El umbral de decisión está calibrado contra {n} imágenes de "
-        "extraños confirmadas.",
-    "personwizard.modell.satz_ungeeicht":
-        "El umbral de decisión aún no está calibrado contra material de "
-        "extraños — trata los avisos como una vista previa y no los "
-        "pierdas de vista.",
-    "personwizard.modell.satz_fremd_drop":
-        " Un cuerpo que el modelo interpreta como extraño se descarta "
-        "antes de que pueda convertirse en una coincidencia.",
-    "personwizard.modell.live_titel": "Interruptor de directo",
-    "personwizard.modell.live_an":
-        "ARMADO — la vía del cuerpo evalúa los eventos en directo y "
-        "puede avisar.",
-    "personwizard.modell.live_aus":
-        "Sin armar — la vía del cuerpo guarda silencio.",
-    "personwizard.modell.live_hinweis":
-        "Los avisos llevan la nota &quot;reconocimiento de persona, no "
-        "facial&quot;.",
-    "personwizard.modell.knopf_disarm": "Desarmar",
-    "personwizard.modell.knopf_arm": "Armar el reconocimiento corporal",
     # --- webui/bausteine.py ---
     # Nur die gt_leiste-ANZEIGE-Texte; Speicherwerte und KAT_LABELS bleiben
     # literal (§8.12/§8.13). Genus-Regel (begriffe_tabellen.md ES): kein
@@ -3121,13 +2810,6 @@ T = {
     "vision.modell.js_id_fehlt": "escribe primero un id",
     "vision.modell.js_prueft": "comprobando …",
     "vision.modell.js_fehler": "error",
-    # --- routes/personwizard.py (Review-Script + Schalter) ---
-    "personwizard.review.js_zaehl": " de {n} marcadas como MAL",
-    "personwizard.review.js_frage_vor": "¿Terminar la revisión? ",
-    "personwizard.review.js_frage_mitte":
-        " imágenes se incorporarán como material de aprendizaje, ",
-    "personwizard.review.js_frage_nach": " descartadas.",
-    "personwizard.modell.js_fehler": "error ",
     # --- verifyd.py POST-Antworten (antwort.*, Nutzungs-Reihenfolge) ---
     "antwort.person_entfernt":
         "Se ha eliminado a {person} ({n} conjunto(s) de referencia "
@@ -3219,12 +2901,7 @@ T = {
         "lo que ya está en marcha termina y después se borran las imágenes",
     "antwort.passernte_abbruch_leer":
         "nada que cancelar — esta comprobación ya no está en curso",
-    "antwort.personlauf_kein_review":
-        "ninguna ejecución pendiente de revisión",
-    "antwort.personlauf_kein_lauf": "ninguna ejecución activa",
     "antwort.events_bereich": "los eventos deben estar entre 1 y {max}",
-    "antwort.personlauf_aktiv":
-        "ya hay un aprendizaje de persona en marcha",
     # Muster lokalisiert (AAAA-MM-DD), nicht zitiert: die Eingabe ist ein
     # <input type="date"> (routes/lernwizard.py lf-pop-tag), das seinen
     # Format-Hinweis in der Browsersprache zeigt (es: dd/mm/aaaa) — das
@@ -3436,10 +3113,7 @@ hogar por complexión y postura, con imágenes de la persona entera.</p>""",
     "hilfe.koerper.satz2": """<p>Está hecho exactamente para este caso: no hay rostro utilizable, aun
 así quieres saber quién era, y no quieres entregar las imágenes a un modelo
 de visión por IA para ello.</p>""",
-    "hilfe.koerper.satz3": """<p>Aprende de material que tú apruebas. <b>Registrar cuerpo</b> inicia un
-aprendizaje corto para una persona: el sistema recoge imágenes suyas de tus
-cámaras, tú revisas el resultado una vez, y a partir de ahí sigue
-aprendiendo por sí solo.</p>""",
+    "hilfe.koerper.satz3": "<p>Trabaja con imágenes de cuerpo entero de tus propios vídeos. <b>Registrar cuerpo</b> abre la página Imágenes de cuerpo entero. Allí inicias el aprendizaje de personas: recorta imágenes de cuerpo entero de vídeos en los que se veía exactamente una persona y su cara se reconoció con seguridad. De forma predeterminada, las imágenes nuevas solo cuentan cuando las aceptas.</p>",
     "hilfe.koerper.satz4": """<p>Con el interruptor de arriba eliges si se ejecuta y cuándo. <b>Only if
 no face</b> significa que se queda quieto salvo que la comprobación del
 rostro haya salido vacía. <b>Always</b> significa que comprueba cada
@@ -3672,53 +3346,6 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
         "&mdash; asciende la siguiente mejor imagen de la MISMA vista. "
         "Esto no toca tu material de aprendizaje; solo dice «no como "
         "celda de galería».",
-    "personwizard.kopf.stark_satz":
-        "<b>Qué hace fuerte al modelo:</b> la variedad gana al volumen. "
-        "Las imágenes de <b>muchos días distintos</b> (ropa, luz, "
-        "cámaras) ayudan mucho más que muchas imágenes de un solo "
-        "recorrido — vuelve a lanzar la extracción en días nuevos antes "
-        "que exprimir más un mismo día. Las imágenes confirmadas de "
-        "extraños afinan el umbral de decisión de la misma manera.",
-    "personwizard.fertig.training_satz":
-        "El entrenamiento con el material aprobado empieza "
-        "automáticamente tras la revisión — mira "
-        '<a href="/person/modell">Estado del modelo</a>. Abajo puedes '
-        "iniciar otra ejecución cuando quieras.",
-    "personwizard.kontrolle.schalter_satz":
-        'El interruptor está en <a href="/konfiguration">Configuración '
-        "&rarr; Avanzado</a>, clave <code>diagnostic_collection</code>. "
-        "Las imágenes y su registro caducan junto con el registro de "
-        "aciertos a los 30 días &mdash; nada de esto se conserva más "
-        "tiempo que el propio historial de reconocimiento.",
-    "personwizard.kontrolle.leer_satz":
-        "Las entradas aparecen en cuanto el reconocimiento corporal esté "
-        'activado en <a href="/person/modell">Estado del modelo</a> y una '
-        "persona haga un recorrido.",
-    "personwizard.bestand.leer_satz":
-        'Lanza <a href="/personlauf">Aprendizaje de persona</a> y termina '
-        "la revisión — las imágenes aprobadas aparecen aquí.",
-    "personwizard.bestand.stark_satz":
-        "La variedad gana al volumen: las imágenes de <b>muchos días "
-        "distintos</b> (ropa, luz) ayudan mucho más que muchas imágenes "
-        "de un solo recorrido. Busca varios días por persona y deja que "
-        "la extracción cubra todas tus cámaras.",
-    "personwizard.bestand.fremd_satz":
-        "<b>Extraños:</b> {n} imágenes confirmadas de extraños calibran "
-        "el umbral de decisión — cuantos más extraños haya visto el "
-        "modelo, más fiable es esa línea. (Se recogen en "
-        "<code>personlern/fremd/</code>; está prevista una página para "
-        "ampliar este conjunto con el tráfico de tu propia calle.)",
-    "personwizard.bestand.fremd_erklaerung":
-        "Imágenes confirmadas de extraños — entrenan la clase adicional y "
-        "calibran el umbral de decisión. Borrar una reentrena el modelo "
-        "al momento (los archivos viven en <code>personlern/fremd/</code>).",
-    "personwizard.modell.leer_satz":
-        'Lanza <a href="/personlauf">Aprendizaje de persona</a> y termina '
-        "una revisión — después el entrenamiento empieza automáticamente.",
-    "personwizard.modell.material_satz":
-        "Gestiona las imágenes en "
-        '<a href="/person">Imágenes de cuerpo entero</a> — los borrados '
-        "reentrenan el modelo automáticamente.",
     # ---- Meldetexte (Stufe 4) --------------------------------------------
     # Struktur, Nutzungs-Reihenfolge und die NICHT eingezogenen Gattungen
     # (a)-(d) s. en.py-Abschnittskommentar. Produktnamen (suslik/Frigate/
@@ -3771,6 +3398,8 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
         "{n} eventos de apoyo",
     "meldung.person.wort_ersatz": "coincidencia",
     "meldung.person.zahl": "[puntuación {score}]",
+    "meldung.koerper.satz": "{name} reconocido ({kamera}, {zeit}) – {zusatz}",
+    "meldung.koerper.telegram": "{kamera}\n{name} a las {zeit}, {zusatz} (suslik)",
     "meldung.vision.titel": "suslik: visión",
     "meldung.vision.unbestaetigt":
         "la visión no ha podido confirmar a nadie en este recorrido",
@@ -3883,8 +3512,9 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "heute.waechter.cnt.viele": "{n} avisos del vigilante en directo",
     "heute.waechter.mehr": "todos los {n} avisos ({m} más)",
     "heute.anw.dauer": "presente unas {h} h",
-    "heute.anw.title": "presencia por hora, todas las cámaras — rojo: presencia confirmada, verde: sistema en marcha, nadie visto",
+    "heute.anw.title": "presencia por hora, todas las cámaras — rojo: presencia confirmada, claro con borde rojo: por reconocimiento de persona, verde: sistema en marcha, nadie visto",
     "heute.anw.title_gesamt": "presencia por hora — todas las cámaras, sin filtrar por la vista de zona",
+    "heute.anw.zelle": "{zeit} · {zustand}",
     "heute.pass.mehr_kameras": "todas las {n} cámaras ({m} más)",
     "heute.pass.live": "en directo",
     "heute.pass.live_title": "un vigilante en directo comunicó un nombre durante este paso",
@@ -3968,28 +3598,6 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
         "{person} aún no tiene imágenes de referencia con las que comparar",
     "antwort.einspielen.frigate_fehlt":
         "En esta instalación no hay ninguna frigate_url configurada",
-    # ---- personlauf-Design (Nachzug) ----
-    # Kachel-Titel und Kachel-Saetze des /personlauf-Laufflusses. Kachel 1/4,
-    # die erste Saeulen-Marke und die Nachbar-Beschriftungen kommen wortgleich
-    # aus dem Gesichts-Lernlauf (lernwizard.*) — hier stehen nur die sieben
-    # personwizard-eigenen Neuzugaenge.
-    "personwizard.kachel.sammeln": "Extraer imágenes",
-    "personwizard.kachel.pruefen": "Revisar las imágenes",
-    "personwizard.k1.satz":
-        "Elige a quién aprender a reconocer y cuánto repasar hacia atrás "
-        "&mdash; después la ejecución extrae las imágenes de tus propias "
-        "grabaciones.",
-    "personwizard.k2.satz":
-        "Extrae imágenes de cuerpo entero de tus grabaciones, y solo de "
-        "recorridos que ya haya confirmado un rostro.",
-    "personwizard.k3.satz":
-        "El paso que te necesita: cada imagen extraída recibe tu sí o tu "
-        "no antes de que se aprenda nada.",
-    "personwizard.k4.satz":
-        "Las imágenes aprobadas entrenan el modelo corporal enseguida "
-        "&mdash; así puede reconocer a personas aunque no se vea ningún "
-        "rostro.",
-    "personwizard.such.titel": "Configurar un aprendizaje de persona",
     # --------------------------------------------- routes/systemstat ---
     "systemstat.titel": "Carga del sistema",
     "systemstat.sub":
@@ -4111,7 +3719,7 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     # --- routes/anwesenheit.py (.409, Anwesenheitsseite) ---
     "anwesenheit.titel": "Presencia",
     "anwesenheit.knopf": "Presencia",
-    "anwesenheit.knopf_tip": "Presencia: quién estuvo confirmado en la propiedad, cuarto de hora a cuarto de hora",
+    "anwesenheit.knopf_tip": "Presencia: quién fue visto en la propiedad, cuarto de hora a cuarto de hora",
     "anwesenheit.kopf_satz": "Una fila por persona, el día en celdas de un cuarto de hora. Rojo = presencia confirmada en ese cuarto de hora (análisis de eventos o vigilante en vivo, mostrado una sola vez). Con un reconocimiento prudente solo unas pocas celdas se ponen rojas: es normal, no un error.",
     "anwesenheit.seit": "Registro desde {datum}.",
     "anwesenheit.fenster_auto": "Ventana diurna {von}–{bis} h, calculada automáticamente a partir de los avistamientos de los últimos {tage} días; las horas fuera de ella son una celda por hora.",
@@ -4145,6 +3753,7 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "anwesenheit.quelle_worker": "análisis de eventos",
     "anwesenheit.quelle_live": "vigilante en vivo",
     "anwesenheit.quelle_beide": "vigilante en vivo y análisis de eventos",
+    "anwesenheit.quelle_koerper": "reconocimiento de persona",
     "anwesenheit.nav.heute": "Hoy",
     "anwesenheit.nav.gestern": "ayer",
     "anwesenheit.nav.attr_vortag": "día anterior",
@@ -4239,4 +3848,81 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "gpu.laeuft_wie_eingestellt": 'Activo: el servicio calcula con {n} hilo(s).',
     "gpu.vorschau_zu_wenig": 'No cabe: faltan {fehlt}. Desactive un vigilante en vivo o reduzca un hilo.',
     "gpu.speichern_gesperrt": 'Memoria gráfica insuficiente para ese número de hilos.',
+    # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW4: Seite „Body images“ (routes/koerperbilder.py)
+    "koerperbilder.satz": "Cuando no se ve la cara, suslik reconoce a una persona por las imágenes de cuerpo entero que recorta de tus vídeos.",
+    "koerperbilder.zustand.erkennen": "Reconocimiento por el cuerpo:",
+    "koerperbilder.zustand.pruefung": "Revisión de imágenes nuevas:",
+    "koerperbilder.zustand.an": "activado",
+    "koerperbilder.zustand.aus": "desactivado",
+    "koerperbilder.zustand.nur_ohne_gesicht": "solo sin cara",
+    "koerperbilder.zustand.unbekannt": "ajuste desconocido",
+    "koerperbilder.zustand.ohne_bilder": "aún sin imágenes",
+    "koerperbilder.fuss.einstellungen": "Ajustes:",
+    "koerperbilder.teilmenge": "Una parte de los datos no se pudo leer, así que esta página puede estar incompleta. El motivo está en el registro del servicio.",
+    "koerperbilder.vorrat.titel": "Reserva",
+    "koerperbilder.vorrat.zweck": "Toca una persona para ver sus imágenes.",
+    "koerperbilder.vorrat.bilder.eins": "{n} imagen",
+    "koerperbilder.vorrat.bilder.viele": "{n} imágenes",
+    "koerperbilder.vorrat.tage": "en {tage} de los últimos {max_tage} días",
+    "koerperbilder.vorrat.neuest": "la más reciente {datum}",
+    "koerperbilder.vorrat.weitere.eins": "{n} persona más aún no tiene imágenes en la reserva.",
+    "koerperbilder.vorrat.weitere.viele": "{n} personas más aún no tienen imágenes en la reserva.",
+    "koerperbilder.vorrat.keine_bilder": "Aún no hay imágenes de cuerpo entero en la reserva. El aprendizaje de personas las recorta de vídeos adecuados.",
+    "koerperbilder.vorrat.entfernen": "Quitar esta imagen",
+    "koerperbilder.vorrat.leer": "Aún no hay imágenes de cuerpo entero ni personas conocidas.",
+    "koerperbilder.vorrat.leer_hinweis": "suslik aprende primero las caras. Las imágenes de cuerpo entero salen de vídeos en los que se reconoció una cara.",
+    "koerperbilder.cutter.titel": "Aprendizaje de personas",
+    "koerperbilder.cutter.zweck": "Revisa los vídeos adecuados y recorta de ellos imágenes de cuerpo entero.",
+    "koerperbilder.cutter.weg_aus": "El reconocimiento por el cuerpo está desactivado. Aun así puedes reunir imágenes.",
+    "koerperbilder.cutter.keine_titel": "Aún no hay vídeos adecuados",
+    "koerperbilder.cutter.keine_satz": "Un vídeo es adecuado cuando hay exactamente una persona en la imagen y su cara se reconoció con seguridad. Cuentan los últimos {tage} días. Los vídeos que suslik analizó antes de que existiera esta función no cuentan. En cuanto haya vídeos adecuados, inicias aquí el aprendizaje.",
+    "koerperbilder.cutter.personen_waehlen": "Elegir personas",
+    "koerperbilder.cutter.personen_hilfe": "Sin selección se incluyen todas las personas.",
+    "koerperbilder.cutter.wartend.eins": "{n} vídeo",
+    "koerperbilder.cutter.wartend.viele": "{n} vídeos",
+    "koerperbilder.cutter.videos": "Cuántos vídeos revisar por persona",
+    "koerperbilder.cutter.balken": "Progreso del aprendizaje",
+    "koerperbilder.cutter.start.eins": "Iniciar aprendizaje ({n} vídeo disponible)",
+    "koerperbilder.cutter.start.viele": "Iniciar aprendizaje ({n} vídeos disponibles)",
+    "koerperbilder.cutter.start_ohne_zahl": "Iniciar aprendizaje",
+    "koerperbilder.cutter.laeuft": "En curso: {videos} de {offen} vídeos revisados, imágenes nuevas: {bilder}.",
+    "koerperbilder.cutter.letzter": "Última ejecución {zeit}",
+    "koerperbilder.cutter.geprueft.eins": "{n} vídeo revisado",
+    "koerperbilder.cutter.geprueft.viele": "{n} vídeos revisados",
+    "koerperbilder.cutter.behalten.eins": "{n} imagen guardada",
+    "koerperbilder.cutter.behalten.viele": "{n} imágenes guardadas",
+    "koerperbilder.cutter.ausgefallen.eins": "{n} omitido: {gruende}",
+    "koerperbilder.cutter.ausgefallen.viele": "{n} omitidos: {gruende}",
+    "koerperbilder.cutter.fehler": "la ejecución no terminó: {grund}",
+    "koerperbilder.auto.lauf": "Iniciar aprendizaje",
+    "koerperbilder.auto.hand": "a mano",
+    "koerperbilder.auto.taeglich": "una vez al día con el mantenimiento",
+    "koerperbilder.auto.sofort": "justo después de cada vídeo adecuado",
+    "koerperbilder.auto.uebernehmen": "Aceptar imágenes nuevas automáticamente",
+    "koerperbilder.auto.speichern": "Guardar + reiniciar",
+    "koerperbilder.auto.fuss": "Aprendizaje:",
+    "koerperbilder.auto.von_auto": "automático",
+    "koerperbilder.auto.von_taeglich": "diario",
+    "koerperbilder.neu.titel": "Imágenes nuevas",
+    "koerperbilder.neu.zweck": "Las imágenes nuevas solo cuentan cuando las acepta.",
+    "koerperbilder.neu.alle": "Aceptar todas",
+    "koerperbilder.neu.annehmen": "Aceptar",
+    "koerperbilder.neu.verwerfen": "Descartar",
+    "koerperbilder.neu.leer": "Las imágenes nuevas aparecen aquí tras un aprendizaje de personas.",
+    "koerperbilder.neu.pruefung_aus": "Las imágenes nuevas cuentan enseguida, la revisión está desactivada.",
+    "koerperbilder.js.fertig": "Guardado.",
+    "koerperbilder.js.nicht": "No realizado: {grund}",
+    "koerperbilder.js.fehler": "Sin respuesta del servicio. Recargue la página.",
+    "koerperbilder.js.zahl": "Introduzca un número entero a partir de 1.",
+    "koerperbilder.js.laeuft": "Iniciando …",
+    "koerperbilder.grund.anker": "sin coincidencia con la imagen de la cara",
+    "koerperbilder.grund.personbild": "ninguna imagen de la cara para comparar",
+    "koerperbilder.grund.clip": "falta el clip",
+    "koerperbilder.grund.kurz": "clip demasiado corto",
+    "koerperbilder.grund.person": "la persona no se ve entera",
+    "koerperbilder.grund.daten": "faltan datos del evento de Frigate",
+    "koerperbilder.grund.pose": "falta el modelo de posturas del cuerpo",
+    "koerperbilder.grund.speicher": "memoria insuficiente",
+    "koerperbilder.grund.technik": "el procesamiento falló",
+    "koerperbilder.grund.ablage": "no se pudo guardar la imagen",
 }

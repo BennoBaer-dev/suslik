@@ -130,11 +130,17 @@ def konfigurierte_kanaele(cfg):
     k = []
     if pushover_konfiguriert(cfg):          # .411: Token UND User, sonst ist der Kanal AUS
         k.append("pushover")
-    if cfg.get("telegram_modus", "aus") != "aus":
+    if telegram_an(cfg):
         k.append("telegram")
     if cfg.get("mqtt_publish") and (cfg.get("mqtt") or {}).get("host"):
         k.append("mqtt")
     return k
+
+
+def telegram_an(cfg):
+    """Steht der Telegram-Kanal an, also telegram_modus nicht auf aus (Stufe TG1, O1320)? Fragen die Stoerungsmeldungen
+    und der Live-Waechter; der Kanal-Test der Seite fragt bewusst nicht. -> bool"""
+    return cfg.get("telegram_modus", "aus") != "aus"
 
 
 # ------------------------------------------------------------------ Pushover
@@ -291,7 +297,7 @@ def stoerung_melden(cfg, text, herkunft=None, bericht=None):
         if bericht is not None:
             bericht.append(("pushover", False))
     tg = (cfg.get("telegram") or {})
-    if tg.get("bot_token") and tg.get("chat_id"):
+    if telegram_an(cfg) and tg.get("bot_token") and tg.get("chat_id"):     # TG1: bei aus kein Telegram
         try:
             ok = telegram_video(cfg, None, f"suslik-Stoerung: {text}", herkunft=herkunft)
             if bericht is not None:
@@ -510,8 +516,8 @@ def publish_erkennung(cfg, pub, log, debug, entry):
 def telegram_melden(cfg, log, dry_alert, zustand, best_crop, clip_holen, ha_melden,
                     art, entry, personen=None):
     """Szenen-Telegram direkt aus verifyd (ersetzt die HA-MQTT-Automationen, 19.07.).
-    art 'erkannt'|'unbekannt'; personen sind bei 'erkannt' die Erkannten, bei 'unbekannt' die im Fenster erkannten
-    Namen (nur Information). Modus telegram_modus: aus|ha|direkt|beide. Versand im
+    art 'erkannt'|'unbekannt'|'koerper'; personen sind bei 'erkannt' die Erkannten, bei 'koerper' die Person der
+    Koerper-Erkennung (Stufe KW12), bei 'unbekannt' die im Fenster erkannten Namen (nur Information). Modus telegram_modus: aus|ha|direkt|beide. Versand im
     Thread (Transcode+Upload blockieren den GPU-Lock nicht); Unbekannt zusaetzlich
     ueber telegram_cooldown gedrosselt (ersetzt die fehlerhafte HA-10-min-Sperre).
 
@@ -544,6 +550,11 @@ def telegram_melden(cfg, log, dry_alert, zustand, best_crop, clip_holen, ha_meld
     t = datetime.datetime.fromtimestamp(entry.get("start") or entry["ts"]).strftime("%H:%M")
     if art == "erkannt":
         caption = f"✅ {cam_name}\n{' + '.join(personen or [])} erkannt um {t} (suslik)"
+    elif art == "koerper":
+        # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW12 Punkt 6: die Meldung der Personenerkennung, uebersetzt;
+        # Modus, Faden und Video wie bei erkannt, das Bild kommt vom Aufrufer (best_crop).
+        caption = _sprache.t("meldung.koerper.telegram", kamera=cam_name, name=" + ".join(personen or []), zeit=t,
+                             zusatz=_sprache.t("heute.pass.via_koerper"))
     elif personen:
         # Stufe V1b (Bauplan analysen/bauplan_verbraucher_unbekannt.md, Entscheid 11): die im Fenster erkannten Namen
         # stehen als Information dabei; sie heben die Unbekannt-Meldung nicht mehr auf.

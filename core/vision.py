@@ -1602,6 +1602,22 @@ def werte_pruefen(neu, alt=None, cloud_gate=True):
     return True, {k: a.get(k) for k in VISION_FELDER}
 
 
+# ------------------------------------------------- Geparkt (Bauplan Koerperweg neu, KW6)
+# Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW6 Punkt 4 (Entscheid V des Eigentuemers 20.11.2026 16:25:31
+# „Vision parken"): Galerien, Kandidatenbilder und Urteils-Protokoll lagen im Ordner des alten Lernlaufs (personlern/)
+# und kamen aus dessen Modulen; beides ist mit KW6 aus dem Produkt. Vision bleibt im Code, ist aber aus, bis es auf den
+# neuen Koerperweg umgebaut ist. Der Grund steht englisch hier (Log, Antworten); die Seiten zeigen ihn uebersetzt
+# (Schluessel vision.geparkt_satz).
+GEPARKT_GRUND = ("vision is parked: its galleries and candidate images came from the old person-learn run, which was "
+                 "removed; it comes back once it is rebuilt on the new body images")
+
+
+def vision_verfuegbar():
+    """Ob Vision in diesem Stand laufen darf, mit Grund (Tor fuer Schalter, Anstoss, Maentel und core/visionurteil).
+    -> (False, GEPARKT_GRUND), solange Vision geparkt ist"""
+    return False, GEPARKT_GRUND
+
+
 # ------------------------------------------------- Vorbedingungen (E4, §4/§3.1)
 GALERIEN_MIN = 2                # E4 fortgeschrieben: >=2, nicht >=1 (E10)
 

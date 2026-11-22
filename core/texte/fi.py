@@ -88,6 +88,22 @@ T = {
         "jotka tämä versio on oppinut päivityksen jälkeen. Ja sitä, mitä "
         "0.1.1.010 oppii sen jälkeen, myöhempi päivitys ei ota mukaan.\n\n"
         "Kaikki palaute ilahduttaa minua, varsinkin kun jokin menee pieleen.",
+    "readme.person.titel": "Henkilöntunnistus",
+    "readme.person.text":
+        "Henkilöntunnistus antaa henkilölle nimen, kun hänen kasvojaan ei tunnistettu tai kasvoja ei näkynyt. Se "
+        "on valinnainen. Tunnistus-sivulla (Kehontunnistus-kortti) kytket sen päälle ja valitset, toimiiko se aina "
+        "vai vain silloin, kun kasvoja ei tunnistettu.\n\n"
+        "Se oppii videoista, joissa kasvontunnistus tunnisti henkilön varmasti. Tästä versiosta alkaen suslik "
+        "merkitsee jokaisesta uudesta videosta, sopiiko se tähän. Vanhempia videoita ei lasketa. Kehokuvat-sivulla "
+        "valitset, käynnistyykö oppimisajo käsin, kerran päivässä vai heti.\n\n"
+        "Oletuksena nimi pätee, kun kolme kuvaa saman käynnin videoista sopii samaan henkilöön. Se näkyy "
+        "Tänään-sivulla ja "
+        "kohdassa Esiintymiset ja halutessasi myös Frigatessa, Läsnäolo-sivulla sekä omana ilmoituksena "
+        "Pushoverin, Telegramin ja Home Assistantin kautta. Nämä kytket päälle yksi kerrallaan; oletuksena ne ovat "
+        "pois päältä.\n\n"
+        "Rakensin kaiken uudelleen. Vanhan henkilöiden oppimisajon mallia ja opetuskuvia en voinut siirtää; opitut "
+        "kasvot säilyvät. Jos käytit vanhaa oppimisajoa, henkilöntunnistuksen täytyy oppia uudelleen. Kiitos "
+        "ymmärryksestäsi.",
     "readme.generell.titel": "Yleistä",
     "readme.generell.text": "Skenaariotunnistukseni nojaa Frigaten henkilöiden havaitsemiseen. Heti kun Frigate ilmoittaa henkilöstä, haen koko henkilötapahtuman. Tällainen tapahtuma on joskus muutaman sekunnin, joskus useita minuutteja pitkä. Käyn sen kokonaan läpi löytääkseni siitä jokaisen henkilön.\n\nSillä ei ole väliä, onko Frigaten oma kasvontunnistus päällä. Sitä tarvitaan vain, jos haluat täsmäyttää kasvot Frigaten kanssa.\n\nTarkistus ei koskaan käytä detect-streamia. Se käyttää tallennetta, eli parasta streamia, jonka kamera antaa Frigatelle.\n\nTarkistus käynnistyy kahdella tavalla. Joko Frigaten henkilötapahtumasta, se on skenaarion tie. Tai live-vahdista: se hakee käynnissä olevan streamin suoraan kamerasta tai Frigaten proxyn kautta, etsii siitä kasvot ja lähtee siitä liikkeelle.\n\nHenkilö tunnistetaan kolmella tavalla. Kasvoista. Koko henkilöstä, pelkästä kuvasta, ilman kasvoja. Vision-mallilla, ja se tie on vielä beta.\n\nMinulla on täällä 4K-kamerat, kuvataajuus niin korkealla kuin se menee, vähintään 15 kuvaa sekunnissa. Bittinopeus yhtä lailla. Matala bittinopeus jättää liikkuvat kasvot epäteräviksi.",
     "readme.aktuell.titel": "Mitä parhaillaan työstän",
@@ -382,8 +398,10 @@ T = {
     "konfiguration.kette.gesicht_erkl":
         "kasvotie on jokaisen analyysin selkäranka — henkilö ja Vision "
         "riippuvat sen käyntipäätelmästä",
-    "konfiguration.kette.grund_person":
-        "opetettua henkilömallia ei ole vielä otettu käyttöön",
+    "konfiguration.kette.grund_person_vorrat":
+        "Kehokuvat-sivulla ei ole vielä yhtään hyväksyttyä kuvaa",
+    "konfiguration.kette.grund_person_pose":
+        "asentomalli puuttuu, joten kehokuvaa ei voi leikata",
     "konfiguration.kette.grund_vision": "Vision-tunnistus on kytketty pois",
     "konfiguration.kette.grund_aus": "kytketty täällä pois",
     "konfiguration.kette.status_aus": "tila: ei käynnissä ({grund})",
@@ -1209,21 +1227,25 @@ T = {
     "erkennung.gesicht.beweis_bilder": "{n} viitekuvaa",
     "erkennung.gesicht.knopf_verwalten": "Hallitse henkilöitä …",
     "erkennung.koerper.titel": "Kehontunnistus",
-    "erkennung.koerper.satz":
-        "Tunnistaa talon asukkaat ruumiinrakenteesta ja asennosta myös "
-        "silloin, kun kasvot eivät näy — se oppii itse läpikäydyistä "
-        "kuvista.",
-    "erkennung.koerper.beweis_kein_modell":
-        "ei vielä henkilömallia — opeta ja käy läpi ensin",
-    "erkennung.status.kein_modell":
-        "ei käynnissä (opetettua henkilömallia ei ole vielä otettu "
-        "käyttöön)",
+    "erkennung.koerper.satz": "Tunnistaa talon asukkaat ruumiinrakenteesta ja asennosta myös silloin, kun kasvot eivät näy. Henkilöiden oppimisajo leikkaa tähän tarvittavat kehokuvat videoistasi.",
+    "erkennung.status.kein_vorrat":
+        "ei käynnissä (Kehokuvat-sivulla ei ole vielä yhtään hyväksyttyä kuvaa)",
+    "erkennung.status.pose_fehlt":
+        "ei käynnissä (asentomalli puuttuu, joten kehokuvaa ei voi leikata)",
     "erkennung.status.hier_aus": "ei käynnissä (kytketty täällä pois)",
     "erkennung.status.vision_aus":
         "ei käynnissä (Vision-tunnistus on kytketty pois)",
-    "erkennung.koerper.link_modell": "mallin tila",
-    "erkennung.koerper.knopf_status": "Mallin tila …",
     "erkennung.koerper.knopf_register": "Rekisteröi keho …",
+    "erkennung.koerper.melden.titel": "Ilmoittaa:",
+    "erkennung.koerper.melden.nur_anzeige": "vain näyttö",
+    "erkennung.koerper.melden.leer": "Mitään ei valittu: nimi vain näytetään.",
+    "erkennung.koerper.melden.nicht_eingerichtet": "ei määritetty",
+    "erkennung.koerper.melden.aria": "Henkilöntunnistuksen ilmoituskanavat",
+    "erkennung.koerper.melden.anwesenheit": "Läsnäolo-sivu",
+    # Stufe KW12: Labels der Unteroptionen wie in en (die Hilfe zitiert sie englisch).
+    "erkennung.unter.immer": "Always",
+    "erkennung.unter.nur_ohne_gesicht": "Only if no face",
+    "erkennung.unter.wenn_noetig": "If needed",
     "erkennung.vision.titel": "Vision-tekoäly",
     "erkennung.vision.beta": "Beta",
     "erkennung.vision.satz":
@@ -1244,6 +1266,8 @@ T = {
     "erkennung.areas.beweis_keine": "ei vielä alueita — kaikki lasketaan",
     "erkennung.areas.knopf": "Hallitse alueita &#8230;",
     "erkennung.knopf_speichern": "Tallenna + käynnistä uudelleen",
+    "erkennung.save.sauber": "Kaikki tallennettu",
+    "erkennung.save.offen": "Ei tallennettu, tallennus käynnistää palvelun uudelleen",
     "faces.titel": "Kasvot",
     "faces.link_how": "Näin se toimii &#8230;",
     "faces.bekannt.titel": "Tunnetut henkilöt",
@@ -1717,9 +1741,6 @@ T = {
     "nav.anker": "Ankkurit",
     "nav.lernen": "Ehdotukset",
     "nav.person": "Kehokuvat",
-    "nav.person_kontrolle": "Arvioidut kuvat",
-    "nav.person_modell": "Mallin tila",
-    "nav.personlauf": "Henkilöiden oppimisajo",
     "nav.vision": "Vision-tunnistus",
     "nav.live": "Live-vahdit",
     "nav.live_alerts": "Live-ilmoitukset",
@@ -1778,7 +1799,6 @@ T = {
         "valitsimesta.",
     "js.status.fehler": "virhe",
     "js.status.fehler_gross": "Virhe",
-    "js.status.fehler_detail": "virhe: {msg}",
     "js.status.ok": "ok",
     "js.status.speichern": "tallennetaan …",
     "js.status.gespeichert": "tallennettu",
@@ -1942,12 +1962,6 @@ T = {
     "js.areas.entfernen_frage":
         'Poistetaanko alue "{name}"? Sen kamerat siirtyvät takaisin '
         'Defaultiin — muu ei muutu.',
-    "js.personlauf.abbruch_frage":
-        "Keskeytetäänkö tämä henkilöiden oppimisajo? Kerätyt kuvat "
-        "säilyvät.",
-    "js.personlauf.verwerfen_frage":
-        "Hylätäänkö ajo {lid} kokonaan? Kaikki sen kuvat poistetaan; uusi "
-        "ajo voi kerätä uudelleen milloin tahansa.",
     "js.vision.nicht_erreichbar":
         "palvelua ei tavoitettu — mitään ei tallennettu",
     "js.vision.gespeichert":
@@ -2487,6 +2501,9 @@ T = {
     "vision.schalter.knopf_aus": "Kytke pois",
     "vision.schalter.knopf_an": "Kytke päälle",
     "vision.schalter.fehlt": "Puuttuu vielä:",
+    # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW6 Punkt 4: Vision geparkt (Seiten und Schalter).
+    "vision.geparkt_satz":
+        "Vision on pysäytetty tässä versiossa, eikä sitä voi ottaa käyttöön. Se palaa, kun se rakennetaan uudelleen uusien kehokuvien varaan.",
     "vision.schalter.fehlt_galerien":
         "{n}/{soll} hyväksyttyä kirjastoa — rakenna yksi kohdassa "
         "'Rakenna kirjasto'",
@@ -2876,316 +2893,6 @@ T = {
     "visionwizard.neu.satz":
         "Mikään ei muutu itsestään &mdash; hyväksymäsi kirjasto pysyy "
         "juuri sellaisena, kunnes rakennat ja hyväksyt uuden.",
-    "personwizard.wer.alle": "kaikki tunnetut henkilöt",
-    "personwizard.wer.fremde": "tuntemattomat henkilöt",
-    "personwizard.titel": "Opeta henkilöitä — kehontunnistus",
-    "personwizard.kopf.satz":
-        "Toinen, riippumaton tunnistustie: se oppii, miltä henkilö "
-        "näyttää KOKONAISUUTENA (ruumiinrakenne, hiukset, asento), ja "
-        "tunnistaa asukkaat myös silloin, kun kasvot eivät näy.",
-    "personwizard.kopf.wie_titel":
-        "Näin se toimii — sinulla on viimeinen sana",
-    "personwizard.kopf.schritt1":
-        "1 · Sinä valitset, kuinka monta tapahtumaa käydään läpi ja KUKA "
-        "opetetaan (yksi henkilö tai kaikki tunnetut henkilöt).",
-    "personwizard.kopf.schritt2":
-        "2 · Ajo kerää kokovartalokuvia omista tallenteistasi. Kuva "
-        "sidotaan henkilöön vain silloin, kun kasvoilla vahvistettu "
-        "käynti sen todistaa — tarkoituksella varovaista.",
-    "personwizard.kopf.schritt3":
-        "3 · SINÄ käyt läpi jokaisen kerätyn kuvan; yksi napsautus hylkää "
-        "väärän. Ilman hyväksyntääsi ei opita mitään.",
-    "personwizard.kopf.schritt4":
-        "4 · Opetus ajetaan sen jälkeen paikallisesti sekunneissa, ja "
-        "päätöskynnys mitataan niin, että tuntemattomat henkilöt jäävät "
-        "sen alle.",
-    "personwizard.kopf.tempo":
-        "Huomautus nopeudesta: keräys ajetaan tällä hetkellä CPU:lla, "
-        "joten malta hetki ajon kanssa (karkeasti 15&ndash;30 s "
-        "tapahtumaa kohti). Siirto GPU:lle/NPU:lle on suunniteltu "
-        "myöhempään versioon.",
-    "personwizard.kopf.warum":
-        "Miksi ensin vähintään yksi henkilö: tämä tie voi erottaa ihmiset "
-        "toisistaan vasta, kun se on oppinut — ja sinä olet käynyt läpi "
-        "—, miltä vähintään yksi asukas näyttää. Siihen asti "
-        "kehontunnistus pysyy POIS eikä lähetä koskaan ilmoitusta. Kun se "
-        "myöhemmin ilmoittaa (Pushover/Telegram), sanoma on merkitty "
-        "henkilöntunnistukseksi, ei kasvontunnistukseksi.",
-    "personwizard.vorb.titel": "Ajoa valmistellaan &hellip;",
-    "personwizard.vorb.zeile":
-        "sidotaan viimeiset {n} tapahtumaa henkilöön {wer} vahvistettujen "
-        "käyntien kautta",
-    "personwizard.vorb.satz":
-        "Tämä kestää minuutin tai kaksi — sivu päivittyy itsestään, "
-        "keräys alkaa heti sen jälkeen.",
-    "personwizard.ernte.stand":
-        "{events}/{von} tapahtumaa · {bilder} kuvaa kerätty",
-    "personwizard.ernte.startet": "käynnistyy …",
-    "personwizard.ernte.titel": "Henkilöiden oppimisajo on käynnissä",
-    "personwizard.ernte.zeile": "opetetaan {wer} · {stand}",
-    "personwizard.ernte.satz":
-        "Tämä sivu päivittyy itsestään. Uusi ajo voi käynnistyä heti, kun "
-        "tämä on valmis.",
-    "personwizard.ernte.knopf_abbruch": "Keskeytä ajo",
-    "personwizard.ernte.abbruch_hinweis": "kerätyt kuvat säilyvät",
-    "personwizard.unterbrochen.titel": "Viimeisin ajo keskeytyi",
-    "personwizard.unterbrochen.satz":
-        "Todennäköisesti palvelun uudelleenkäynnistys. Käynnistä sama ajo "
-        "alta uudelleen — jo kerätyt tapahtumat ohitetaan automaattisesti "
-        "(jatkaminen), mitään ei menetetä.",
-    "personwizard.abnahme.titel":
-        "Viimeisin ajo on valmis — seuraavaksi sinun läpikäyntisi",
-    "personwizard.abnahme.zeile":
-        "{n} kuvaa kerätty henkilölle {wer} (ajo {lauf}).",
-    "personwizard.abnahme.knopf": "Käy kuvat nyt läpi",
-    "personwizard.abnahme.hinweis":
-        "saata läpikäynti loppuun, niin seuraava ajo avautuu",
-    "personwizard.abnahme.knopf_verwerfen": "Hylkää tämä ajo",
-    "personwizard.abnahme.verwerfen_hinweis": "huono tulos? heitä kaikki pois",
-    "personwizard.leer.verwaist":
-        "Ohitettu tarkoituksella: {liste} — nämä nimet on poistettu "
-        "henkilöistäsi; niiden vanhat vahvistetut tapahtumat säilyvät "
-        "historiana, mutta niitä ei kerätä.",
-    "personwizard.leer.titel": "Ajo päättyi ilman kuvia — tässä on syy",
-    "personwizard.leer.satz":
-        "Mitään ei muutettu; voit käynnistää alta uuden ajon milloin "
-        "tahansa.",
-    "personwizard.fertig.verwaist":
-        "Ohitettu tarkoituksella: {liste} — poistettuja henkilöitä; "
-        "niiden vanhoja vahvistettuja tapahtumia ei kerätä.",
-    "personwizard.fertig.fremd":
-        "{n} vahvistettua tuntemattoman henkilön kuvaa siirtyi "
-        "tuntemattomien henkilöiden joukkoon — seuraava opetus käyttää "
-        "niitä heti.",
-    "personwizard.fertig.titel":
-        "Läpikäynti valmis — materiaali otettu käyttöön",
-    "personwizard.fertig.zeile":
-        "{abgenommen} kuvaa hyväksytty oppimateriaaliksi, {verworfen} "
-        "hylätty (ajo {lauf}).",
-    "personwizard.fertig.knopf": "Katso opittu materiaali",
-    "personwizard.fehler.titel": "Viimeisin ajo epäonnistui",
-    "personwizard.auswahl.opt_alle": "Kaikki tunnetut henkilöt",
-    "personwizard.auswahl.opt_fremde":
-        "Tuntemattomat henkilöt — kerää tuntemattomien henkilöiden kuvia",
-    "personwizard.auswahl.titel": "Kuka opetetaan",
-    "personwizard.auswahl.satz":
-        "Valitse yksi henkilö, niin käyt läpi pieniä, kohdennettuja eriä "
-        "— tai kaikki kerralla. Henkilöt tulevat kasvokokoelmastasi; "
-        "yhden kerrallaan opettaminen pitää läpikäynnin lyhyenä.",
-    "personwizard.auswahl.fremde_satz":
-        "Tuntemattomat henkilöt: kerää käyntejä, joissa ketään ei "
-        "tunnistettu (pelkät katukäynnit, vahvistamattomat vierailijat). "
-        "Läpikäynnissä vahvistat, ketkä todella ovat tuntemattomia "
-        "henkilöitä — he siirtyvät tuntemattomien henkilöiden joukkoon ja "
-        "terävöittävät päätöskynnystä.",
-    "personwizard.umfang.knopf_letzte": "viimeiset {n}",
-    "personwizard.umfang.attr_eigen": "oma N",
-    "personwizard.umfang.knopf_go": "aja",
-    "personwizard.umfang.titel": "Laajuus (tapahtumat, ei päivät)",
-    "personwizard.umfang.satz":
-        "Aloita pienestä (50) — käyt jokaisen kerätyn kuvan läpi käsin.",
-    "personwizard.bilanz.ohne":
-        "viimeiset {n} henkilötapahtumaa henkilölle {wer} — "
-        "sidontayhteenveto lasketaan, kun ajo luodaan",
-    "personwizard.bilanz.zahl_vor": "viimeiset {n} henkilötapahtumaa · ",
-    "personwizard.bilanz.zahl_nach":
-        " voidaan sitoa henkilöön {wer} vahvistettujen käyntien kautta",
-    "personwizard.bilanz.fremd": " · {n} tuntemattoman henkilön ehdokasta",
-    "personwizard.bilanz.erkl_fremd":
-        "Ehdokkaat ovat käyntejä, joissa ketään ei tunnistettu — pelkkiä "
-        "katukäyntejä ja vahvistamattomia vierailijoita. Läpikäyntiisi "
-        "asti kaikki on EPÄILY; merkitse siellä jokainen, joka EI ole "
-        "tuntematon henkilö.",
-    "personwizard.bilanz.erkl":
-        "Sidonta on varovaista: vain käynnit, joissa on täsmälleen yksi "
-        "kasvoilla vahvistettu henkilö, lasketaan. Kaiken, minkä näet sen "
-        "jälkeen, voi hylätä yhdellä napsautuksella.",
-    "personwizard.bilanz.titel": "Sinun valintasi",
-    "personwizard.bilanz.knopf": "Luo tämä ajo",
-    "personwizard.review.stempel": "VÄÄRIN",
-    "personwizard.review.h_fremde": "Tuntemattomat henkilöt",
-    "personwizard.review.frage_fremd":
-        "napsauta jokaista kuvaa, jossa EI ole tuntematonta henkilöä "
-        "(asukas, tunnettu vierailija) tai joka on käyttökelvoton. Toinen "
-        "napsautus peruu sen. Kaikki tallennetaan heti; merkitsemättömät "
-        "kuvat otetaan käyttöön vahvistettuina tuntemattomina henkilöinä "
-        "ja ne terävöittävät päätöskynnystä.",
-    "personwizard.review.frage":
-        "napsauta jokaista kuvaa, joka on VÄÄRIN (ei tämä henkilö tai "
-        "käyttökelvoton). Toinen napsautus peruu sen. Kaikki tallennetaan "
-        "heti; merkitsemättömät kuvat lasketaan hyväksytyiksi.",
-    "personwizard.review.titel": "Käy kerätty läpi",
-    "personwizard.review.kopf": "Ajo {lauf} — {frage}",
-    "personwizard.review.zurueck": "&larr; takaisin ohjattuun\ntoimintoon",
-    "personwizard.review.knopf_fertig":
-        "Päätä läpikäynti — ota hyväksytyt kuvat käyttöön",
-    "personwizard.kontrolle.sammeln_titel": "Keräystila on PÄÄLLÄ",
-    "personwizard.kontrolle.sammeln_rest":
-        " — jokainen arvioitu kuva säilytetään 30 päivää, jotta voit "
-        "tarkistaa päätökset myöhemmin. Varaudu karkeasti 20&ndash;40 MB "
-        "päivässä.",
-    "personwizard.kontrolle.schlank_titel": "Kevyt tila (oletus)",
-    "personwizard.kontrolle.schlank_rest":
-        " — arvioidut kuvat elävät vain niin kauan kuin käynti on kesken; "
-        "sen jälkeen jäävät vain voittanut kuva ja alla oleva "
-        "päätelmäloki. Tämä on tuoreen asennuksen tietosuojaystävällinen "
-        "oletus.",
-    "personwizard.kontrolle.titel": "Arvioidut kuvat",
-    "personwizard.kontrolle.satz":
-        "Mitä kehontunnistus todella katsoi, yksi lohko käyntiä kohti: "
-        "arvioitu kuva, luokka johon se päätyi, tulos ja mistä kuva tuli. "
-        "Hyödyllinen, kun henkilö jäi huomaamatta tai joku tunnistettiin, "
-        "jota ei olisi pitänyt tunnistaa.",
-    "personwizard.kontrolle.leer_titel": "Mitään ei ole vielä kirjattu",
-    "personwizard.kontrolle.tag_fremd": "tuntematon henkilö",
-    "personwizard.kontrolle.tag_drueber": "kynnyksen yllä",
-    "personwizard.kontrolle.tag_drunter": "kynnyksen alla",
-    "personwizard.kontrolle.schwelle": " &middot; kynnys {schwelle}",
-    "personwizard.kontrolle.kopfzeile.eins":
-        "{wann} — {judged} arvioitu, {n} kuva säilytetty",
-    "personwizard.kontrolle.kopfzeile.viele":
-        "{wann} — {judged} arvioitu, {n} kuvaa säilytetty",
-    "personwizard.tabelle.fremd_zeile": "Tuntemattomat henkilöt (lisäluokka)",
-    "personwizard.tabelle.kein_fremd":
-        "Ei vielä tuntemattomien henkilöiden luokkaa — sellaisen kanssa "
-        "tunnistus toimii selvästi paremmin: vahvistetut tuntemattomien "
-        "henkilöiden kuvat opettavat mallille, mikä EI kuulu joukkoon, ja "
-        "kalibroivat päätöskynnyksen.",
-    "personwizard.tabelle.q_eichung": "mitattu",
-    "personwizard.tabelle.q_user": "itse asettamasi",
-    "personwizard.tabelle.q_standard": "sisäänrakennettu oletus",
-    "personwizard.tabelle.f_modell": "Aktiivinen malli",
-    "personwizard.tabelle.f_schwelle": "Kynnys",
-    "personwizard.tabelle.f_scharf": "Aktivoitu",
-    "personwizard.tabelle.scharf_ja": "KYLLÄ",
-    "personwizard.tabelle.scharf_ja_rest": " — arvioi livenä",
-    "personwizard.tabelle.scharf_nein": "ei — ei aktivoitu",
-    "personwizard.tabelle.konf_vor":
-        "Suurin ryhmien välinen sekaannus kalibroinnissa: ",
-    "personwizard.tabelle.konf_nach":
-        " — vahvin tulos, jonka jokin kuva saavutti VÄÄRÄLLE ryhmälle; "
-        "mitä lähempänä ykköstä, sitä lähempänä kaksi ryhmää ovat "
-        "toisiaan.",
-    "personwizard.tabelle.titel": "Opitut ryhmät",
-    "personwizard.karte.scharf": "Aktivoitu",
-    "personwizard.karte.unscharf": "Ei vielä aktivoitu",
-    "personwizard.karte.fehler":
-        "Viimeisin opetusyritys EPÄONNISTUI: {fehler} — tämä kortti "
-        "näyttää edellisen mallin.",
-    "personwizard.karte.titel": "Mallin tila",
-    "personwizard.karte.zeile":
-        "opetettu {wann} ajassa {dauer} s — {bilder} kuvaa: {je} · "
-        "{modell} · ",
-    "personwizard.karte.link": "tiedot",
-    "personwizard.bestand.titel": "Henkilömateriaali — mitä on opittu",
-    "personwizard.bestand.satz":
-        "Hyväksytyt kokovartalokuvat henkilöä kohti. Valitse alta ryhmä, "
-        "niin näet sen kuvat; poista yksittäinen kuva (&times; ruudussa) "
-        "— uusi ajo voi aina kerätä uudelleen. Poistot vaikuttavat "
-        "seuraavassa opetuksessa.",
-    "personwizard.bestand.leer_titel": "Ei vielä hyväksyttyä materiaalia",
-    "personwizard.bestand.stark_titel": "Mikä tekee tästä mallista vahvan",
-    "personwizard.bestand.chip_fremde": "Tuntemattomat henkilöt ({n})",
-    "personwizard.bestand.zeigen_titel": "Näytä kuvat kohteesta",
-    "personwizard.bestand.zeigen_satz":
-        "Valitse ryhmä — sen kuvat avautuvat alle, uusimmat ensin.",
-    "personwizard.bestand.marker_tage.eins":
-        "vain {n} päivä — tunnistus paranee eniten, kun materiaali kattaa "
-        "useampia päiviä, vaatteita ja valo-oloja",
-    "personwizard.bestand.marker_tage.viele":
-        "vain {n} päivää — tunnistus paranee eniten, kun materiaali "
-        "kattaa useampia päiviä, vaatteita ja valo-oloja",
-    "personwizard.bestand.attr_loeschen": "poista tämä kuva",
-    "personwizard.bestand.z_bilder": "{n} kuvaa",
-    "personwizard.bestand.z_tage.eins": "{n} päivä",
-    "personwizard.bestand.z_tage.viele": "{n} päivää",
-    "personwizard.bestand.z_kameras.eins": "{n} kamera",
-    "personwizard.bestand.z_kameras.viele": "{n} kameraa",
-    "personwizard.modell.titel": "Henkilömalli — tila",
-    "personwizard.modell.satz":
-        "Kehontunnistuksen malli, opetettu hyväksymistäsi kuvista. Se "
-        "opetetaan automaattisesti uudelleen jokaisen päätetyn "
-        "läpikäynnin ja jokaisen poiston jälkeen.",
-    "personwizard.modell.leer_titel": "Ei vielä mallia",
-    "personwizard.modell.fremd_keine":
-        "ei vielä yhtään — kynnys on mitattu vain henkilöidesi väliltä",
-    "personwizard.modell.fremd_gesammelt":
-        "{n} kerätty — {min} tarvitaan, ennen kuin ne otetaan "
-        "opetukseen ja kalibroivat kynnyksen",
-    "personwizard.modell.fremd_geeicht":
-        "{n} opetuksessa · kynnys kalibroitu oikeilla tuntemattomilla "
-        "henkilöillä",
-    "personwizard.modell.fremd_ungeeicht":
-        "{n} opetuksessa — kynnyksen kalibrointi ei ajettu (katso alla "
-        "oleva huomautus)",
-    "personwizard.modell.f_trainiert": "Opetettu",
-    "personwizard.modell.f_dauer": "Opetuksen kesto",
-    "personwizard.modell.f_modell": "Malli",
-    "personwizard.modell.f_bilder": "Kuvia yhteensä",
-    "personwizard.modell.f_personen": "Henkilöt",
-    "personwizard.modell.f_fremd": "Tuntemattomien henkilöiden negatiivit",
-    "personwizard.modell.scharf_ja": "KYLLÄ — live-arviointi aktiivinen",
-    "personwizard.modell.scharf_nein": "ei — ei vielä aktivoitu",
-    "personwizard.modell.fehler":
-        "Viimeisin opetusyritys EPÄONNISTUI ({zeit}): {fehler} — tässä "
-        "näkyvä malli on edellinen eikä sisällä viimeisimpiä muutoksiasi.",
-    "personwizard.modell.aktuell_titel": "Nykyinen malli",
-    "personwizard.modell.material_titel": "Oppimateriaali henkilöä kohti",
-    "personwizard.modell.kopf_person": "henkilö",
-    "personwizard.modell.kopf_bilder": "hyväksytyt kuvat",
-    "personwizard.modell.kopf_anteil": "osuus",
-    "personwizard.modell.summe": "yhteensä",
-    "personwizard.modell.q_eichung": "mitattu materiaalistasi",
-    "personwizard.modell.eich_fremd":
-        "Mitattu {folds}-kertaisella ristiinvalidoinnilla {n} sivuun "
-        "jätetystä henkilöidesi kuvasta ja {n_fremd} vahvistetusta "
-        "tuntemattomasta henkilöstä: vahvin asukasvarmuus, jonka oikea "
-        "tuntematon henkilö saavutti, oli {max} &rarr; kynnys {schwelle}; "
-        "{pct} % aidoista kuvista pääsee läpi. Kolikon toinen puoli: "
-        "{ueber} omista kuvistasi saavuttaisi tämän kynnyksen VÄÄRÄLLE "
-        "henkilölle (vahvin {vmax}).",
-    "personwizard.modell.eich_intern":
-        "Mitattu {folds}-kertaisella ristiinvalidoinnilla {n} sivuun "
-        "jätetystä kuvasta: vahvin varmuus VÄÄRÄLLE henkilölle {max} "
-        "&rarr; kynnys {schwelle}; {pct} % aidoista kuvista pääsee läpi. "
-        "Rehellinen raja: tämä kalibroi opittujen henkilöidesi VÄLILLÄ — "
-        "oikeita tuntemattomia henkilöitä ei ole vielä materiaalissa.",
-    "personwizard.modell.regeln_titel": "Päätelmän asetukset",
-    "personwizard.modell.schwelle_vor": "Päätöskynnys: ",
-    "personwizard.modell.r_fenster": "Laukaisuikkuna",
-    "personwizard.modell.r_feuer": "Tukitapahtumat ilmoitukseen",
-    "personwizard.modell.r_karenz": "Rauhoitusaika ilmoituksen jälkeen",
-    "personwizard.modell.regeln_satz":
-        "Jätä kynnys tyhjäksi, niin se seuraa mitattua arvoa "
-        "automaattisesti (se mitataan uudelleen jokaisessa "
-        "opetuksessa). Laukaisusääntö: ilmoitetaan vasta, kun ikkunan "
-        "sisällä on näin monta tukitapahtumaa, ja sen jälkeen pysytään "
-        "hiljaa rauhoitusajan verran.",
-    "personwizard.modell.knopf_speichern": "Tallenna asetukset",
-    "personwizard.modell.satz_user":
-        "Päätöskynnys on sinun asettamasi ({schwelle})",
-    "personwizard.modell.satz_user_eich":
-        " — kalibrointi {n} vahvistettua tuntematonta henkilöä vasten "
-        "antaisi {alt}",
-    "personwizard.modell.satz_geeicht":
-        "Päätöskynnys on kalibroitu {n} vahvistetulla tuntemattoman "
-        "henkilön kuvalla.",
-    "personwizard.modell.satz_ungeeicht":
-        "Päätöskynnystä ei ole vielä kalibroitu tuntemattomien "
-        "henkilöiden materiaalilla — pidä ilmoituksia esikatseluna ja "
-        "seuraa niitä.",
-    "personwizard.modell.satz_fremd_drop":
-        " Keho, jonka malli lukee tuntemattomaksi henkilöksi, hylätään "
-        "ennen kuin siitä voi tulla osuma.",
-    "personwizard.modell.live_titel": "Live-kytkin",
-    "personwizard.modell.live_an":
-        "AKTIVOITU — kehotie arvioi live-tapahtumia ja saa ilmoittaa.",
-    "personwizard.modell.live_aus": "Ei aktivoitu — kehotie pysyy hiljaa.",
-    "personwizard.modell.live_hinweis":
-        "Ilmoitukset kantavat merkinnän &quot;henkilöntunnistus, ei "
-        "kasvot&quot;.",
-    "personwizard.modell.knopf_disarm": "Poista aktivointi",
-    "personwizard.modell.knopf_arm": "Aktivoi kehontunnistus",
     "baustein.gt.fremd": "Tuntematon henkilö",
     "baustein.gt.kein_mensch": "Ei henkilö",
     "baustein.gt.add": "lisää henkilö…",
@@ -3222,12 +2929,6 @@ T = {
     "vision.modell.js_id_fehlt": "syötä ensin ID",
     "vision.modell.js_prueft": "tarkistetaan …",
     "vision.modell.js_fehler": "virhe",
-    "personwizard.review.js_zaehl": "/{n} merkitty vääräksi",
-    "personwizard.review.js_frage_vor": "Päätetäänkö läpikäynti? ",
-    "personwizard.review.js_frage_mitte":
-        " kuvaa otetaan käyttöön oppimateriaalina, ",
-    "personwizard.review.js_frage_nach": " hylätään.",
-    "personwizard.modell.js_fehler": "virhe ",
     "antwort.person_entfernt":
         "{person} poistettu ({n} viitejoukkoa arkistoitu — mitään ei "
         "poistettu)",
@@ -3319,10 +3020,7 @@ T = {
         "jo käynnissä, ajetaan loppuun, sen jälkeen kuvat poistetaan",
     "antwort.passernte_abbruch_leer":
         "ei mitään keskeytettävää — tämä tarkistus ei ole enää käynnissä",
-    "antwort.personlauf_kein_review": "yksikään ajo ei odota läpikäyntiä",
-    "antwort.personlauf_kein_lauf": "ei aktiivista ajoa",
     "antwort.events_bereich": "tapahtumien määrän on oltava 1..{max}",
-    "antwort.personlauf_aktiv": "henkilöiden oppimisajo on jo käynnissä",
     "antwort.lernlauf_tag_ungueltig": "virheellinen päivä (VVVV-KK-PP)",
     "antwort.lernlauf_phase":
         "ajo on jo vaiheessa '{phase}' — keskeytä se ensin",
@@ -3455,7 +3153,7 @@ T = {
     "hilfe.koerper.titel": "Kehontunnistus selitettynä",
     "hilfe.koerper.satz1": "<p>Joissakin käynneissä ei näy koskaan käyttökelpoisia kasvoja:\nhenkilö katsoo poispäin, hänellä on huppu tai hän on liian kaukana.\nNämä tapaukset kattaa kehontunnistus. Se tunnistaa talon\nasukkaat ruumiinrakenteesta ja asennosta, koko henkilön kuvista.</p>",
     "hilfe.koerper.satz2": "<p>Se on rakennettu juuri tähän tapaukseen: ei käyttökelpoisia\nkasvoja, haluat silti tietää kuka se oli, eikä sitä\nvarten halua antaa kuvia tekoälyn Vision-mallille.</p>",
-    "hilfe.koerper.satz3": "<p>Se oppii materiaalista, jonka hyväksyt. <b>Rekisteröi keho</b>\nkäynnistää lyhyen oppimisajon yhdelle henkilölle: järjestelmä\nkerää hänen kuviaan kameroistasi, sinä käyt tuloksen\nkertaalleen läpi, ja siitä lähtien se oppii itsekseen lisää.</p>",
+    "hilfe.koerper.satz3": "<p>Se käyttää kehokuvia omista videoistasi. <b>Rekisteröi keho</b> avaa Kehokuvat-sivun. Siellä käynnistät henkilöiden oppimisajon: se leikkaa kehokuvia videoista, joissa näkyi tasan yksi henkilö ja hänen kasvonsa tunnistettiin varmasti. Oletuksena uudet kuvat lasketaan vasta, kun hyväksyt ne.</p>",
     "hilfe.koerper.satz4": "<p>Yllä olevalla kytkimellä valitset, ajetaanko se ja milloin. <b>Only if no face</b>\ntarkoittaa: se pysyy hiljaa, ellei kasvotarkistus jää tyhjäksi. <b>Always</b>\ntarkoittaa: se tarkistaa jokaisen käynnin. Pois tarkoittaa: sitä ei ajeta koskaan.</p>",
     "hilfe.vision.titel": "Vision-tekoäly selitettynä",
     "hilfe.vision.satz1": "<p>Vision-tekoäly on oma tunnistustiensä. Se näyttää käynnin kuvat kuvamallille\nja kysyy, ketä rekisteröityä henkilöä ne muistuttavat. Voit käyttää sitä\nvarmistuksena vaikeisiin tapauksiin tai antaa sen kantaa tunnistuksen\nyksin: asetuksella <b>Always</b> se arvioi jokaisen käynnin itse, vaikka kasvoja\nei olisi opetettu lainkaan. Se arvioi käynnin päätteeksi, ei livenä.</p>",
@@ -3610,54 +3308,6 @@ T = {
         "näkymän seuraavaksi paras kuva nousee tilalle. Tämä ei koske "
         "oppimateriaaliasi; se sanoo vain &bdquo;ei kirjaston "
         "soluksi&ldquo;.",
-    "personwizard.kopf.stark_satz":
-        "<b>Mikä tekee mallista vahvan:</b> vaihtelevuus voittaa määrän. "
-        "Kuvat <b>monilta eri päiviltä</b> (vaatteet, valo, kamerat) "
-        "auttavat paljon enemmän kuin monet kuvat yhdestä käynnistä — "
-        "käynnistä keräys mieluummin uudelleen uusina päivinä kuin kaiva "
-        "yhdestä päivästä syvemmälle. Vahvistetut tuntemattomien "
-        "henkilöiden kuvat terävöittävät päätöskynnystä samalla tavalla.",
-    "personwizard.fertig.training_satz":
-        'Opetus hyväksytyllä materiaalilla käynnistyy automaattisesti '
-        'läpikäynnin jälkeen — katso <a href="/person/modell">Mallin '
-        'tila</a>. Voit käynnistää alta uuden ajon milloin tahansa.',
-    "personwizard.kontrolle.schalter_satz":
-        'Kytke se kohdassa <a href="/konfiguration">Asetukset &rarr; '
-        'Lisäasetukset</a>, avain <code>diagnostic_collection</code>. '
-        'Kuvat ja loki vanhenevat yhdessä osumalokin kanssa 30 päivän '
-        'jälkeen &mdash; mitään täällä ei säilytetä pidempään kuin '
-        'tunnistuksen kirjanpitoa itseään.',
-    "personwizard.kontrolle.leer_satz":
-        'Kirjaukset ilmestyvät heti, kun kehontunnistus on aktivoitu '
-        'sivulla <a href="/person/modell">Mallin tila</a> ja henkilö '
-        'kulkee ohi.',
-    "personwizard.bestand.leer_satz":
-        'Aja <a href="/personlauf">henkilöiden oppimisajo</a> ja saata '
-        'läpikäynti loppuun — hyväksytyt kuvat ilmestyvät tähän.',
-    "personwizard.bestand.stark_satz":
-        "Vaihtelevuus voittaa määrän: kuvat <b>monilta eri päiviltä</b> "
-        "(vaatteet, valo) auttavat paljon enemmän kuin monet kuvat "
-        "yhdestä käynnistä. Tavoittele useampia päiviä henkilöä kohti ja "
-        "anna keräyksen kattaa kaikki kamerasi.",
-    "personwizard.bestand.fremd_satz":
-        "<b>Tuntemattomat henkilöt:</b> {n} vahvistettua tuntemattoman "
-        "henkilön kuvaa kalibroi päätöskynnystä — mitä useampia "
-        "tuntemattomia henkilöitä malli on nähnyt, sitä luotettavampi "
-        "tämä viiva on. (Kerätään hakemistoon "
-        "<code>personlern/fremd/</code>; sivu, jolla tätä joukkoa voi "
-        "kasvattaa oman kadun liikenteestä, on suunnitteilla.)",
-    "personwizard.bestand.fremd_erklaerung":
-        "Vahvistetut tuntemattomien henkilöiden kuvat — ne opettavat "
-        "lisäluokan ja kalibroivat päätöskynnyksen. Yhden poistaminen "
-        "opettaa mallin heti uudelleen (tiedostot ovat hakemistossa "
-        "<code>personlern/fremd/</code>).",
-    "personwizard.modell.leer_satz":
-        'Aja <a href="/personlauf">henkilöiden oppimisajo</a> ja saata '
-        'läpikäynti loppuun — opetus käynnistyy sen jälkeen '
-        'automaattisesti.',
-    "personwizard.modell.material_satz":
-        'Hallitse kuvia kohdassa <a href="/person">Kehokuvat</a> — '
-        'poistot opettavat mallin automaattisesti uudelleen.',
     "meldung.titel.kategorie": "suslik: {wort}",
     "meldung.alert.bestaetigt":
         "{name} vahvistettu ({wort}, nähty {n} ikkunassa)",
@@ -3676,6 +3326,8 @@ T = {
         "{wort}, {n} tukitapahtumaa",
     "meldung.person.wort_ersatz": "osuma",
     "meldung.person.zahl": "[tulos {score}]",
+    "meldung.koerper.satz": "{name} tunnistettu ({kamera}, {zeit}) – {zusatz}",
+    "meldung.koerper.telegram": "{kamera}\n{name} klo {zeit}, {zusatz} (suslik)",
     "meldung.vision.titel": "suslik Vision",
     "meldung.vision.unbestaetigt":
         "Vision ei voinut vahvistaa ketään tässä käynnissä",
@@ -3789,10 +3441,12 @@ T = {
     "heute.anw.dauer": "paikalla noin {h} h",
     "heute.anw.title":
         "läsnäolo tunneittain, kaikki kamerat — punainen: vahvistettu "
-        "läsnäolo, vihreä: järjestelmä kävi, ketään ei nähty",
+        "läsnäolo, vaalea punaisella reunalla: henkilöntunnistuksen kautta, "
+        "vihreä: järjestelmä kävi, ketään ei nähty",
     "heute.anw.title_gesamt":
         "läsnäolo tunneittain — kaikki kamerat, ei suodatettu aluenäkymän "
         "mukaan",
+    "heute.anw.zelle": "{zeit} · {zustand}",
     "heute.pass.mehr_kameras": "kaikki {n} kameraa ({m} lisää)",
     "heute.pass.live": "live",
     "heute.pass.live_title": "live-vahti ilmoitti nimen tämän käynnin aikana",
@@ -3870,21 +3524,6 @@ T = {
         "henkilöllä {person} ei ole vielä viitekuvia vertailtavaksi",
     "antwort.einspielen.frigate_fehlt":
         "tähän asennukseen ei ole asetettu frigate_url-arvoa",
-    "personwizard.kachel.sammeln": "Kerää kuvia",
-    "personwizard.kachel.pruefen": "Käy kuvat läpi",
-    "personwizard.k1.satz":
-        "Valitse, kuka opetetaan ja kuinka kauas taaksepäin katsotaan "
-        "&mdash; ajo kerää kuvat sitten omista tallenteistasi.",
-    "personwizard.k2.satz":
-        "Kerää kokovartalokuvia tallenteistasi, ja vain käynneistä, jotka "
-        "kasvot ovat jo vahvistaneet.",
-    "personwizard.k3.satz":
-        "Vaihe, joka tarvitsee sinua: jokainen kerätty kuva saa sinun "
-        "kyllä- tai ei-vastauksesi, ennen kuin mitään opitaan.",
-    "personwizard.k4.satz":
-        "Hyväksytyt kuvat opettavat kehomallin heti &mdash; se "
-        "tunnistaa henkilöt sen jälkeen myös ilman näkyviä kasvoja.",
-    "personwizard.such.titel": "Aseta henkilöiden oppimisajo",
     "systemstat.titel": "Järjestelmän kuorma",
     "systemstat.sub":
         "Tämän koneen kokonaiskuorma. Uusi mittaus {takt} sekunnin "
@@ -4008,8 +3647,7 @@ T = {
     "anwesenheit.titel": "Läsnäolo",
     "anwesenheit.knopf": "Läsnäolo",
     "anwesenheit.knopf_tip":
-        "Läsnäolo: kenen läsnäolo tontilla on vahvistettu, vartti "
-        "kerrallaan",
+        "Läsnäolo: kuka tontilla on nähty, vartti kerrallaan",
     "anwesenheit.kopf_satz":
         "Yksi rivi henkilöä kohti, päivä varttitunnin soluina. Punainen = "
         "läsnäolo vahvistettu sillä vartilla (tapahtuma-analyysi tai "
@@ -4070,6 +3708,7 @@ T = {
     "anwesenheit.quelle_worker": "tapahtuma-analyysi",
     "anwesenheit.quelle_live": "live-vahti",
     "anwesenheit.quelle_beide": "live-vahti ja tapahtuma-analyysi",
+    "anwesenheit.quelle_koerper": "henkilöntunnistus",
     "anwesenheit.nav.heute": "Tänään",
     "anwesenheit.nav.gestern": "eilen",
     "anwesenheit.nav.attr_vortag": "edellinen päivä",
@@ -4225,4 +3864,81 @@ T = {
         "Ei mahdu — {fehlt} liian vähän. Kytke yksi live-vahti pois tai "
         "ota yksi säie takaisin.",
     "gpu.speichern_gesperrt": "Näytönmuisti ei riitä tälle säiemäärälle.",
+    # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW4: Seite „Body images“ (routes/koerperbilder.py)
+    "koerperbilder.satz": "Kun kasvot eivät näy, suslik tunnistaa henkilön kehokuvista, jotka se leikkaa videoistasi.",
+    "koerperbilder.zustand.erkennen": "Tunnistus kehosta:",
+    "koerperbilder.zustand.pruefung": "Uusien kuvien tarkistus:",
+    "koerperbilder.zustand.an": "päällä",
+    "koerperbilder.zustand.aus": "pois",
+    "koerperbilder.zustand.nur_ohne_gesicht": "vain ilman kasvoja",
+    "koerperbilder.zustand.unbekannt": "tuntematon asetus",
+    "koerperbilder.zustand.ohne_bilder": "ei vielä kuvia",
+    "koerperbilder.fuss.einstellungen": "Asetukset:",
+    "koerperbilder.teilmenge": "Osaa tiedoista ei voitu lukea, joten sivu voi olla puutteellinen. Syy on palvelun lokissa.",
+    "koerperbilder.vorrat.titel": "Varasto",
+    "koerperbilder.vorrat.zweck": "Napauta henkilöä nähdäksesi hänen kuvansa.",
+    "koerperbilder.vorrat.bilder.eins": "{n} kuva",
+    "koerperbilder.vorrat.bilder.viele": "{n} kuvaa",
+    "koerperbilder.vorrat.tage": "{tage} päivänä viime {max_tage} päivästä",
+    "koerperbilder.vorrat.neuest": "uusin {datum}",
+    "koerperbilder.vorrat.weitere.eins": "{n} muulla henkilöllä ei ole vielä kuvia varastossa.",
+    "koerperbilder.vorrat.weitere.viele": "{n} muulla henkilöllä ei ole vielä kuvia varastossa.",
+    "koerperbilder.vorrat.keine_bilder": "Varastossa ei ole vielä kehokuvia. Henkilöiden oppimisajo leikkaa ne sopivista videoista.",
+    "koerperbilder.vorrat.entfernen": "Poista tämä kuva",
+    "koerperbilder.vorrat.leer": "Ei vielä kehokuvia eikä tunnettuja henkilöitä.",
+    "koerperbilder.vorrat.leer_hinweis": "suslik oppii ensin kasvot. Kehokuvat syntyvät videoista, joissa kasvot tunnistettiin.",
+    "koerperbilder.cutter.titel": "Henkilöiden oppimisajo",
+    "koerperbilder.cutter.zweck": "Käy läpi sopivat videot ja leikkaa niistä kehokuvia.",
+    "koerperbilder.cutter.weg_aus": "Tunnistus kehosta on pois päältä. Voit silti kerätä kuvia.",
+    "koerperbilder.cutter.keine_titel": "Ei vielä sopivia videoita",
+    "koerperbilder.cutter.keine_satz": "Video sopii, kun kuvassa on tasan yksi henkilö ja hänen kasvonsa tunnistettiin varmasti. Mukaan lasketaan viimeiset {tage} päivää. Videot, jotka suslik analysoi ennen kuin tämä toiminto oli olemassa, eivät ole mukana. Heti kun sopivia videoita on, käynnistät oppimisajon täältä.",
+    "koerperbilder.cutter.personen_waehlen": "Valitse henkilöt",
+    "koerperbilder.cutter.personen_hilfe": "Ilman valintaa mukana ovat kaikki henkilöt.",
+    "koerperbilder.cutter.wartend.eins": "{n} video",
+    "koerperbilder.cutter.wartend.viele": "{n} videota",
+    "koerperbilder.cutter.videos": "Montako videota tarkistetaan henkilöä kohden",
+    "koerperbilder.cutter.balken": "Oppimisajon edistyminen",
+    "koerperbilder.cutter.start.eins": "Käynnistä oppimisajo ({n} video saatavilla)",
+    "koerperbilder.cutter.start.viele": "Käynnistä oppimisajo ({n} videota saatavilla)",
+    "koerperbilder.cutter.start_ohne_zahl": "Käynnistä oppimisajo",
+    "koerperbilder.cutter.laeuft": "Käynnissä: {videos}/{offen} videota tarkistettu, uusia kuvia: {bilder}.",
+    "koerperbilder.cutter.letzter": "Viimeisin ajo {zeit}",
+    "koerperbilder.cutter.geprueft.eins": "{n} video tarkistettu",
+    "koerperbilder.cutter.geprueft.viele": "{n} videota tarkistettu",
+    "koerperbilder.cutter.behalten.eins": "{n} kuva säilytetty",
+    "koerperbilder.cutter.behalten.viele": "{n} kuvaa säilytetty",
+    "koerperbilder.cutter.ausgefallen.eins": "{n} ohitettu: {gruende}",
+    "koerperbilder.cutter.ausgefallen.viele": "{n} ohitettu: {gruende}",
+    "koerperbilder.cutter.fehler": "ajo ei mennyt loppuun: {grund}",
+    "koerperbilder.auto.lauf": "Käynnistä oppimisajo",
+    "koerperbilder.auto.hand": "käsin",
+    "koerperbilder.auto.taeglich": "kerran päivässä huollon yhteydessä",
+    "koerperbilder.auto.sofort": "heti jokaisen sopivan videon jälkeen",
+    "koerperbilder.auto.uebernehmen": "Hyväksy uudet kuvat automaattisesti",
+    "koerperbilder.auto.speichern": "Tallenna + käynnistä uudelleen",
+    "koerperbilder.auto.fuss": "Oppimisajo:",
+    "koerperbilder.auto.von_auto": "automaattinen",
+    "koerperbilder.auto.von_taeglich": "päivittäinen",
+    "koerperbilder.neu.titel": "Uudet kuvat",
+    "koerperbilder.neu.zweck": "Uudet kuvat lasketaan vasta, kun hyväksyt ne.",
+    "koerperbilder.neu.alle": "Hyväksy kaikki",
+    "koerperbilder.neu.annehmen": "Hyväksy",
+    "koerperbilder.neu.verwerfen": "Hylkää",
+    "koerperbilder.neu.leer": "Uudet kuvat näkyvät täällä henkilöiden oppimisajon jälkeen.",
+    "koerperbilder.neu.pruefung_aus": "Uudet kuvat lasketaan heti, tarkistus on pois päältä.",
+    "koerperbilder.js.fertig": "Tallennettu.",
+    "koerperbilder.js.nicht": "Ei tehty: {grund}",
+    "koerperbilder.js.fehler": "Palvelu ei vastaa. Lataa sivu uudelleen.",
+    "koerperbilder.js.zahl": "Anna kokonaisluku, vähintään 1.",
+    "koerperbilder.js.laeuft": "Käynnistyy …",
+    "koerperbilder.grund.anker": "ei vastaa kasvokuvaa",
+    "koerperbilder.grund.personbild": "ei kasvokuvaa vertailuun",
+    "koerperbilder.grund.clip": "leike puuttuu",
+    "koerperbilder.grund.kurz": "leike liian lyhyt",
+    "koerperbilder.grund.person": "henkilö ei näy kokonaan",
+    "koerperbilder.grund.daten": "Frigaten tapahtumatiedot puuttuvat",
+    "koerperbilder.grund.pose": "kehon asentojen malli puuttuu",
+    "koerperbilder.grund.speicher": "muisti ei riitä",
+    "koerperbilder.grund.technik": "käsittely epäonnistui",
+    "koerperbilder.grund.ablage": "kuvaa ei voitu tallentaa",
 }

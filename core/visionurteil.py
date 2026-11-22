@@ -65,7 +65,6 @@ import os
 import re
 import time
 
-from core import personlive as _plv
 from core import vision as _vis
 from core import visiongalerie as _vg
 from core import logbuch as _logbuch
@@ -82,6 +81,26 @@ ZAEHLER_DATEI = "vision_zaehler.json"
 # demselben Grund gewaehlt: drei Einzelfaelle ueber Wochen sind keine Serie.
 AUSFALL_AB = 3
 AUSFALL_COOLDOWN_S = 6 * 3600
+
+
+# --- Tor (Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW6 Punkt 4, Entscheid V „Vision parken") --------------
+# Der Kontroll-Speicher, die Galerien und das Modell, aus denen dieses Modul liest, lagen unter personlern/ und kamen aus
+# core/personlive und core/personmodell; beide liegen seit KW6 im Archiv des Projekts (archiv/koerperweg_alt/). Zwei
+# Aufrufer liegen ausserhalb des Vision-Schalters (der Start ueber vision_waisen_start und jede Today-Seite ueber
+# protokoll_karte). Deshalb steht das Tor hier: ohne core.vision.vision_verfuegbar() geben die Lese- und
+# Schreibstellen sofort leer bzw. 0 zurueck, und der Zugriff auf das alte Modul ist lazy (_alt). Er wird erst wieder
+# erreichbar, wenn Vision auf den neuen Koerperweg umgebaut ist; bis dahin endet er in einem ImportError.
+def _offen():
+    """Ob Vision laufen darf (das Tor des Moduls).
+    -> bool"""
+    return _vis.vision_verfuegbar()[0]
+
+
+def _alt():
+    """Das Modul des alten Kontroll-Speichers, nur hinter dem Tor geladen.
+    -> Modul core.personlive"""
+    from core import personlive                    # noqa: PLC0415  seit KW6 archiviert, nur hinter dem Tor
+    return personlive
 
 
 # ------------------------------------------------------------- Kandidatenbilder
@@ -138,13 +157,17 @@ def kandidaten(data_dir, pass_key, n=1, jetzt=None, sammeln=None, min_hoehe=None
     gefuellt, wenn nichts uebrig bleibt — er ist der Text, den die Anzeige
     zeigt."""
     mindest = int(min_hoehe or MIN_HOEHE_PX)
-    d = _plv.kontrolle_dir(data_dir, pass_key)
     aus, verworfen = [], {"kein_bild": 0, "zu_klein": 0, "unlesbar": 0}
     eingestuft = {"bekannt": 0, "unbekannt": 0}
+    if not _offen():
+        return {"bilder": [], "geprueft": 0, "verworfen": verworfen, "eingestuft": eingestuft,
+                "grund": _vis.vision_verfuegbar()[1], "grund_art": "", "gesamt": 0}
+    plv = _alt()
+    d = plv.kontrolle_dir(data_dir, pass_key)
     zeilen = []
     if d:
         try:
-            with open(os.path.join(d, _plv.KONTROLLE_PROTOKOLL)) as f:
+            with open(os.path.join(d, plv.KONTROLLE_PROTOKOLL)) as f:
                 for z in f:
                     try:
                         zeilen.append(json.loads(z))
@@ -321,9 +344,10 @@ def gitter_ablegen(data_dir, pass_key, lauf_id, b64):
 
     Reine Ablage wie `personlive.kontrolle_ablegen`: ein Fehler bleibt still und
     aendert kein Urteil. Rueckgabe: Dateiname oder None."""
-    if not b64:
+    if not b64 or not _offen():
         return None
-    d = _plv.kontrolle_dir(data_dir, pass_key)
+    plv = _alt()
+    d = plv.kontrolle_dir(data_dir, pass_key)
     if d is None or not _LAUF_RE.fullmatch(str(lauf_id)):
         return None
     import base64
@@ -336,7 +360,7 @@ def gitter_ablegen(data_dir, pass_key, lauf_id, b64):
     # Ablage-Semantik); die Abschluss-Buchung via `gitter_datei` bleibt.
     try:
         os.makedirs(d, exist_ok=True)
-        bp = os.path.join(d, _plv.GITTER_BUCHUNG)
+        bp = os.path.join(d, plv.GITTER_BUCHUNG)
         try:
             with open(bp) as f:
                 buch = json.load(f)
@@ -369,8 +393,10 @@ def zentroide(data_dir):
     (personlern/modell/embeddings.npz — seit .203 je nach Modell dinov2 oder
     omz0277, immer derselbe Raum wie das Live-Urteil). Leeres dict, wenn es
     kein Modell gibt."""
+    if not _offen():
+        return {}
     import numpy as np
-    from core.personmodell import modell_dir
+    from core.personmodell import modell_dir       # noqa: PLC0415  seit KW6 archiviert, nur hinter dem Tor
     p = os.path.join(modell_dir(data_dir), "embeddings.npz")
     if not os.path.isfile(p):
         return {}
@@ -411,12 +437,14 @@ def reihenfolge(data_dir, bild_rgb, personen, einbetten=None):
     (Mittel aus einem Wert).
 
     Rueckgabe: [(person, aehnlichkeit|None), ...]"""
+    if not _offen():
+        return [(p, None) for p in sorted(personen)]
     import numpy as np
     zs = zentroide(data_dir)
     # data_dir mitgeben: das Embedding muss im Raum des AKTIVEN Modells
     # rechnen (seit .203 traegt svm.pkl das Backbone; embeddings.npz und
     # Live-Urteil wechseln beim Re-Training gemeinsam).
-    fn = einbetten or (lambda b: _plv.einbetten(b, data_dir))
+    fn = einbetten or (lambda b: _alt().einbetten(b, data_dir))
     bilder = (list(bild_rgb) if isinstance(bild_rgb, (list, tuple))
               else [bild_rgb])
     embs = [fn(b) for b in bilder if b is not None]
@@ -440,8 +468,10 @@ def zuletzt_bestaetigt(data_dir, max_passe=20):
     Vision-Pfades — kein fremdes Modell, keine Einbettung, nur das eigene
     Protokoll. Bewusst nur die juengsten Paesse: das ist eine Reihenfolge-Frage,
     keine Statistik."""
+    if not _offen():
+        return None
     try:
-        ordner = sorted(os.listdir(_plv.kontrolle_dir(data_dir)), reverse=True)
+        ordner = sorted(os.listdir(_alt().kontrolle_dir(data_dir)), reverse=True)
     except OSError:
         _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
@@ -1083,12 +1113,15 @@ def protokoll_schreiben(data_dir, pass_key, zeile):
     (§8) — kein zweites Aufbewahrungsregime: sie verfaellt mit dem Pass-Ordner
     ueber denselben Trim (core.personlive.TRIM_TAGE) und ueberlebt die
     Waisen-Raeumung ueber PASS_PROTOKOLLE."""
-    d = _plv.kontrolle_dir(data_dir, pass_key)
+    if not _offen():
+        return None
+    plv = _alt()
+    d = plv.kontrolle_dir(data_dir, pass_key)
     if d is None:
         return None
     try:
         os.makedirs(d, exist_ok=True)
-        p = os.path.join(d, _plv.VISION_PROTOKOLL)
+        p = os.path.join(d, plv.VISION_PROTOKOLL)
         with open(p, "a") as f:
             f.write(json.dumps(zeile, ensure_ascii=False) + "\n")
             f.flush()
@@ -1105,12 +1138,15 @@ def protokoll_schreiben(data_dir, pass_key, zeile):
 
 
 def protokoll_lesen(data_dir, pass_key):
-    d = _plv.kontrolle_dir(data_dir, pass_key)
     aus = []
+    if not _offen():
+        return aus
+    plv = _alt()
+    d = plv.kontrolle_dir(data_dir, pass_key)
     if d is None:
         return aus
     try:
-        with open(os.path.join(d, _plv.VISION_PROTOKOLL)) as f:
+        with open(os.path.join(d, plv.VISION_PROTOKOLL)) as f:
             for z in f:
                 try:
                     aus.append(json.loads(z))
@@ -1215,8 +1251,10 @@ def waisen_schliessen(data_dir, lebt=None):
     Parameter leer.
 
     Rueckgabe: Liste der geschlossenen pass_keys."""
+    if not _offen():
+        return []
     try:
-        ordner = sorted(os.listdir(_plv.kontrolle_dir(data_dir)))
+        ordner = sorted(os.listdir(_alt().kontrolle_dir(data_dir)))
     except OSError:
         _logbuch.swallowed(_log, _logbuch.WARNING, "returning []")
         return []
@@ -1285,8 +1323,10 @@ def protokoll_karte(data_dir, max_passe=80):
     und startet nichts. Erzaehl-Schritte gehoeren NICHT auf die Karte: dort
     steht das Ergebnis, nicht der Weg dorthin."""
     karte = {}
+    if not _offen():
+        return karte
     try:
-        ordner = sorted(os.listdir(_plv.kontrolle_dir(data_dir)), reverse=True)
+        ordner = sorted(os.listdir(_alt().kontrolle_dir(data_dir)), reverse=True)
     except OSError:
         _logbuch.swallowed(_log, _logbuch.WARNING, "returning karte")
         return karte

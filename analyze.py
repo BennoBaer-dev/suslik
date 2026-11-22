@@ -19,7 +19,7 @@ Aufruf:
 
 Backend-Wahl via face_audit.resolve_backend/core.registry (alle kinds: cpu, openvino, cuda, migraphx).
 """
-import os, sys, json, socket, time, urllib.request, argparse, tempfile
+import os, sys, json, socket, argparse, tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from face_audit import Embedder, fetch_image, ist_fehldetektion
 import numpy as np, cv2
@@ -96,19 +96,6 @@ ap.add_argument("--fd-front-min", type=float, default=0.85)
 ap.add_argument("--fd-sharp-min", type=float, default=1500.0)
 ap.add_argument("--fd-det-max", type=float, default=0.70)
 ap.add_argument("--det-thresh", type=float, default=0.5)
-# Z5 (konzept_frames.md v2 §4): der KOERPER-Abnehmer faehrt im selben
-# Frame-Lauf mit — hier faellt der Doppel-Decode. Beide Werte sind
-# JOB-PARAMETER und keine Selbst-Auskunft: ob der Koerper-Strang scharf ist,
-# weiss der Dienst (personmodell-Status) und entscheidet es EINMAL vor dem
-# Job; wie viel Speicher der Worker noch hat, weiss ebenfalls nur er
-# (worker_rss_max_mb). Ohne --koerper laeuft alles exakt wie bis 0.1.0.151.
-ap.add_argument("--koerper", action="store_true",
-                help="Koerper-Bestbilder im selben Frame-Lauf mitziehen "
-                     "(nur wenn der Koerper-Strang scharf geschaltet ist)")
-ap.add_argument("--koerper-rss-max-mb", type=float, default=0.0,
-                help="RSS-Deckel dieses Prozesses in MB (worker_rss_max_mb). "
-                     "Der Koerper-Puffer darf nur in den Kopfraum darunter "
-                     "(0 = unbekannt -> es wird NICHT gepuffert; §5 'RAM')")
 a = ap.parse_args()
 
 # Stimm-Latten aufloesen (EINE Quelle core/guete): nicht gesetzt (<0) ->
@@ -322,111 +309,6 @@ def ctx_crop(frame, x1, y1, x2, y2, faktor=3.0, max_kante=560, ziel_ar=4 / 3):
     a1, b1 = max(0, int(cx - w / 2)), max(0, int(cy - h / 2))
     a2, b2 = min(W, int(cx + w / 2)), min(H, int(cy + h / 2))
     return frame[b1:b2, a1:a2].copy()
-
-
-def koerper_abnehmer(eid):
-    """Der Koerper-Abnehmer fuer DIESES Event, oder None (dann bleibt es bei
-    der heutigen Kette im Dienst-Thread — Notnagel unveraendert).
-
-    Der Import haengt an core.personlauf._proto: derselbe Einstieg, den auch
-    der Dienst nimmt (sys.path auf prototyp/ + FRIGATE-ENV-Bruecke), damit im
-    Container die gestagte Kette greift und es keine zweite Pfad-Wahrheit gibt.
-    Rueckgabe (Koerper, Abnehmer, EVENT_ZEITWACHE_S)."""
-    from core.personlauf import _proto, EVENT_ZEITWACHE_S
-    from worker import _rss_mb, _cgroup_frei_mb   # EINE Quelle je Messgroesse
-    _proto()
-    import pfad_snapshots
-    # Kopfraum JETZT, nicht aus zweiter Hand: dieses Skript laeuft IM Worker
-    # (runpy), also ist sein eigener VmRSS der wahre Stand — ein vom Dienst
-    # mitgegebener Messwert waere immer der von VORHIN (und bei einem frisch
-    # gestarteten Worker gar keiner).
-    rss = _rss_mb()                    # -1 = /proc nicht lesbar
-    budget = (a.koerper_rss_max_mb - rss) if rss > 0 else 0.0
-    # Zweiter Deckel (Fix 10.08.): die CGROUP-Grenze des Containers. Das
-    # Budget oben ist nur POLITIK (worker_rss_max_mb minus eigener VmRSS,
-    # die Neustart-Schwelle des Dienstes) — /proc/meminfo stand hier nie im
-    # Spiel (im Container zeigt es den Wirt und waere eine Luege). Was den
-    # Prozess aber wirklich toetet, ist die cgroup: bei Installationen mit
-    # Docker-Memory-Limit darf der Puffer auch den REALEN Rest nicht
-    # reissen. -1 = keine Grenze lesbar (Prod 10.08.: memory.max='max')
-    # -> es bleibt beim Politik-Budget, geraten wird nichts.
-    cg = _cgroup_frei_mb()
-    if cg >= 0:
-        budget = min(budget, float(cg))
-    k = pfad_snapshots.Koerper(eid, ram_budget_mb=budget)
-    # Die zwei Frigate-Artefakte JETZT holen: ohne path_data/box gibt es
-    # keinen Koerper-Abnehmer, und dann soll der Verteiler auch nichts von
-    # ihm wissen (eine Absage in start() waere teurer und lauter als noetig).
-    k.vorbereiten()
-    return k, k.abnehmer(zeitwache_s=EVENT_ZEITWACHE_S), EVENT_ZEITWACHE_S
-
-
-def koerper_ablegen(k, wache, outdir, eid, rest_s):
-    """UEBERGABE an den Dienst: Top-K-Crops + koerper.json in event_dir.
-
-    Der Verteiler liefert die Frames, die INFERENZ bleibt verteilt (§3.2 'Wo
-    der Lauf wohnt'): DINOv2/SVM/PoseWache laufen weiter im Daemon-Thread des
-    Dienstes (core/personlive), er holt sich hier nur die Bilder ab, statt
-    denselben Clip ein zweites Mal zu dekodieren.
-
-    PNG, nicht JPEG: diese Pixel gehen in die Erkennung. Eine verlustbehaftete
-    Zwischenstufe waere eine stille Urteilsaenderung (Train/Serve-Bruch, den
-    .148 gerade geschlossen hat) — die JPEG-Ablage im Treffer-Buch passiert
-    erst NACH dem Urteil.
-
-    koerper.json ist der ABSCHLUSS-Marker und wird atomar zuletzt geschrieben:
-    der Dienst liest nie eine halb gelegte Uebergabe. 'ausfall' darin heisst
-    'die Kette lief hier NICHT zu Ende' -> der Dienst faehrt seinen eigenen
-    Weg wie bisher; 'top': [] heisst 'sie lief und fand nichts' -> genau wie
-    heute uebernimmt der Snapshot-Notnagel."""
-    import concurrent.futures as cf
-    for alt in os.listdir(outdir):               # Reste eines Vorlaufs (Nachhol)
-        if alt.startswith("koerper_") and alt.endswith(".png"):
-            os.unlink(os.path.join(outdir, alt))
-    ziel = os.path.join(outdir, "koerper.json")
-    if os.path.exists(ziel):
-        os.unlink(ziel)
-    top, info, ausfall = None, "", None
-    if wache is None or wache.abgeworfen:
-        ausfall = (wache.ausfall if wache is not None else "kein Lauf")
-    else:
-        pool = cf.ThreadPoolExecutor(max_workers=1)
-        try:                                     # Zeitwache wie im Dienst:
-            fut = pool.submit(k.auswerten)       # haengt die Auswertung, ist
-            top, info = fut.result(timeout=max(1.0, rest_s))   # sie ein Ausfall
-        except Exception as ex:                  # noqa: BLE001
-            ausfall = f"{type(ex).__name__}: {str(ex)[:120]}"
-        finally:
-            pool.shutdown(wait=False)
-    dateien = []
-    for n, (score, fi, crop, hoehe) in enumerate(top or []):
-        fn = f"koerper_{n}.png"
-        if cv2.imwrite(os.path.join(outdir, fn), crop):
-            dateien.append({"datei": fn, "score": float(score),
-                            "frame_i": int(fi), "hoehe": int(hoehe)})
-    daten = {"eid": eid, "info": info, "top": dateien,
-             "puffer_mb": round(k.puffer_mb, 1),
-             # GEHALTENE Samples (Nachbesserung F6): vorher stand hier die
-             # GELIEFERTE Zahl der Wache (bei Degradation 166), waehrend
-             # puffer_mb die GEHALTENE abbildet (80 x 23,7 MB) — die
-             # KOERPER-Zeile unten widersprach sich damit selbst. Die
-             # gelieferte Zahl bleibt ueber 'degradiert' ("166->80") und die
-             # verifyd-worker-Telemetrie sichtbar.
-             "samples": int(getattr(k, "gehalten",
-                                    wache.samples if wache is not None else 0)),
-             # RAM-Gate-Degradation (Fix 10.08.): sichtbar machen, wenn der
-             # Puffer auf das Budget heruntergeduennt wurde ("166->80").
-             **({"degradiert": k.degradiert} if getattr(k, "degradiert", None) else {}),
-             **({"ausfall": ausfall} if ausfall else {})}
-    tmp = ziel + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(daten, f, ensure_ascii=False)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, ziel)
-    print(f"KOERPER: {len(dateien)} Crops, {daten['samples']} Samples, "
-          f"Puffer {daten['puffer_mb']:.0f} MB"
-          + (f", AUSFALL {ausfall}" if ausfall else f" — {info}"))
 
 
 summary = {}   # label -> {person -> best record}
@@ -669,21 +551,6 @@ for k, eid in enumerate(a.eids):
                         if fremd_kand is None or guete > fremd_kand[0]:
                             fremd_kand = (guete, {**kd, "person": None, "score": round(bester, 3)})
 
-        # Z5: der KOERPER-Abnehmer faehrt im selben Lauf mit — nur wenn der
-        # Dienst ihn scharf gemeldet hat UND es ein echtes Frigate-Event ist
-        # (ein lokaler Video-Pfad hat keine path_data). Jeder Fehlschlag hier
-        # ist ein Verzicht, nie ein Abbruch: dann bleibt es fuer dieses Event
-        # beim heutigen Weg (eigener Lauf im Dienst-Thread).
-        koerper = koerper_ab = None
-        koerper_wache_s = 0.0
-        if a.koerper and pin_eid:
-            t_koerper = time.monotonic()
-            try:
-                koerper, koerper_ab, koerper_wache_s = koerper_abnehmer(eid)
-            except Exception as ex:                       # noqa: BLE001
-                koerper = koerper_ab = None
-                print(f"KOERPER: kein Abnehmer ({type(ex).__name__}: "
-                      f"{str(ex)[:120]}) — der Dienst faehrt seinen eigenen Weg")
         # Z4: EIN Lauf, die Vertragsfelder stehen beim Abnehmer, keins steckt
         # im Verteiler — er soll nie fuer uns raten (§3.2).
         # `frames` traegt danach dieselben Wache-Namen wie frueher der
@@ -701,8 +568,7 @@ for k, eid in enumerate(a.eids):
                                        # Job-Timeout des Aufrufers (verifyd.py:548).
                                        # Ein neuer Deckel hier waere eine
                                        # Verhaltensaenderung, kein Umzug.
-            start=clip_start, frame=gesicht)]
-            + ([koerper_ab] if koerper_ab is not None else []))
+            start=clip_start, frame=gesicht)])
         frames = wachen["gesicht"]
     finally:
         # Nutzungsende des Clips. Keine Pin-Waise hinterlassen: ein
@@ -710,17 +576,6 @@ for k, eid in enumerate(a.eids):
         # Datei ab (Size-Cap kaeme nie mehr an sie heran).
         if pin_eid:
             clipcache.frei(pin_eid)
-    if koerper is not None:
-        # Sofort nach dem Lauf: der Frame-Puffer ist das teuerste Stueck RAM
-        # im Prozess und wird in auswerten() losgelassen. Ein Fehler hier darf
-        # das Gesichtsurteil nie beruehren — es haengt an results.jsonl unten.
-        try:
-            koerper_ablegen(koerper, wachen.get(koerper.NAME), outdir, eid,
-                            koerper_wache_s - (time.monotonic() - t_koerper))
-        except Exception as ex:                           # noqa: BLE001
-            print(f"KOERPER: Uebergabe gescheitert ({type(ex).__name__}: "
-                  f"{str(ex)[:120]}) — der Dienst faehrt seinen eigenen Weg")
-        koerper = None
     # W1-Wache: unvollstaendig gelesene Clips LAUT machen (vorher: stiller Abbruch, Urteil
     # aus dem lesbaren Anfang). VOR dem Ergebnisblock ausgeben — qs S5 schneidet mit
     # tail -25 das ENDE des Outputs, die Ergebnis-/max-Zeilen muessen dort bleiben (R4).

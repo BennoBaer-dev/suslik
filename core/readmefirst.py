@@ -55,8 +55,14 @@ KONTAKT = "suslik_dev@posteo.de"
 # DE vom Eigentuemer abgenommen (Befehlsbuch 04.10.2026 17:50:29), ES, FR, IT
 # und FI uebersetzt nach EN (Bauplan analysen/bauplan_pruefmaterial_k3.md,
 # Stufe PM6).
+# "person" direkt dahinter: die neu gebaute Personenerkennung, Ziel des Links im
+# Box-Eintrag 0.1.1.110. Wortlaut DE vom Eigentuemer abgenommen 21.11.2026
+# 20:51:52 („Passt“), EN von der Hauptsession gegengelesen 22.11.2026, ES, FR, IT
+# und FI uebersetzt nach EN (Bauplan analysen/bauplan_koerperweg_neu.md, Stufe
+# KW15).
 KAPITEL = (
     ("neu", "readme.neu"),
+    ("person", "readme.person"),
     ("generell", "readme.generell"),
     ("lernen", "readme.lernen"),
     # Bauplan analysen/bauplan_mqtt_melden.md, Stufe MM4: welche MQTT-Meldungen der Live-Waechter wann sendet.

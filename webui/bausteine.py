@@ -312,7 +312,7 @@ def lauffluss_stil():
     Einstellungs-Popup, Zuweisungs-Flaeche, Verwerfen-Knopf.
 
     Es gab dieses Blatt bis 20.08. nur inline in routes/lernwizard.py. Als der
-    Koerper-Lernlauf (/personlauf) auf dasselbe Design gehoben wurde, waere die
+    Koerper-Lernlauf (/personlauf, seit Stufe KW6 ausgebaut) auf dasselbe Design gehoben wurde, waere die
     Alternative ein zweites, wortgleiches CSS-Blatt gewesen — genau das
     verstreute Zweit-Literal, das die K3-Regel verbietet (eine Feinjustage am
     einen Blatt liesse das andere still zuruecklaufen). Deshalb wohnt es hier:

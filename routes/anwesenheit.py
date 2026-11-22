@@ -7,6 +7,9 @@ Was die Seite zeigt (User-Auftrag 02.09., woertlich "wie die Partitionierung
 von Platten"): eine Zeile je Person, dahinter der Tag in Viertelstunden-
 Zellen. Rot = in dieser Viertelstunde bestaetigt da (Worker-Urteil ODER
 Live-Waechter, nie doppelt — der Leser dedupliziert auf Person+Zelle).
+Seit Stufe KW14 (Bauplan analysen/bauplan_koerperweg_neu.md) heller Rot mit
+rotem Rand = "ueber Personenerkennung": die Person traegt in der Viertelstunde
+nur Koerper-Marken (Schalter koerper_meldet_anwesenheit); Rot gewinnt.
 Gruen = der Dienst lief und hat niemanden bestaetigt. WEISS = der Dienst lief
 in dieser Viertelstunde nicht — und AUSSCHLIESSLICH das.
 
@@ -24,9 +27,11 @@ Luecken Y). Sie sitzt auf GRUEN, weil sie genau dessen Aussage abschwaecht
 schwaecht sie nichts ab, dort war die Person nachweislich da.
 
 Die Semantik steht im Kopf von core/anwesenheit.py; hier gibt es GENAU EINE
-Funktion fuer die Farbe (zustand) und GENAU EINE fuer die Markierung
-(teil_luecke), die Zellen, Nachtzellen und Legende gemeinsam benutzen — die
-Today-Miniatur (routes/heute.anw_stunden) benutzt dieselben.
+Funktion fuer die Farbe (zustand, vier Zustaende in ZUSTAENDE) und GENAU EINE
+fuer die Markierung (teil_luecke), die Zellen, Nachtzellen und Legende
+gemeinsam benutzen — die Today-Miniatur (routes/heute.anw_stunden) benutzt
+dieselben. Eine rote Zelle fuehrt nur auf Kennungen bestaetigter Quellen
+(eids), eine Koerper-Zelle auf ihre eigenen (eids_koerper).
 
 Tag und Nacht (Konzept §4): das Tagesfenster (fenster(cfg): Perzentil-
 Automatik ueber 14 Tage, Werkswert unter 20 Marken, oder feste Vorgabe)
@@ -64,7 +69,7 @@ _log = _logbuch.logger(__name__)
 # (Zellen, Nachtzellen, Legende, Gate-Probe) — QS-Ebenen-Regel: fachliche
 # Aufzaehlungen nie als Streu-Literal.
 SICHTEN = ("alle", "kamera", "area")
-ZUSTAENDE = ("da", "weg", "leer")
+ZUSTAENDE = ("da", "koerper", "weg", "leer")
 NACHT_JE_STUNDE = 4          # Viertelstunden je Nachtzelle
 NACHT_LABEL_AB = 5           # Nachtblock traegt sein Label erst ab so vielen Stunden
 DATUM_FMT = "%Y-%m-%d"
@@ -109,14 +114,18 @@ def sicht_waehlen(kameras, areas, kamera_par, area_par):
 def zustand(zelle, person_eintrag):
     """DIE Renderer-Regel (core/anwesenheit Kopfkommentar, neu gefasst .519):
     Person -> da (gewinnt immer, auch ohne Lauf-Marke); Lauf -> weg; sonst
-    leer. zelle = tag_lesen()["zellen"][c], person_eintrag = der Eintrag
-    der Person fuer diese Zelle oder None.
+    leer. Seit Stufe KW14: ein Eintrag NUR mit der Koerper-Quelle -> koerper;
+    eine bestaetigte Quelle (Gesicht, Live) daneben macht ihn zu da, ein
+    Eintrag ganz ohne Quelle bleibt da. zelle = tag_lesen()["zellen"][c],
+    person_eintrag = der Eintrag der Person fuer diese Zelle oder None.
 
     Die FARBE haengt seit .519 an genau EINER Groesse — der systemweiten
     Lauf-Marke. Luecken faerben nicht mehr mit (teil_luecke); damit kann
     dieselbe Viertelstunde in der Alle-Sicht nicht mehr anders aussehen als
     in einer Kamera-Sicht, und Weiss heisst ueberall dasselbe."""
     if person_eintrag:
+        if set(person_eintrag.get("quellen") or ()) == {_anw.QUELLE_KOERPER}:
+            return "koerper"
         return "da"
     if zelle and zelle.get("lauf"):
         return "weg"
@@ -147,9 +156,12 @@ def nacht_zustand(zustaende):
     """Vier Viertelstunden -> eine Nachtzelle: rot, sobald eine rot ist;
     gruen nur, wenn ALLE gruen sind; sonst leer (eine Viertelstunde ohne
     Lauf-Marke macht die Stunde zur "lief nicht"-Stunde — ehrlicher als
-    gruen)."""
+    gruen). Stufe KW14: ohne rote Viertelstunde, aber mit einer "koerper"
+    -> koerper."""
     if "da" in zustaende:
         return "da"
+    if "koerper" in zustaende:
+        return "koerper"
     if zustaende and all(z == "weg" for z in zustaende):
         return "weg"
     return "leer"
@@ -203,12 +215,17 @@ def _quelle_text(quellen):
     # Statisches Mapping auf den QUELLEN-Vertrag von core/anwesenheit (kein
     # gebauter Schluessel; der assert haelt beide deckungsgleich).
     texte = {"worker": t("anwesenheit.quelle_worker"),
-             "live": t("anwesenheit.quelle_live")}
+             "live": t("anwesenheit.quelle_live"),
+             "koerper": t("anwesenheit.quelle_koerper")}
     assert set(texte) == set(_anw.QUELLEN)
     q = set(quellen or ())
-    if q >= set(_anw.QUELLEN):
-        return t("anwesenheit.quelle_beide")
-    return ", ".join(texte[x] for x in _anw.QUELLEN if x in q) or "?"
+    if q >= set(_anw.QUELLEN_BESTAETIGT):
+        teile = [t("anwesenheit.quelle_beide")]
+    else:
+        teile = [texte[x] for x in _anw.QUELLEN_BESTAETIGT if x in q]
+    if _anw.QUELLE_KOERPER in q:          # Stufe KW14: die Personenerkennung mit Komma dahinter
+        teile.append(texte[_anw.QUELLE_KOERPER])
+    return ", ".join(teile) or "?"
 
 
 def _zelle_html(person, art, wert, z, eintrag, datum, heute, sicht,
@@ -230,11 +247,12 @@ def _zelle_html(person, art, wert, z, eintrag, datum, heute, sicht,
     zellen = _zellen_der_spalte(art, wert)
     if jetzt_zelle is not None and jetzt_zelle in zellen:
         kl.append("anw-jetzt")
-    if z == "da":
+    if z in ("da", "koerper"):
         tip = t("anwesenheit.tip_da", zeit=zeit,
                 kameras=", ".join(eintrag["kameras"]) or "?",
                 quelle=_quelle_text(eintrag["quellen"]))
-        eids = eintrag["eids"]
+        # Stufe KW14: rot fuehrt nur auf bestaetigte Kennungen, die Koerper-Zelle auf ihre eigenen
+        eids = eintrag["eids"] if z == "da" else eintrag["eids_koerper"]
         if eids:
             href = f"/pass/{urllib.parse.quote(eids[0])}"
         else:
@@ -261,23 +279,26 @@ def _zelle_html(person, art, wert, z, eintrag, datum, heute, sicht,
 def _zeile_html(person, je_zelle, zellen, sp, datum, heute, sicht, jetzt_zelle):
     """Eine Personen-Zeile ueber die feste Spaltenliste. Zellen NACH jetzt
     (nur am laufenden Tag) bleiben leer und heissen "noch nicht" — nicht
-    "keine Aussage"."""
-    teile = []
+    "keine Aussage". -> (HTML, ob eine Zelle im Zustand koerper gezeichnet
+    wurde; Stufe KW14, fuer die Legende)"""
+    teile, mit_koerper = [], False
     for art, wert in sp:
         cs = _zellen_der_spalte(art, wert)
         eintraege = [je_zelle.get(c) for c in cs]
         zs = [zustand(zellen.get(c), e) for c, e in zip(cs, eintraege)]
         z = zs[0] if art == "t" else nacht_zustand(zs)
         vergangen = jetzt_zelle is None or cs[0] <= jetzt_zelle
-        if z != "da" and not vergangen:
+        if z not in ("da", "koerper") and not vergangen:
             z = "leer"
+        mit_koerper = mit_koerper or z == "koerper"
         eintrag = None
-        if z == "da":
+        if z in ("da", "koerper"):
             # Nachtzelle: die vier Eintraege zu EINEM Tooltip/Klickziel
             # vereinigen (Set-Semantik wie im Leser).
             eintrag = {"quellen": sorted({q for e in eintraege if e for q in e["quellen"]}),
                        "kameras": sorted({k for e in eintraege if e for k in e["kameras"]}),
-                       "eids": sorted({x for e in eintraege if e for x in e["eids"]})}
+                       "eids": sorted({x for e in eintraege if e for x in e["eids"]}),
+                       "eids_koerper": sorted({x for e in eintraege if e for x in e["eids_koerper"]})}
         # Teil-Luecke: fuer die Nachtzelle gilt sie, sobald EINE der vier
         # Viertelstunden sie traegt — dieselbe "eine reicht"-Regel, mit der
         # nacht_zustand rot faerbt.
@@ -287,7 +308,7 @@ def _zeile_html(person, je_zelle, zellen, sp, datum, heute, sicht, jetzt_zelle):
         teile.append(_zelle_html(person, art, wert, z, eintrag, datum, heute,
                                  sicht, jetzt_zelle, vergangen, teil))
     return (f'<div class="anw-r"><div class="anw-nm" title="{html.escape(person, quote=True)}">'
-            f'{html.escape(person)}</div><div class="anw-l">{"".join(teile)}</div></div>')
+            f'{html.escape(person)}</div><div class="anw-l">{"".join(teile)}</div></div>'), mit_koerper
 
 
 def _kopf_html(sp):
@@ -407,18 +428,21 @@ def _seit_html(aeltester):
             .replace("\x00", f'<span class="anw-datum">{html.escape(aeltester)}</span>'))
 
 
-def _legende():
+def _legende(mit_koerper):
     """Legende + der EINE klarstellende Satz darunter. Der Satz ist kein
     Schmuck: bis .518 hiess Weiss zweierlei, und der alte Legendentext
     ("System lief nicht ODER hat nicht hingesehen") war genau die Stelle, an
     der die Seite ihre eigene Doppeldeutigkeit zugab. Jetzt sagt die Legende
-    die eine Bedeutung, und der Satz sagt sie noch einmal ausdruecklich."""
+    die eine Bedeutung, und der Satz sagt sie noch einmal ausdruecklich.
+    Stufe KW14: den Eintrag "ueber Personenerkennung" nur, wenn die Seite eine
+    Zelle in diesem Zustand gezeichnet hat (mit_koerper)."""
     texte = {"da": t("anwesenheit.legende_da"),
+             "koerper": t("heute.pass.via_koerper"),
              "weg": t("anwesenheit.legende_weg"),
              "leer": t("anwesenheit.legende_leer")}
     assert set(texte) == set(ZUSTAENDE)
     teile = "".join(f'<span><span class="anw-z anw-{z}" aria-hidden="true"></span>{html.escape(texte[z])}</span>'
-                    for z in ZUSTAENDE)
+                    for z in ZUSTAENDE if z != "koerper" or mit_koerper)
     teile += (f'<span><span class="anw-z anw-weg anw-teil" aria-hidden="true"></span>'
               f'{html.escape(t("anwesenheit.legende_teil"))}</span>')
     teile += (f'<span><span class="anw-z anw-leer anw-jetzt" aria-hidden="true"></span>'
@@ -466,6 +490,8 @@ def render(daten, datum, heute, fenster, personen, kameras, areas, sicht,
                                    t("anwesenheit.leer_personen_hinweis"))
     zeilen = [_zeile_html(p, je_person[p], zellen, sp, datum, heute, sicht, jetzt_zelle)
               for p in gesehen]
+    mit_koerper = any(k for _h, k in zeilen)
+    zeilen = [h for h, _k in zeilen]
     if not zeilen:
         # Niemand rot: EINE Systemzeile statt einer Leiste je Person (Prod-
         # Sicht 02.09.: 20 identische gruene Zeilen in einer Kamera-Sicht
@@ -473,15 +499,15 @@ def render(daten, datum, heute, fenster, personen, kameras, areas, sicht,
         # IST die Aussage — sie steht einmal da, die Nie-Gesehenen bleiben
         # Namensliste mit Umschalter wie sonst.
         zeilen = [_zeile_html(t("anwesenheit.zeile_niemand"), {}, zellen, sp,
-                              datum, heute, sicht, jetzt_zelle)]
-    inhalt += f'<div class="anw-wrap">{_kopf_html(sp)}{"".join(zeilen)}</div>' + _legende()
+                              datum, heute, sicht, jetzt_zelle)[0]]
+    inhalt += f'<div class="anw-wrap">{_kopf_html(sp)}{"".join(zeilen)}</div>' + _legende(mit_koerper)
     if daten.get("kaputt") or daten.get("gekappt"):
         inhalt += (f'<p class="dim anw-zaehler">'
                    f'{html.escape(t("anwesenheit.zaehler", zeilen=daten.get("zeilen", 0), kaputt=daten.get("kaputt", 0)))}'
                    + (f' {html.escape(t("anwesenheit.gekappt"))}' if daten.get("gekappt") else "")
                    + '</p>')
     if nie:
-        leisten = "".join(_zeile_html(p, {}, zellen, sp, datum, heute, sicht, jetzt_zelle)
+        leisten = "".join(_zeile_html(p, {}, zellen, sp, datum, heute, sicht, jetzt_zelle)[0]
                           for p in nie)
         inhalt += (f'<p class="anw-nie">{html.escape(t("anwesenheit.nie", namen=", ".join(nie)))}</p>'
                    f'<details class="anw-alle"><summary>{html.escape(t("anwesenheit.alle_leisten"))}</summary>'

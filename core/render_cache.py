@@ -96,17 +96,19 @@ def _sources(cfg, log_path, day, gt_path):
     """Die Dateien, aus denen /heute baut (E4, die eine Liste), mit den Pfaden aus den Modulen der Quellen.
     -> Tupel (Name, Pfad)"""
     import anlernen
-    from core import anwesenheit, livewache, personlive, personmodell, unbekanntpool
+    from core import anwesenheit, koerperweg, livewache, unbekanntpool
     from core.refquelle import basis
     data = cfg["data_dir"]
     live = os.path.join(data, "live", livewache.MELDE_PROTOKOLL)
+    # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW6 (Nachtrag): die Treffer-Datei des neuen Koerperwegs (KW5)
+    # statt der alten personlern/live_treffer.jsonl — sonst saehe /heute einen neuen Koerper-Namen erst beim naechsten
+    # anderen Neubau.
     return (("akte", log_path), ("katalog", basis.paths(cfg)["catalog"]),
             ("unbekannte", unbekanntpool.pool_path(data)), ("gesichter", anlernen.GES_PATH),
             ("ground_truth", gt_path), ("meldungen", live), ("meldungen.1", live + ".1"),
             ("anwesenheit", anwesenheit.tag_pfad(cfg, day)),
             ("fenster", os.path.join(anwesenheit.ordner(cfg), anwesenheit.FENSTER_DATEI)),
-            ("live_treffer", personlive._treffer_log(data)),
-            ("modell_status", os.path.join(personmodell.modell_dir(data), "status.json")))
+            ("koerper_treffer", os.path.join(data, koerperweg.TREFFER_DATEI)))
 
 
 def _sources_presence(cfg, log_path, day):

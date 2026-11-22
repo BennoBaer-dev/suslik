@@ -87,17 +87,11 @@ def _nav():
                                   ("/lernen", t("nav.lernen"))]),
         # Person als EIGENER Hauptbereich neben People (User 04.08. abend):
         # People zeigt die GESICHTER, Person die KOERPER-Bilder je Person.
-        # Z8 (konzept_frames.md §7): "Judged images" = Kontroll-Speicher der
-        # beurteilten Bilder je Durchgang. Sichtbar auch im Schlank-Modus, weil die
-        # Seite dort erklaert, was der Schalter tut — ein Reiter, der je nach Config
-        # verschwindet, ist schwerer zu finden als einer, der sich erklaert.
-        (t("nav.bereich.person"), [("/person", t("nav.person")),
-                                   ("/person/kontrolle", t("nav.person_kontrolle")),
-                                   ("/person/modell", t("nav.person_modell")),
-                                   # .220: Person learn zieht aus dem aufgeloesten
-                                   # Learn-Bereich hierher — der Koerper-Lernlauf
-                                   # gehoert fachlich zu Person.
-                                   ("/personlauf", t("nav.personlauf"))]),
+        # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW4 Punkt 2: die flache
+        # Seite „Body images“ (/koerperbilder) ist die einzige Seite dort. Die alten
+        # Eintraege (/person, /person/kontrolle, /person/modell, /personlauf) sind
+        # aus dem Menue; ihre Routen und Seiten sind mit Stufe KW6 ausgebaut.
+        (t("nav.bereich.person"), [("/koerperbilder", t("nav.person"))]),
         # Vision detect zwischen Person und Area (konzept_vision.md v2 §4): der
         # dritte Erkennungspfad. V1 zeigt Verbindung + Test; Galerie-Wizard und
         # Status folgen. Der Reiter steht auch AUS sichtbar da — eine Seite, die
@@ -233,7 +227,8 @@ NUR_EXPERT_BLAETTER = {"/kameras", "/benachrichtigungen", "/kette", "/konfigurat
 # .300 (Tranche C): /person*, /personlauf, /vision, /erkennungstest und
 # /system sind RAUS — die Routen-Module (system/vision/visiontest/
 # visionwizard/personwizard/bausteine) liegen auf der Sprachschicht
-# (/personlauf rendert seinen Inhalt aus personwizard.wizard()).
+# (/person* und /personlauf sind seit Stufe KW6 des Bauplans
+# analysen/bauplan_koerperweg_neu.md ausgebaut, routes/personwizard im Archiv).
 # Sprach-Stufe 3: /hilfe ist RAUS (Anleitungen via t_html). Der Vertrag
 # bleibt bestehen: eine Seite, deren Inhalt (noch) nicht auf der
 # Sprachschicht liegt, traegt ihren AKTIV-Pfad hier ein und bekommt die

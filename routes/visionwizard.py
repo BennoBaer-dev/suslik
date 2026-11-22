@@ -48,6 +48,8 @@ def _zeit(ts):
 
 
 def _bild_src(lauf_id, datei):
+    # Die Route /personlauf/bild/ ist mit Stufe KW6 des Bauplans analysen/bauplan_koerperweg_neu.md ausgebaut;
+    # Vision ist geparkt, ohne Personen und Laeufe zeigt der Wizard keine Kandidaten-Zelle (Kopf core/vision.py).
     return ("/personlauf/bild/" + urllib.parse.quote(str(lauf_id)) + "/"
             + urllib.parse.quote(str(datei)))
 

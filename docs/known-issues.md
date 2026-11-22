@@ -50,16 +50,15 @@ _Last updated: 2026-10-11 (reference source: backup before the update, restore o
   on 16:9). Live watchers have a selectable per-camera processing resolution since
   0.1.0.199 (360p–2160p, default 1080p); making the clip-analysis base size
   configurable as well is still on the list.
-- **Person recognition (preview): the decision threshold is only as good as its
-  stranger material.** The calibration uses real stranger images
-  from `personlern/fremd/` when at least five are present, and the model drops
-  bodies it reads as strangers; with an empty folder it falls back to calibrating
-  between your learned people only. Either way, keep an eye on body-path alerts
-  and disarm any time — Model status states which of the two applies. Collecting
-  that stranger material still has no UI; you fill the folder yourself.
-  Scenario-driven decisions themselves are live: the scene window gates stranger
-  alerts, passes with no serious face get a quiet class, and body recognition
-  attributes face-less passes.
+- **Person recognition (preview): the threshold is measured on one system only.**
+  The calibration compares only your own people with each other; there is no
+  stranger material. The fixed floor `koerper_schwelle` (0.65) gave no wrong
+  name on the system where it was measured; on a site with many strangers it is
+  not measured. If it is too high for you, you get no body name rather than a
+  wrong one. Body names are only shown, never sent. Scenario-driven decisions
+  themselves are live: the scene window gates stranger alerts, passes with no
+  serious face get a quiet class, and body recognition attributes face-less
+  passes.
 - **Merge suggestions are capped at 20**, ordered by similarity, so the page stays
   usable. Answering them (Merge / Different) makes room for the next ones.
 - **Backup comes in two sizes.** The configuration backup covers the settings; the

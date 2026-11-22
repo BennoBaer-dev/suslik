@@ -13,6 +13,7 @@ Seite spaeter etwas anderes als das, was der Klick findet.
 DATENMODELL (Konzept §2): Append-Datei je Kalendertag,
 <data_dir>/state/anwesenheit/<JJJJ-MM-TT>.jsonl, eine Zeile je Marke:
   {"ts", "bis", "person", "kamera", "quelle", "eid"?}        Personen-Marke
+                                   (quelle aus QUELLEN: worker, live, koerper)
   {"ts", "bis", "kamera", "art": "luecke", "eid"}             Luecken-Marke
   {"ts", "bis", "kamera", "art": "erfolg", "eid"}             Erfolgs-Marke (.519)
   {"ts", "art": "lauf"}                                       Lauf-Marke
@@ -30,7 +31,13 @@ ja nicht lief"; NEU GEFASST 10.09. — User-Zuschnitt zu Fix 10):
   rot    = Personen-Marke (gewinnt IMMER, auch ohne Lauf-Marke)
   gruen  = Lauf-Marke ohne Person ("der Dienst lief in dieser Viertelstunde")
   LEER   = keine Lauf-Marke — und AUSSCHLIESSLICH das ("der Dienst lief nicht")
-Dazu eine vierte, kleinere Aussage OHNE eigene Signalfarbe: eine gruene Zelle
+Seit Stufe KW14 (Bauplan analysen/bauplan_koerperweg_neu.md) ein vierter
+Zustand: "ueber Personenerkennung" = die Person traegt in der Viertelstunde nur
+Koerper-Marken (quelle koerper, Schalter koerper_meldet_anwesenheit, ab Werk
+aus). Rot bleibt "bestaetigt" und gewinnt, sobald Gesicht oder Live-Waechter
+dieselbe Viertelstunde tragen; der Leser fuehrt die Kennungen der Koerper-Marken
+getrennt (eids_koerper), damit rote Zellen nur auf bestaetigte Ereignisse zeigen.
+Dazu eine weitere, kleinere Aussage OHNE eigene Signalfarbe: eine gruene Zelle
 mit mindestens einer OFFENEN Luecke traegt eine dezente Markierung und beim
 Draufzeigen die beiden Zahlen (gelungen / Luecken).
 
@@ -46,10 +53,13 @@ DIE ZWEI QUELLEN, sauber getrennt (Antwort auf die Sicht-Asymmetrie desselben
 Berichts): die FARBE einer Zelle entscheidet allein die SYSTEMWEITE Lauf-Marke
 (sie hat per Konstruktion keine Kamera und laesst sich deshalb auch nicht je
 Kamera filtern). Die kamerabezogenen Marken — Person, Luecke, Erfolg — faerben
-nie weiss; sie machen rot bzw. setzen die Markierung und die Zahlen, und sie
+nie weiss; sie machen rot (Koerper-Marken: "ueber Personenerkennung") bzw.
+setzen die Markierung und die Zahlen, und sie
 werden ALLE DREI gleich behandelt, wenn eine Kamera-/Area-Sicht filtert. Damit
 kann dieselbe Viertelstunde in der Alle-Sicht nicht mehr eine andere Farbe
-haben als in einer Einzelkamera-Sicht.
+haben als in einer Einzelkamera-Sicht. Personen-Marken schreiben der
+Gesichtsweg (akte_zeile_markieren, quelle worker), der Live-Waechter (live) und
+seit KW14 der Auswerter der Koerper-Erkennung (koerper_markieren, koerper).
 
 ENTWERTUNG statt Umschreiben (append-only, K8): ein spaeter geglueckter
 Nachhol-Versuch schreibt eine ERFOLGS-Marke mit derselben `eid`. Der Leser
@@ -115,8 +125,13 @@ LESE_DECKEL_B = DECKEL_B
 # anlegen. Geklemmt wird LAUT (Log-Zeile), nie still.
 SPANNE_MAX_S = 24 * 3600
 # Deckungs-Vertrag der Quellen: der Renderer (Z4) und die Tooltips kennen genau
-# diese Worte; eine dritte Quelle traegt sich hier ein, nicht in einem Literal.
-QUELLEN = ("worker", "live")
+# diese Worte; eine weitere Quelle traegt sich hier ein, nicht in einem Literal.
+# Bestaetigt (rot) sind Gesicht und Live-Waechter; die Koerper-Quelle (Stufe KW14
+# des Bauplans analysen/bauplan_koerperweg_neu.md) ist der eigene Zustand
+# "ueber Personenerkennung".
+QUELLEN_BESTAETIGT = ("worker", "live")
+QUELLE_KOERPER = "koerper"
+QUELLEN = QUELLEN_BESTAETIGT + (QUELLE_KOERPER,)
 ART_LUECKE = "luecke"
 ART_LAUF = "lauf"
 ART_ERFOLG = "erfolg"          # .519: Analyse dieses Ereignisses ist gelungen
@@ -144,6 +159,10 @@ FEHLER_LOG_DROSSEL_S = 60.0
 # (User 02.09.: kein Lesen der Datei je Takt). Prozessweit — der Dienst hat
 # genau eine Sweep-Schleife.
 _LAUF_STAND = {"slot": None}
+# Koerper-Marke (Stufe KW14 Punkt 4): Dedup IM SCHREIBER ueber die Paare
+# (Kennung, Person) des Analysetags und des vorigen, ohne die Datei zu lesen.
+# `tag` ist der Kalendertag der Analyse, nicht der Tag der Marke.
+_KOERPER_STAND = {"tag": None, "paare": set(), "vortag": set()}
 
 
 # ------------------------------------------------------------------ Pfade/Zeit
@@ -458,6 +477,32 @@ def akte_zeile_markieren(cfg, zeile, log=None):
     return n
 
 
+def koerper_markieren(cfg, person, zeilen, log=None):
+    """Koerper-Marken einer Person aus den Akte-Zeilen der Ereignisse, fuer die ihr Koerper-Name gilt (Stufe KW14 Punkt
+    4); je Paar (Kennung, Person) einmal je zwei Analysetagen. -> Zahl der geschriebenen Marken"""
+    tag = tag_von_ts(time.time())
+    with _LOCK:
+        if _KOERPER_STAND["tag"] != tag:
+            _KOERPER_STAND.update(tag=tag, vortag=_KOERPER_STAND["paare"], paare=set())
+    n = 0
+    for zeile in zeilen:
+        paar = (zeile.get("eid"), person)
+        with _LOCK:
+            schon = paar in _KOERPER_STAND["paare"] or paar in _KOERPER_STAND["vortag"]
+        if schon:
+            continue
+        try:
+            von, bis = zeitspanne_akte(zeile)
+        except (TypeError, ValueError) as e:
+            _fehler_loggen(log, f"body record without usable time: {e}")
+            continue
+        if markieren(cfg, person, von, bis, zeile.get("camera"), QUELLE_KOERPER, eid=zeile.get("eid"), log=log):
+            with _LOCK:
+                _KOERPER_STAND["paare"].add(paar)
+            n += 1
+    return n
+
+
 def zaehler():
     """Prozess-Zaehler (Marken/Luecken/Erfolge/Lauf/Fehler) fuer die
     Systemstatus-Auskunft. Die Schluessel werden dort generisch als
@@ -685,17 +730,19 @@ def tag_lesen(cfg, datum, kameras=None):
             kaputt += 1
             continue
         je_zelle = personen.setdefault(p, {})
+        # Stufe KW14: Kennungen der Koerper-Marken getrennt, damit eine rote Zelle nur auf bestaetigte Ereignisse fuehrt
+        eid_feld = "eids_koerper" if d.get("quelle") == QUELLE_KOERPER else "eids"
         for c in cs:
-            e = je_zelle.setdefault(c, {"quellen": set(), "kameras": set(), "eids": set()})
+            e = je_zelle.setdefault(c, {"quellen": set(), "kameras": set(), "eids": set(), "eids_koerper": set()})
             if d.get("quelle"):
                 e["quellen"].add(str(d["quelle"]))
             if kamera:
                 e["kameras"].add(kamera)
             if d.get("eid"):
-                e["eids"].add(str(d["eid"]))
+                e[eid_feld].add(str(d["eid"]))
     for p in personen.values():
         for e in p.values():
-            for k in ("quellen", "kameras", "eids"):
+            for k in ("quellen", "kameras", "eids", "eids_koerper"):
                 e[k] = sorted(e[k])
     # Entwertung (Kopfkommentar): eine Luecke zaehlt nur noch, solange ihre eid
     # in DIESER Zelle nicht auch erfolgreich gemeldet ist. Reihenfolgefrei —

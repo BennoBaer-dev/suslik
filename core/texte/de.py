@@ -79,6 +79,21 @@ T = {
         "Version seit dem Update gelernt hat. Und was 0.1.1.010 danach lernt, "
         "übernimmt ein späteres Update nicht.\n\n"
         "Ich freue mich über jede Rückmeldung, besonders wenn etwas danebenliegt.",
+    "readme.person.titel": "Personenerkennung",
+    "readme.person.text":
+        "Die Personenerkennung gibt einer Person einen Namen, wenn ihr Gesicht nicht erkannt wurde oder keines zu "
+        "sehen war. Sie ist optional. Auf der Seite Erkennung (Karte Körpererkennung) schaltest du sie ein und "
+        "wählst, ob sie immer läuft oder nur, wenn kein Gesicht erkannt wurde.\n\n"
+        "Sie lernt aus Videos, in denen das Gesicht die Person sicher erkannt hat. Ab dieser Version merkt sich "
+        "suslik bei jedem neuen Video, ob es sich dafür eignet. Ältere Videos zählen nicht. Auf der Seite "
+        "Körperbilder wählst du, ob der Lernlauf von Hand, einmal am Tag oder sofort startet.\n\n"
+        "Ab Werk gilt ein Name, wenn drei Bilder aus den Videos eines Durchgangs zu derselben Person passen. Er "
+        "steht auf Heute und bei den Auftritten, auf Wunsch auch in Frigate, auf der Seite Anwesenheit und als "
+        "eigene Meldung bei Pushover, Telegram und Home Assistant. Diese Wege schaltest du einzeln ein, ab Werk "
+        "sind sie aus.\n\n"
+        "Ich habe alles neu gebaut. Modell und Lernbilder des alten Personen-Lernlaufs konnte ich nicht übernehmen, "
+        "die gelernten Gesichter bleiben. Wer den alten Lernlauf genutzt hat, muss neu lernen lassen. Dafür bitte "
+        "ich um Verständnis.",
         "readme.generell.titel": 'Generelles',
     "readme.generell.text": 'Meine Szenario-Erkennung hängt an Frigates Personenerkennung. Sobald Frigate eine Person meldet, hole ich das ganze Personen-Ereignis. So ein Ereignis ist mal wenige Sekunden lang, mal mehrere Minuten. Ich schaue es komplett durch, um alle Personen darin zu finden.\n\nOb Frigates eigene Gesichtserkennung an ist, spielt dafür keine Rolle. Sie wird nur gebraucht, wenn Gesichter mit Frigate abgeglichen werden sollen.\n\nGeprüft wird nie der Detect-Stream, sondern die Aufzeichnung, also der beste Stream, den die Kamera an Frigate liefert.\n\nEine Prüfung startet auf zwei Wegen. Entweder über das Personen-Event aus Frigate, das ist der Szenario-Weg. Oder über den Live-Wächter: Der holt den laufenden Stream, direkt von der Kamera oder über Frigates Proxy, sucht darin Gesichter und startet von dort.\n\nEine Person wird auf drei Wegen erkannt. Über das Gesicht. Über die Person als Ganzes, allein aus dem Bild, ohne Gesicht. Über ein Vision-Modell, dieser Weg ist noch Beta.\n\nIch fahre hier 4K-Kameras mit einer möglichst hohen Bildrate, mindestens 15 Bilder je Sekunde. Die Bitrate ebenso hoch wie möglich. Eine niedrige Bitrate macht bewegte Gesichter unscharf.',
     "readme.aktuell.titel": 'Woran ich gerade arbeite',
@@ -382,8 +397,10 @@ T = {
     "konfiguration.kette.gesicht_erkl":
         "der Gesichtspfad ist das Rückgrat jeder Analyse — Person "
         "und Vision hängen an seinem Durchgangsurteil",
-    "konfiguration.kette.grund_person":
-        "noch kein trainiertes Personenmodell scharfgeschaltet",
+    "konfiguration.kette.grund_person_vorrat":
+        "noch kein gültiges Bild auf der Seite Körperbilder",
+    "konfiguration.kette.grund_person_pose":
+        "das Pose-Modell fehlt, deshalb kann kein Körperbild geschnitten werden",
     "konfiguration.kette.grund_vision":
         "die Vision-Erkennung ist abgeschaltet",
     "konfiguration.kette.grund_aus": "hier abgeschaltet",
@@ -1137,21 +1154,24 @@ T = {
     "erkennung.gesicht.beweis_bilder": "{n} Referenzbilder",
     "erkennung.gesicht.knopf_verwalten": "Personen verwalten …",
     "erkennung.koerper.titel": "Körpererkennung",
-    "erkennung.koerper.satz":
-        "Erkennt Bewohner an Statur und Haltung, auch wenn kein "
-        "Gesicht sichtbar ist — sie lernt von selbst aus den "
-        "durchgesehenen Bildern.",
-    "erkennung.koerper.beweis_kein_modell":
-        "noch kein Personenmodell — erst anlernen und durchsehen",
-    "erkennung.status.kein_modell":
-        "läuft nicht (noch kein trainiertes Personenmodell "
-        "scharfgeschaltet)",
+    "erkennung.koerper.satz": "Erkennt Bewohner an Statur und Haltung, auch wenn kein Gesicht sichtbar ist. Die Körperbilder dafür schneidet der Personen-Lernlauf aus deinen Videos.",
+    "erkennung.status.kein_vorrat":
+        "läuft nicht (noch kein gültiges Bild auf der Seite Körperbilder)",
+    "erkennung.status.pose_fehlt":
+        "läuft nicht (das Pose-Modell fehlt, deshalb kann kein Körperbild geschnitten werden)",
     "erkennung.status.hier_aus": "läuft nicht (hier abgeschaltet)",
     "erkennung.status.vision_aus":
         "läuft nicht (die Vision-Erkennung ist abgeschaltet)",
-    "erkennung.koerper.link_modell": "Modellstatus",
-    "erkennung.koerper.knopf_status": "Modellstatus …",
     "erkennung.koerper.knopf_register": "Körper registrieren …",
+    "erkennung.koerper.melden.titel": "Meldet an:",
+    "erkennung.koerper.melden.nur_anzeige": "nur Anzeige",
+    "erkennung.koerper.melden.leer": "Nichts gewählt: der Name wird nur angezeigt.",
+    "erkennung.koerper.melden.nicht_eingerichtet": "nicht eingerichtet",
+    "erkennung.koerper.melden.aria": "Meldewege der Personenerkennung",
+    "erkennung.koerper.melden.anwesenheit": "Seite Anwesenheit",
+    "erkennung.unter.immer": "Immer",
+    "erkennung.unter.nur_ohne_gesicht": "Nur ohne Gesicht",
+    "erkennung.unter.wenn_noetig": "Bei Bedarf",
     "erkennung.vision.titel": "KI-Vision",
     "erkennung.vision.beta": "Beta",
     "erkennung.vision.satz":
@@ -1172,6 +1192,9 @@ T = {
     "erkennung.areas.beweis_keine": "noch keine Bereiche — alles zählt",
     "erkennung.areas.knopf": "Bereiche verwalten &#8230;",
     "erkennung.knopf_speichern": "Speichern + neu starten",
+    # Stufe EK1 (Bauplan analysen/bauplan_erkennung_karte.md): Zustandszeile der Speicherleiste, abgenommen 22.11.2026.
+    "erkennung.save.sauber": "Alles gespeichert",
+    "erkennung.save.offen": "Nicht gespeichert, Speichern startet den Dienst neu",
     # --------------------------------------------------- routes/faces ---
     "faces.titel": "Gesichter",
     "faces.link_how": "So funktioniert es &#8230;",
@@ -1605,9 +1628,6 @@ T = {
     "nav.anker": "Anker",
     "nav.lernen": "Vorschläge",
     "nav.person": "Körperbilder",
-    "nav.person_kontrolle": "Beurteilte Bilder",
-    "nav.person_modell": "Modellstatus",
-    "nav.personlauf": "Personen-Lernlauf",
     "nav.vision": "Vision-Erkennung",
     "nav.live": "Live-Wächter",
     "nav.live_alerts": "Live-Meldungen",
@@ -1663,7 +1683,6 @@ T = {
     # diesem Wert); jede Richtung prueft die Gate-Stufe Sprach-Deckung.
     "js.status.fehler": "Fehler",
     "js.status.fehler_gross": "Fehler",
-    "js.status.fehler_detail": "Fehler: {msg}",
     "js.status.ok": "ok",
     "js.status.speichern": "wird gespeichert …",
     "js.status.gespeichert": "gespeichert",
@@ -1787,8 +1806,6 @@ T = {
     # js.areas.entfernen_frage: "Default" ist zugleich Kennung der
     # Standard-Area (Anzeige==Kennung §8.2) — bleibt in jeder Sprache.
     "js.areas.entfernen_frage": "Bereich \"{name}\" entfernen? Seine Kameras wandern zurück nach Default — sonst ändert sich nichts.",
-    "js.personlauf.abbruch_frage": "Diesen Personen-Lernlauf abbrechen? Gesammelte Bilder bleiben.",
-    "js.personlauf.verwerfen_frage": "Lauf {lid} komplett verwerfen? Alle seine Bilder werden gelöscht; ein neuer Lauf kann jederzeit neu sammeln.",
     "js.vision.nicht_erreichbar": "Dienst nicht erreichbar — nichts wurde gespeichert",
     "js.vision.gespeichert": "gespeichert — die Erkennung nutzt ab jetzt diese Verbindung",
     "js.vision.gespeichert_neustart": "gespeichert — der Dienst startet gleich neu",
@@ -2333,6 +2350,9 @@ T = {
     "vision.schalter.knopf_aus": "Ausschalten",
     "vision.schalter.knopf_an": "Einschalten",
     "vision.schalter.fehlt": "Fehlt noch:",
+    # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW6 Punkt 4: Vision geparkt (Seiten und Schalter).
+    "vision.geparkt_satz":
+        "Vision ist in dieser Version pausiert und lässt sich nicht einschalten. Es kommt zurück, sobald es auf die neuen Körperbilder umgebaut ist.",
     "vision.schalter.fehlt_galerien": "{n} von {soll} freigegebenen Galerien — eine bauen unter 'Galerie bauen'",
     "vision.schalter.fehlt_test": "ein gruener Verbindungstest",
     "vision.schalter.fehlt_kandidaten": "beurteilte Bilder als Kandidatenquelle — sie erscheinen, waehrend ein Durchgang laeuft; 'Diagnose-Sammlung' unter Person einschalten, wenn sie bleiben sollen",
@@ -2740,334 +2760,6 @@ T = {
         "Nichts ändert sich von selbst &mdash; die Galerie, die du "
         "abgenommen hast, bleibt genau so, bis du eine neue aufbaust und "
         "abnimmst.",
-    # --- routes/personwizard.py ---
-    # {wer}-Rahmen sind kasusfest gebaut (an/für + Akkusativ), damit
-    # "alle bekannten Personen"/"Fremde"/Personenname überall passen.
-    "personwizard.wer.alle": "alle bekannten Personen",
-    "personwizard.wer.fremde": "Fremde",
-    "personwizard.titel": "Personen anlernen — Körpererkennung",
-    "personwizard.kopf.satz":
-        "Ein zweiter, unabhängiger Erkennungsweg: Er lernt, wie eine "
-        "Person als GANZES aussieht (Statur, Haare, Haltung), und "
-        "erkennt Bewohner so auch, wenn kein Gesicht sichtbar ist.",
-    "personwizard.kopf.wie_titel":
-        "So funktioniert es — du hast das letzte Wort",
-    "personwizard.kopf.schritt1":
-        "1 · Du wählst, wie viele Events durchsucht werden und WER "
-        "angelernt wird (eine Person oder alle bekannten Personen).",
-    "personwizard.kopf.schritt2":
-        "2 · Der Lauf sammelt Ganzkörper-Bilder aus deinen eigenen "
-        "Aufnahmen. Ein Bild wird nur dann an eine Person gebunden, wenn "
-        "ein gesichtsbestätigter Durchgang es beweist — bewusst "
-        "konservativ.",
-    "personwizard.kopf.schritt3":
-        "3 · DU siehst jedes gesammelte Bild durch; ein Klick sortiert "
-        "ein falsches aus. Ohne deine Abnahme wird nichts gelernt.",
-    "personwizard.kopf.schritt4":
-        "4 · Das Training läuft danach lokal in Sekunden, und eine "
-        "Entscheidungsschwelle wird gemessen, damit Fremde darunter "
-        "bleiben.",
-    "personwizard.kopf.tempo":
-        "Eine Anmerkung zum Tempo: Das Sammeln läuft derzeit auf der "
-        "CPU, hab also etwas Geduld mit einem Lauf (grob 15&ndash;30 s "
-        "je Event). Der Umzug auf GPU/NPU ist für eine spätere Version "
-        "geplant.",
-    "personwizard.kopf.warum":
-        "Warum zuerst mindestens eine Person: Dieser Weg kann Personen "
-        "erst auseinanderhalten, nachdem er gelernt hat — und du "
-        "durchgesehen hast —, wie mindestens ein Bewohner aussieht. Bis "
-        "dahin bleibt die Körpererkennung AUS und sendet nie eine "
-        "Meldung. Wenn sie später meldet (Pushover/Telegram), ist die "
-        "Nachricht als Personenerkennung gekennzeichnet, nicht als "
-        "Gesichtserkennung.",
-    "personwizard.vorb.titel": "Der Lauf wird vorbereitet &hellip;",
-    "personwizard.vorb.zeile":
-        "binde die letzten {n} Events über bestätigte Durchgänge an "
-        "{wer}",
-    "personwizard.vorb.satz":
-        "Das dauert ein bis zwei Minuten — die Seite aktualisiert sich "
-        "von selbst, das Sammeln startet direkt danach.",
-    "personwizard.ernte.stand":
-        "{events}/{von} Events · {bilder} Bilder gesammelt",
-    "personwizard.ernte.startet": "startet …",
-    "personwizard.ernte.titel": "Ein Personen-Lernlauf ist aktiv",
-    "personwizard.ernte.zeile": "lernt gerade {wer} an · {stand}",
-    "personwizard.ernte.satz":
-        "Diese Seite aktualisiert sich von selbst. Ein neuer Lauf kann "
-        "starten, sobald dieser fertig ist.",
-    "personwizard.ernte.knopf_abbruch": "Lauf abbrechen",
-    "personwizard.ernte.abbruch_hinweis": "gesammelte Bilder bleiben",
-    "personwizard.unterbrochen.titel": "Der letzte Lauf wurde unterbrochen",
-    "personwizard.unterbrochen.satz":
-        "Vermutlich ein Dienst-Neustart. Starte unten denselben Lauf "
-        "erneut — schon gesammelte Events werden automatisch "
-        "übersprungen (Fortsetzen eingebaut), nichts geht verloren.",
-    "personwizard.abnahme.titel":
-        "Der letzte Lauf ist fertig — jetzt kommt deine Durchsicht",
-    "personwizard.abnahme.zeile":
-        "{n} Bilder für {wer} gesammelt (Lauf {lauf}).",
-    "personwizard.abnahme.knopf": "Die Bilder jetzt durchsehen",
-    "personwizard.abnahme.hinweis":
-        "schließe die Durchsicht ab, um den nächsten Lauf freizuschalten",
-    "personwizard.abnahme.knopf_verwerfen": "Diesen Lauf verwerfen",
-    "personwizard.abnahme.verwerfen_hinweis":
-        "schlechtes Ergebnis? alles wegwerfen",
-    "personwizard.leer.verwaist":
-        "Mit Absicht übersprungen: {liste} — diese Namen wurden aus "
-        "deinen Personen gelöscht; ihre alten bestätigten Events bleiben "
-        "als Historie, werden aber nicht gesammelt.",
-    "personwizard.leer.titel":
-        "Lauf ohne Bilder beendet — hier steht, warum",
-    "personwizard.leer.satz":
-        "Nichts wurde geändert; du kannst unten jederzeit einen neuen "
-        "Lauf starten.",
-    "personwizard.fertig.verwaist":
-        "Mit Absicht übersprungen: {liste} — gelöschte Personen; ihre "
-        "alten bestätigten Events werden nicht gesammelt.",
-    "personwizard.fertig.fremd":
-        "{n} bestätigte Fremden-Bilder sind in den Fremden-Pool "
-        "gewandert — das nächste Training nutzt sie sofort.",
-    "personwizard.fertig.titel": "Durchsicht abgeschlossen — Material übernommen",
-    "personwizard.fertig.zeile":
-        "{abgenommen} Bilder als Lernmaterial abgenommen, {verworfen} "
-        "aussortiert (Lauf {lauf}).",
-    "personwizard.fertig.knopf": "Das gelernte Material ansehen",
-    "personwizard.fehler.titel": "Der letzte Lauf ist fehlgeschlagen",
-    "personwizard.auswahl.opt_alle": "Alle bekannten Personen",
-    "personwizard.auswahl.opt_fremde":
-        "Fremde — Fremden-Bilder sammeln",
-    "personwizard.auswahl.titel": "Wen anlernen",
-    "personwizard.auswahl.satz":
-        "Wähle eine Person, um in kleinen, fokussierten Paketen "
-        "durchzusehen — oder alle auf einmal. Die Personen kommen aus "
-        "deinen Gesichts-Referenzen; eine nach der anderen anzulernen "
-        "hält die Durchsicht kurz.",
-    "personwizard.auswahl.fremde_satz":
-        "Fremde: sammelt Durchgänge, in denen niemand erkannt wurde "
-        "(reine Straßen-Durchgänge, unbestätigte Besucher). In der "
-        "Durchsicht bestätigst du, wer wirklich fremd ist — sie wandern "
-        "in den Fremden-Pool und schärfen die Entscheidungsschwelle.",
-    "personwizard.umfang.knopf_letzte": "letzte {n}",
-    "personwizard.umfang.attr_eigen": "eigenes N",
-    "personwizard.umfang.knopf_go": "los",
-    "personwizard.umfang.titel": "Umfang (Events, nicht Tage)",
-    "personwizard.umfang.satz":
-        "Fang klein an (50) — du siehst jedes gesammelte Bild von Hand "
-        "durch.",
-    "personwizard.bilanz.ohne":
-        "letzte {n} Personen-Events für {wer} — die Bindungs-Bilanz wird "
-        "beim Anlegen des Laufs berechnet",
-    # Zaehler-Split an der <b>-Grenze (§8.10): vor/nach rahmen die
-    # hervorgehobene Zahl, Rand-Leerzeichen gehoeren zum Wert.
-    "personwizard.bilanz.zahl_vor": "letzte {n} Personen-Events · ",
-    "personwizard.bilanz.zahl_nach":
-        " lassen sich über bestätigte Durchgänge an {wer} binden",
-    "personwizard.bilanz.fremd": " · {n} Fremden-Kandidaten",
-    "personwizard.bilanz.erkl_fremd":
-        "Kandidaten sind Durchgänge, in denen niemand erkannt wurde — "
-        "reine Straßen-Durchgänge und unbestätigte Besucher. Bis zu "
-        "deiner Durchsicht ist alles ein VERDACHT; markiere dort jeden, "
-        "der KEIN Fremder ist.",
-    "personwizard.bilanz.erkl":
-        "Das Binden ist konservativ: Nur Durchgänge mit genau einer "
-        "gesichtsbestätigten Person zählen. Alles, was du danach siehst, "
-        "lässt sich mit einem Klick aussortieren.",
-    "personwizard.bilanz.titel": "Deine Auswahl",
-    "personwizard.bilanz.knopf": "Diesen Lauf anlegen",
-    "personwizard.review.stempel": "FALSCH",
-    "personwizard.review.h_fremde": "Fremde",
-    "personwizard.review.frage_fremd":
-        "klicke jedes Bild an, auf dem KEIN Fremder zu sehen ist (ein "
-        "Bewohner, ein bekannter Besucher), oder das unbrauchbar ist. "
-        "Ein zweiter Klick nimmt es zurück. Alles wird sofort "
-        "gespeichert; unmarkierte Bilder "
-        "werden als bestätigte Fremde übernommen und schärfen die "
-        "Entscheidungsschwelle.",
-    "personwizard.review.frage":
-        "klicke jedes Bild an, das FALSCH ist (nicht diese Person, oder "
-        "unbrauchbar). Ein zweiter Klick nimmt es zurück. Alles wird "
-        "sofort gespeichert; unmarkierte Bilder zählen als abgenommen.",
-    "personwizard.review.titel": "Das Gesammelte durchsehen",
-    "personwizard.review.kopf": "Lauf {lauf} — {frage}",
-    # Der Zeilenumbruch ist Teil des Originals (Template-Literal) und
-    # bleibt fuer die Byte-Treue im Wert.
-    "personwizard.review.zurueck": "&larr; zurück zum\nAssistenten",
-    "personwizard.review.knopf_fertig":
-        "Durchsicht abschließen — abgenommene Bilder übernehmen",
-    "personwizard.kontrolle.sammeln_titel": "Der Sammelmodus ist AN",
-    "personwizard.kontrolle.sammeln_rest":
-        " — jedes beurteilte Bild wird 30 Tage aufbewahrt, damit du die "
-        "Entscheidungen später prüfen kannst. Rechne mit grob "
-        "20&ndash;40 MB am Tag.",
-    "personwizard.kontrolle.schlank_titel": "Schlanker Modus (Standard)",
-    "personwizard.kontrolle.schlank_rest":
-        " — beurteilte Bilder leben nur, solange ein Durchgang läuft; "
-        "danach bleiben nur das Gewinner-Bild und das Urteils-Log unten. "
-        "Das ist der datenschutzfreundliche Standard einer frischen "
-        "Installation.",
-    "personwizard.kontrolle.titel": "Beurteilte Bilder",
-    "personwizard.kontrolle.satz":
-        "Was die Körpererkennung wirklich angesehen hat, ein Block je "
-        "Durchgang: das beurteilte Bild, die Klasse, auf die sie kam, "
-        "der Score und woher das Bild stammt. Nützlich, wenn eine Person "
-        "übersehen wurde oder jemand erkannt wurde, der nicht hätte "
-        "erkannt werden dürfen.",
-    "personwizard.kontrolle.leer_titel": "Noch nichts festgehalten",
-    "personwizard.kontrolle.tag_fremd": "fremd",
-    "personwizard.kontrolle.tag_drueber": "über der Schwelle",
-    "personwizard.kontrolle.tag_drunter": "unter der Schwelle",
-    "personwizard.kontrolle.schwelle": " &middot; Schwelle {schwelle}",
-    "personwizard.kontrolle.kopfzeile.eins":
-        "{wann} — {judged} beurteilt, {n} Bild aufbewahrt",
-    "personwizard.kontrolle.kopfzeile.viele":
-        "{wann} — {judged} beurteilt, {n} Bilder aufbewahrt",
-    "personwizard.tabelle.fremd_zeile": "Fremde (Zusatzklasse)",
-    "personwizard.tabelle.kein_fremd":
-        "Noch keine Fremden-Klasse — mit einer arbeitet die Erkennung "
-        "deutlich besser: Bestätigte Fremden-Bilder zeigen dem Modell, "
-        "was NICHT dazugehört, und kalibrieren die "
-        "Entscheidungsschwelle.",
-    "personwizard.tabelle.q_eichung": "gemessen",
-    "personwizard.tabelle.q_user": "von dir gesetzt",
-    "personwizard.tabelle.q_standard": "eingebauter Standard",
-    "personwizard.tabelle.f_modell": "Aktives Modell",
-    "personwizard.tabelle.f_schwelle": "Schwelle",
-    "personwizard.tabelle.f_scharf": "Scharf",
-    "personwizard.tabelle.scharf_ja": "JA",
-    "personwizard.tabelle.scharf_ja_rest": " — beurteilt live",
-    "personwizard.tabelle.scharf_nein": "nein — nicht scharf",
-    "personwizard.tabelle.konf_vor":
-        "Größte gruppenübergreifende Verwechslung in der Kalibrierung: ",
-    "personwizard.tabelle.konf_nach":
-        " — der stärkste Score, den irgendein Bild für die FALSCHE "
-        "Gruppe erreicht hat; je näher an 1, desto näher liegen zwei "
-        "Gruppen beieinander.",
-    "personwizard.tabelle.titel": "Gelernte Gruppen",
-    "personwizard.karte.scharf": "Scharf",
-    "personwizard.karte.unscharf": "Noch nicht scharf",
-    "personwizard.karte.fehler":
-        "Der letzte Trainingsversuch ist FEHLGESCHLAGEN: {fehler} — "
-        "diese Karte zeigt das vorige Modell.",
-    "personwizard.karte.titel": "Modellstatus",
-    "personwizard.karte.zeile":
-        "trainiert {wann} in {dauer} s — {bilder} Bilder: {je} · "
-        "{modell} · ",
-    "personwizard.karte.link": "Details",
-    "personwizard.bestand.titel":
-        "Personen-Material — was gelernt wurde",
-    "personwizard.bestand.satz":
-        "Abgenommene Ganzkörper-Bilder je Person. Wähle unten eine "
-        "Gruppe, um ihre Bilder zu sehen; lösche ein einzelnes Bild "
-        "(&times; auf der Kachel) — ein neuer Lauf kann danach jederzeit "
-        "neu sammeln. Löschungen greifen beim nächsten Training.",
-    "personwizard.bestand.leer_titel": "Noch kein abgenommenes Material",
-    "personwizard.bestand.stark_titel": "Was dieses Modell stark macht",
-    "personwizard.bestand.chip_fremde": "Fremde ({n})",
-    "personwizard.bestand.zeigen_titel": "Bilder zeigen von",
-    "personwizard.bestand.zeigen_satz":
-        "Wähle eine Gruppe — ihre Bilder öffnen sich unten, neueste "
-        "zuerst.",
-    "personwizard.bestand.marker_tage.eins":
-        "nur {n} Tag — die Erkennung verbessert sich am meisten, wenn das "
-        "Material mehr Tage, Outfits und Lichtverhältnisse abdeckt",
-    "personwizard.bestand.marker_tage.viele":
-        "nur {n} Tage — die Erkennung verbessert sich am meisten, wenn "
-        "das Material mehr Tage, Outfits und Lichtverhältnisse abdeckt",
-    "personwizard.bestand.attr_loeschen": "dieses Bild löschen",
-    "personwizard.bestand.z_bilder": "{n} Bilder",
-    "personwizard.bestand.z_tage.eins": "{n} Tag",
-    "personwizard.bestand.z_tage.viele": "{n} Tage",
-    "personwizard.bestand.z_kameras.eins": "{n} Kamera",
-    "personwizard.bestand.z_kameras.viele": "{n} Kameras",
-    "personwizard.modell.titel": "Personenmodell — Status",
-    "personwizard.modell.satz":
-        "Das Modell der Körpererkennung, trainiert aus deinen "
-        "abgenommenen Bildern. Es wird nach jeder abgeschlossenen "
-        "Durchsicht und nach Löschungen automatisch neu trainiert.",
-    "personwizard.modell.leer_titel": "Noch kein Modell",
-    "personwizard.modell.fremd_keine":
-        "noch keine — die Schwelle ist nur zwischen deinen Personen "
-        "gemessen",
-    "personwizard.modell.fremd_gesammelt":
-        "{n} gesammelt — {min} nötig, bevor sie mittrainiert werden und "
-        "die Schwelle kalibrieren",
-    "personwizard.modell.fremd_geeicht":
-        "{n} im Training · Schwelle an echten Fremden kalibriert",
-    "personwizard.modell.fremd_ungeeicht":
-        "{n} im Training — die Schwellen-Kalibrierung lief nicht (siehe "
-        "Hinweis unten)",
-    "personwizard.modell.f_trainiert": "Trainiert",
-    "personwizard.modell.f_dauer": "Trainingsdauer",
-    "personwizard.modell.f_modell": "Modell",
-    "personwizard.modell.f_bilder": "Bilder gesamt",
-    "personwizard.modell.f_personen": "Personen",
-    "personwizard.modell.f_fremd": "Fremden-Negative",
-    "personwizard.modell.scharf_ja": "JA — Live-Beurteilung aktiv",
-    "personwizard.modell.scharf_nein": "nein — noch nicht scharf",
-    "personwizard.modell.fehler":
-        "Der letzte Trainingsversuch ist FEHLGESCHLAGEN ({zeit}): "
-        "{fehler} — das hier gezeigte Modell ist das vorige und enthält "
-        "deine letzten Änderungen nicht.",
-    "personwizard.modell.aktuell_titel": "Aktuelles Modell",
-    "personwizard.modell.material_titel": "Lernmaterial je Person",
-    "personwizard.modell.kopf_person": "Person",
-    "personwizard.modell.kopf_bilder": "abgenommene Bilder",
-    "personwizard.modell.kopf_anteil": "Anteil",
-    "personwizard.modell.summe": "gesamt",
-    "personwizard.modell.q_eichung": "an deinem Material gemessen",
-    # {pct} vorformatiert (round) aus der Route (§8.8).
-    "personwizard.modell.eich_fremd":
-        "Gemessen per {folds}-facher Kreuzvalidierung über {n} "
-        "zurückgehaltene Bilder deiner Personen plus {n_fremd} "
-        "bestätigte Fremde: Die stärkste Bewohner-Konfidenz (wie sicher "
-        "sich das Modell war), die ein echter Fremder erreichte, war "
-        "{max} &rarr; Schwelle {schwelle}; {pct}% der echten Bilder "
-        "kommen durch. Die Kehrseite: {ueber} deiner eigenen Bilder "
-        "würden diese Schwelle für die FALSCHE Person erreichen "
-        "(stärkster Wert {vmax}).",
-    "personwizard.modell.eich_intern":
-        "Gemessen per {folds}-facher Kreuzvalidierung über {n} "
-        "zurückgehaltene Bilder: stärkste Konfidenz (wie sicher sich das "
-        "Modell war) für eine FALSCHE Person {max} &rarr; Schwelle "
-        "{schwelle}; {pct}% der echten Bilder kommen durch. Ehrliche "
-        "Grenze: Das kalibriert ZWISCHEN deinen gelernten Personen — "
-        "echte Fremde sind noch nicht im Material.",
-    "personwizard.modell.regeln_titel": "Urteils-Einstellungen",
-    "personwizard.modell.schwelle_vor": "Entscheidungsschwelle: ",
-    "personwizard.modell.r_fenster": "Auslöse-Fenster",
-    "personwizard.modell.r_feuer": "Stütz-Events bis zur Meldung",
-    "personwizard.modell.r_karenz": "Ruhezeit nach einer Meldung",
-    "personwizard.modell.regeln_satz":
-        "Lass die Schwelle leer, um automatisch dem gemessenen Wert zu "
-        "folgen (er wird mit jedem Training neu gemessen). Die "
-        "Auslöse-Regel: gemeldet wird erst nach so vielen Stütz-Events "
-        "innerhalb des Fensters, danach bleibt es für die Ruhezeit "
-        "still.",
-    "personwizard.modell.knopf_speichern": "Einstellungen speichern",
-    "personwizard.modell.satz_user":
-        "Die Entscheidungsschwelle ist von dir gesetzt ({schwelle})",
-    "personwizard.modell.satz_user_eich":
-        " — die Kalibrierung an {n} bestätigten Fremden ergäbe {alt}",
-    "personwizard.modell.satz_geeicht":
-        "Die Entscheidungsschwelle ist an {n} bestätigten "
-        "Fremden-Bildern kalibriert.",
-    "personwizard.modell.satz_ungeeicht":
-        "Die Entscheidungsschwelle ist noch nicht an Fremden-Material "
-        "kalibriert — betrachte Meldungen als Vorschau und behalte sie "
-        "im Auge.",
-    "personwizard.modell.satz_fremd_drop":
-        " Ein Körper, den das Modell als fremd liest, wird verworfen, "
-        "bevor er ein Treffer werden kann.",
-    "personwizard.modell.live_titel": "Live-Schalter",
-    "personwizard.modell.live_an":
-        "SCHARF — der Körperpfad beurteilt Live-Events und darf melden.",
-    "personwizard.modell.live_aus":
-        "Nicht scharf — der Körperpfad bleibt still.",
-    "personwizard.modell.live_hinweis":
-        "Meldungen tragen den Hinweis &quot;Personenerkennung, nicht "
-        "Gesicht&quot;.",
-    "personwizard.modell.knopf_disarm": "Unscharf schalten",
-    "personwizard.modell.knopf_arm": "Körpererkennung scharfschalten",
     # --- webui/bausteine.py ---
     # Nur die gt_leiste-ANZEIGE-Texte; die Speicherwerte (GT_OFFEN_LABELS,
     # GT_KEIN_MENSCH) und KAT_LABELS/KAT_FARBE bleiben literal (Kommentar
@@ -3121,13 +2813,6 @@ T = {
     "vision.modell.js_id_fehlt": "erst eine ID eintragen",
     "vision.modell.js_prueft": "wird geprüft …",
     "vision.modell.js_fehler": "Fehler",
-    # --- routes/personwizard.py (Review-Script + Schalter) ---
-    "personwizard.review.js_zaehl": " von {n} als falsch markiert",
-    "personwizard.review.js_frage_vor": "Durchsicht abschließen? ",
-    "personwizard.review.js_frage_mitte":
-        " Bilder werden als Lernmaterial übernommen, ",
-    "personwizard.review.js_frage_nach": " aussortiert.",
-    "personwizard.modell.js_fehler": "Fehler ",
     # --- verifyd.py POST-Antworten (antwort.*, Nutzungs-Reihenfolge) ---
     "antwort.person_entfernt":
         "{person} entfernt ({n} Referenz-Sätze ins Archiv verschoben — "
@@ -3224,12 +2909,8 @@ T = {
         "läuft, läuft aus, danach fallen die Bilder",
     "antwort.passernte_abbruch_leer":
         "nichts abzubrechen — diese Prüfung läuft nicht mehr",
-    "antwort.personlauf_kein_review": "kein Lauf wartet auf Durchsicht",
-    "antwort.personlauf_kein_lauf": "kein aktiver Lauf",
     "antwort.events_bereich":
         "Events müssen zwischen 1 und {max} liegen",
-    "antwort.personlauf_aktiv":
-        "ein Personen-Lernlauf ist bereits aktiv",
     "antwort.lernlauf_tag_ungueltig": "ungültiger Tag (JJJJ-MM-TT)",
     # {phase} ist die interne Phasen-Kennung (sprachneutral, §8.19).
     "antwort.lernlauf_phase":
@@ -3380,7 +3061,7 @@ T = {
     # Reihenfolge. Zitat-Kopplungen wortgleich zum DE-Bestand gesetzt
     # (je Fundstelle als Kommentar). Noch ENGLISCHE UI-Elemente werden
     # englisch zitiert (§8.2 Anzeige==Kennung): "Check the key"/"Check
-    # the connection", "Always"/"Only if no face"/"If needed" sowie die
+    # the connection" (die Unteroptions-Labels seit Stufe KW12 deutsch, erkennung.unter.*) sowie die
     # Mess-Etiketten "residents"/"strangers" (core/registry.py:632, s.
     # Befund bei vision.modell.antwort_satz).
     "hilfe.live.titel": "Live-Wächter, erklärt",
@@ -3443,20 +3124,17 @@ willst trotzdem wissen, wer es war, und du willst die Bilder dafür nicht
 an ein KI-Vision-Modell geben.</p>""",
     # Zitat: <b>Körper registrieren</b> == erkennung.koerper.knopf_register
     # (ohne das " …").
-    "hilfe.koerper.satz3": """<p>Sie lernt aus Material, das du abnimmst. <b>Körper registrieren</b>
-startet einen kurzen Lernlauf für eine Person: Das System sammelt Bilder
-von ihr aus deinen Kameras, du siehst das Ergebnis einmal durch, und ab
-dann lernt die Körpererkennung von selbst weiter.</p>""",
-    # Unteroptions-Labels noch englisch im UI — englisch zitiert (§8.2).
-    "hilfe.koerper.satz4": """<p>Mit dem Schalter oben wählst du, ob und wann sie läuft. <b>Only if no
-face</b> heißt: Sie bleibt still, solange die Gesichtsprüfung nicht leer
-ausgeht. <b>Always</b> heißt: Sie prüft jeden Durchgang. Aus heißt: Sie
+    "hilfe.koerper.satz3": "<p>Sie arbeitet mit Körperbildern aus deinen eigenen Videos. <b>Körper registrieren</b> öffnet die Seite Körperbilder. Dort startest du den Personen-Lernlauf: Er schneidet Körperbilder aus Videos, in denen genau eine Person zu sehen war und ihr Gesicht sicher erkannt wurde. Neue Bilder zählen ab Werk erst, wenn du sie angenommen hast.</p>",
+    # Zitat seit Stufe KW12: <b>Nur ohne Gesicht</b>/<b>Immer</b> == erkennung.unter.*.
+    "hilfe.koerper.satz4": """<p>Mit dem Schalter oben wählst du, ob und wann sie läuft. <b>Nur ohne
+Gesicht</b> heißt: Sie bleibt still, solange die Gesichtsprüfung nicht leer
+ausgeht. <b>Immer</b> heißt: Sie prüft jeden Durchgang. Aus heißt: Sie
 läuft nie.</p>""",
     "hilfe.vision.titel": "KI-Vision, erklärt",
     "hilfe.vision.satz1": """<p>KI-Vision ist ein eigener Erkennungsweg. Sie zeigt die Bilder eines
 Durchgangs einem Bildmodell und fragt, welcher registrierten Person sie
 ähneln. Du kannst sie als Absicherung für die harten Fälle nutzen oder sie
-die Erkennung allein tragen lassen: Auf <b>Always</b> gestellt, beurteilt
+die Erkennung allein tragen lassen: Auf <b>Immer</b> gestellt, beurteilt
 sie jeden Durchgang selbst, auch wenn gar keine Gesichter angelernt sind. Sie
 urteilt am Ende eines Durchgangs, nicht live.</p>""",
     "hilfe.vision.satz2": """<p>Was sie zum Arbeiten braucht: registrierte Personen mit abgenommenen
@@ -3477,7 +3155,7 @@ du wählst.</p>""",
 auszuschließen, wird der Durchgang auch gegen die Galerien der anderen
 Personen geprüft, in beide Richtungen. Jedes verglichene Paar kostet zwei
 Anfragen, bei einem einzelnen Durchgang kann da also einiges
-zusammenkommen. <b>If needed</b> hält diese Rechnung klein: Das Modell wird
+zusammenkommen. <b>Bei Bedarf</b> hält diese Rechnung klein: Das Modell wird
 nur gefragt, wenn die Gesichter Zweifel lassen. Ohne verbundenes Modell
 bleibt Vision schlicht außen vor, und die Karte sagt das auch.</p>""",
     "hilfe.faces_bekannt.titel": "Bekannte Personen & Registrieren, erklärt",
@@ -3680,67 +3358,6 @@ Personen zwischendurch auffüllen.</p>""",
         "nächstbeste Bild DERSELBEN Ansicht rückt nach. Dein "
         "Lernmaterial bleibt unberührt; es heißt nur &bdquo;nicht als "
         "Galerie-Zelle&ldquo;.",
-    "personwizard.kopf.stark_satz":
-        "<b>Was das Modell stark macht:</b> Vielfalt schlägt Menge. "
-        "Bilder aus <b>vielen verschiedenen Tagen</b> (Kleidung, Licht, "
-        "Kameras) helfen weit mehr als viele Bilder aus einem Durchgang "
-        "— starte das Sammeln lieber an neuen Tagen erneut, statt aus "
-        "einem einzelnen Tag noch mehr herauszuholen. Bestätigte "
-        "Fremden-Bilder schärfen die Entscheidungsschwelle auf dieselbe "
-        "Weise.",
-    # Zitat: "Modellstatus" == nav.person_modell (+ erkennung.koerper.
-    # knopf_status "Modellstatus …").
-    "personwizard.fertig.training_satz":
-        "Das Training mit dem abgenommenen Material startet automatisch "
-        'nach der Durchsicht — siehe <a href="/person/modell">'
-        "Modellstatus</a>. Einen weiteren Lauf kannst du unten "
-        "jederzeit anstoßen.",
-    # Zitat: "Konfiguration" == nav.bereich.configuration, "Erweitert"
-    # == nav.konfiguration (EN-Wortlaut von "Settings" auf
-    # "Configuration" korrigiert — toter Wegweiser).
-    "personwizard.kontrolle.schalter_satz":
-        'Schalte es unter <a href="/konfiguration">Konfiguration '
-        "&rarr; Erweitert</a>, Schlüssel "
-        "<code>diagnostic_collection</code>. Bilder und Log verfallen "
-        "zusammen mit dem Treffer-Log nach 30 Tagen &mdash; nichts hier "
-        "wird länger aufbewahrt als das Erkennungs-Protokoll selbst.",
-    # Zitat: "Modellstatus" == nav.person_modell.
-    "personwizard.kontrolle.leer_satz":
-        "Einträge erscheinen, sobald die Körpererkennung auf "
-        '<a href="/person/modell">Modellstatus</a> scharfgeschaltet ist '
-        "und eine Person über das Grundstück geht.",
-    # Zitat: "Personen-Lernlauf" == nav.personlauf.
-    "personwizard.bestand.leer_satz":
-        'Starte den <a href="/personlauf">Personen-Lernlauf</a> und '
-        "schließ die Durchsicht ab — abgenommene Bilder erscheinen "
-        "hier.",
-    "personwizard.bestand.stark_satz":
-        "Vielfalt schlägt Menge: Bilder aus <b>vielen verschiedenen "
-        "Tagen</b> (Kleidung, Licht) helfen weit mehr als viele Bilder "
-        "aus einem Durchgang. Ziel sind mehrere Tage je Person, und "
-        "lass das Sammeln alle deine Kameras abdecken.",
-    "personwizard.bestand.fremd_satz":
-        "<b>Fremde:</b> {n} bestätigte Fremden-Bilder kalibrieren die "
-        "Entscheidungsschwelle — je mehr Fremde das Modell gesehen "
-        "hat, desto verlässlicher ist diese Linie. (Gesammelt in "
-        "<code>personlern/fremd/</code>; eine Seite, um diese Sammlung "
-        "aus den Durchgängen an deiner eigenen Straße wachsen zu lassen, "
-        "ist geplant.)",
-    "personwizard.bestand.fremd_erklaerung":
-        "Bestätigte Fremden-Bilder — sie trainieren die Zusatzklasse "
-        "und kalibrieren die Entscheidungsschwelle. Löschst du eins, "
-        "wird das Modell sofort neu trainiert (die Dateien liegen in "
-        "<code>personlern/fremd/</code>).",
-    # Zitat: "Personen-Lernlauf" == nav.personlauf.
-    "personwizard.modell.leer_satz":
-        'Starte den <a href="/personlauf">Personen-Lernlauf</a> und '
-        "schließ eine Durchsicht ab — das Training startet danach "
-        "automatisch.",
-    # Zitat: "Körperbilder" == nav.person.
-    "personwizard.modell.material_satz":
-        "Verwalte die Bilder unter "
-        '<a href="/person">Körperbilder</a> — nach jeder Löschung wird '
-        "das Modell automatisch neu trainiert.",
     # ---- Meldetexte (Stufe 4) --------------------------------------------
     # Pushover-/Telegram-TEXTE (Reihenfolge wie en.py). Sie entstehen OHNE
     # Request — die Sprache kommt am Meldeweg aus dem Config-Store.
@@ -3780,6 +3397,8 @@ Personen zwischendurch auffüllen.</p>""",
     # Ersatzwort, wenn die geeichte Latte nicht lesbar war (match/Treffer).
     "meldung.person.wort_ersatz": "Treffer",
     "meldung.person.zahl": "[Score {score}]",
+    "meldung.koerper.satz": "{name} erkannt ({kamera}, {zeit}) – {zusatz}",
+    "meldung.koerper.telegram": "{kamera}\n{name} um {zeit}, {zusatz} (suslik)",
     # Vision-Meldungen (verifyd._vision_melden). "Bild(er)"/"Vergleich(en)"
     # bleiben EINE Form (§8.18), der Gedankenstrich-Zusatz ist ein eigener
     # Schluessel (§8.11). "Vision" ist im DE-Bestand der Kurzname des Wegs
@@ -3897,8 +3516,9 @@ Personen zwischendurch auffüllen.</p>""",
     "heute.waechter.cnt.viele": "{n} Meldungen des Live-Wächters",
     "heute.waechter.mehr": "alle {n} Meldungen ({m} weitere)",
     "heute.anw.dauer": "anwesend rund {h} h",
-    "heute.anw.title": "Anwesenheit je Stunde, alle Kameras — rot: bestätigt anwesend, grün: System lief, niemand gesehen",
+    "heute.anw.title": "Anwesenheit je Stunde, alle Kameras — rot: bestätigt anwesend, hell mit rotem Rand: über Personenerkennung, grün: System lief, niemand gesehen",
     "heute.anw.title_gesamt": "Anwesenheit je Stunde — alle Kameras, nicht nach der Bereichs-Sicht gefiltert",
+    "heute.anw.zelle": "{zeit} · {zustand}",
     "heute.pass.mehr_kameras": "alle {n} Kameras ({m} weitere)",
     "heute.pass.live": "live",
     "heute.pass.live_title": "ein Live-Wächter hat während dieses Durchgangs einen Namen gemeldet",
@@ -3981,27 +3601,6 @@ Personen zwischendurch auffüllen.</p>""",
         "{person} hat noch keine Referenzbilder zum Vergleichen",
     "antwort.einspielen.frigate_fehlt":
         "In dieser Installation ist keine frigate_url eingetragen",
-    # ---- personlauf-Design (Nachzug) ----
-    # Kachel-Titel und Kachel-Saetze des /personlauf-Laufflusses. Kachel 1/4,
-    # die erste Saeulen-Marke und die Nachbar-Beschriftungen kommen wortgleich
-    # aus dem Gesichts-Lernlauf (lernwizard.*) — hier stehen nur die sieben
-    # personwizard-eigenen Neuzugaenge.
-    "personwizard.kachel.sammeln": "Bilder sammeln",
-    "personwizard.kachel.pruefen": "Bilder durchsehen",
-    "personwizard.k1.satz":
-        "Wähle, wen du anlernst und wie weit der Lauf zurückgeht "
-        "&mdash; er sammelt die Bilder dann aus deinen eigenen "
-        "Aufnahmen.",
-    "personwizard.k2.satz":
-        "Sammelt Ganzkörper-Bilder aus deinen Aufnahmen, und zwar nur "
-        "aus Durchgängen, die ein Gesicht schon bestätigt hat.",
-    "personwizard.k3.satz":
-        "Der Schritt, der dich braucht: Jedes gesammelte Bild bekommt "
-        "dein Ja oder Nein, bevor irgendetwas gelernt wird.",
-    "personwizard.k4.satz":
-        "Abgenommene Bilder trainieren sofort das Körpermodell "
-        "&mdash; es erkennt Personen dann auch ohne sichtbares Gesicht.",
-    "personwizard.such.titel": "Einen Personen-Lernlauf einrichten",
     # --------------------------------------------- routes/systemstat ---
     "systemstat.titel": "Systemauslastung",
     "systemstat.sub":
@@ -4120,7 +3719,7 @@ Personen zwischendurch auffüllen.</p>""",
     # --- routes/anwesenheit.py (.409, Anwesenheitsseite) ---
     "anwesenheit.titel": "Anwesenheit",
     "anwesenheit.knopf": "Anwesenheit",
-    "anwesenheit.knopf_tip": "Anwesenheit: wer wann bestätigt auf dem Grundstück war, Viertelstunde für Viertelstunde",
+    "anwesenheit.knopf_tip": "Anwesenheit: wer wann auf dem Grundstück gesehen wurde, Viertelstunde für Viertelstunde",
     "anwesenheit.kopf_satz": "Eine Zeile je Person, der Tag in Viertelstunden-Zellen. Rot = in dieser Viertelstunde bestätigt da (Ereignis-Analyse oder Live-Wächter, einmal gezeigt). Bei zurückhaltender Erkennung werden nur wenige Zellen rot — das ist normal, kein Fehler.",
     "anwesenheit.seit": "Aufzeichnung seit {datum}.",
     "anwesenheit.fenster_auto": "Tagesfenster {von}–{bis} Uhr, automatisch aus den Sichtungen der letzten {tage} Tage; die Stunden außerhalb sind je eine Zelle je Stunde.",
@@ -4154,6 +3753,7 @@ Personen zwischendurch auffüllen.</p>""",
     "anwesenheit.quelle_worker": "Ereignis-Analyse",
     "anwesenheit.quelle_live": "Live-Wächter",
     "anwesenheit.quelle_beide": "Live-Wächter und Ereignis-Analyse",
+    "anwesenheit.quelle_koerper": "Personenerkennung",
     "anwesenheit.nav.heute": "Heute",
     "anwesenheit.nav.gestern": "gestern",
     "anwesenheit.nav.attr_vortag": "Vortag",
@@ -4248,4 +3848,82 @@ Personen zwischendurch auffüllen.</p>""",
     "gpu.laeuft_wie_eingestellt": 'Aktiv: der Dienst rechnet auf {n} Strängen.',
     "gpu.vorschau_zu_wenig": 'Passt nicht — {fehlt} zu wenig. Schalte einen Live-Wächter ab oder nimm einen Strang zurück.',
     "gpu.speichern_gesperrt": 'Zu wenig Grafikspeicher für diese Strangzahl.',
+    # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW4: Seite „Body images“ (routes/koerperbilder.py)
+    "koerperbilder.satz": "Wenn das Gesicht nicht zu sehen ist, erkennt suslik eine Person an Körperbildern, die es aus deinen Videos schneidet.",
+    "koerperbilder.zustand.erkennen": "Erkennung am Körper:",
+    "koerperbilder.zustand.pruefung": "Prüfung neuer Bilder:",
+    "koerperbilder.zustand.an": "an",
+    "koerperbilder.zustand.aus": "aus",
+    "koerperbilder.zustand.nur_ohne_gesicht": "nur ohne Gesicht",
+    "koerperbilder.zustand.unbekannt": "unbekannte Einstellung",
+    "koerperbilder.zustand.ohne_bilder": "noch ohne Bilder",
+    "koerperbilder.fuss.einstellungen": "Einstellungen:",
+    "koerperbilder.teilmenge": "Ein Teil der Daten ließ sich nicht lesen, die Seite ist deshalb vielleicht unvollständig. Der Grund steht im Dienst-Log.",
+    "koerperbilder.vorrat.titel": "Bestand",
+    "koerperbilder.vorrat.zweck": "Antippen zeigt die Bilder einer Person.",
+    "koerperbilder.vorrat.bilder.eins": "{n} Bild",
+    "koerperbilder.vorrat.bilder.viele": "{n} Bilder",
+    "koerperbilder.vorrat.tage": "an {tage} der letzten {max_tage} Tage",
+    "koerperbilder.vorrat.neuest": "neuestes {datum}",
+    "koerperbilder.vorrat.weitere.eins": "{n} weitere Person hat noch keine Bilder im Bestand.",
+    "koerperbilder.vorrat.weitere.viele": "{n} weitere Personen haben noch keine Bilder im Bestand.",
+    "koerperbilder.vorrat.keine_bilder": "Noch keine Körperbilder im Bestand. Der Personen-Lernlauf schneidet sie aus geeigneten Videos.",
+    "koerperbilder.vorrat.entfernen": "Dieses Bild entfernen",
+    "koerperbilder.vorrat.leer": "Noch keine Körperbilder und keine bekannte Person.",
+    "koerperbilder.vorrat.leer_hinweis": "suslik lernt zuerst Gesichter. Körperbilder entstehen aus Videos, in denen ein Gesicht erkannt wurde.",
+    "koerperbilder.cutter.titel": "Personen-Lernlauf",
+    "koerperbilder.cutter.zweck": "Sieht die geeigneten Videos durch und schneidet daraus Körperbilder.",
+    "koerperbilder.cutter.weg_aus": "Die Erkennung am Körper ist ausgeschaltet. Bilder sammeln kannst du trotzdem.",
+    "koerperbilder.cutter.keine_titel": "Noch keine geeigneten Videos",
+    "koerperbilder.cutter.keine_satz": "Ein Video eignet sich, wenn genau eine Person im Bild ist und ihr Gesicht sicher erkannt wurde. Es zählen die letzten {tage} Tage. Videos, die suslik analysiert hat, bevor es diese Funktion gab, zählen nicht. Sobald es geeignete Videos gibt, startest du hier den Lernlauf.",
+    "koerperbilder.cutter.personen_waehlen": "Personen wählen",
+    "koerperbilder.cutter.personen_hilfe": "Ohne Auswahl gelten alle.",
+    "koerperbilder.cutter.wartend.eins": "{n} Video",
+    "koerperbilder.cutter.wartend.viele": "{n} Videos",
+    "koerperbilder.cutter.videos": "Wie viele Videos je Person untersuchen",
+    "koerperbilder.cutter.balken": "Fortschritt des Lernlaufs",
+    "koerperbilder.cutter.start.eins": "Lernlauf starten ({n} Video verfügbar)",
+    "koerperbilder.cutter.start.viele": "Lernlauf starten ({n} Videos verfügbar)",
+    "koerperbilder.cutter.start_ohne_zahl": "Lernlauf starten",
+    "koerperbilder.cutter.laeuft": "Läuft: {videos} von {offen} Videos geprüft, neue Bilder: {bilder}.",
+    "koerperbilder.cutter.letzter": "Letzter Lauf {zeit}",
+    "koerperbilder.cutter.geprueft.eins": "{n} Video geprüft",
+    "koerperbilder.cutter.geprueft.viele": "{n} Videos geprüft",
+    "koerperbilder.cutter.behalten.eins": "{n} Bild behalten",
+    "koerperbilder.cutter.behalten.viele": "{n} Bilder behalten",
+    "koerperbilder.cutter.ausgefallen.eins": "{n} ausgelassen: {gruende}",
+    "koerperbilder.cutter.ausgefallen.viele": "{n} ausgelassen: {gruende}",
+    "koerperbilder.cutter.fehler": "der Lauf lief nicht durch: {grund}",
+    # Stufe KW13 Punkt 3: die Automatik des Lernlaufs auf der Karte Personen-Lernlauf
+    "koerperbilder.auto.lauf": "Lernlauf starten",
+    "koerperbilder.auto.hand": "von Hand",
+    "koerperbilder.auto.taeglich": "einmal am Tag mit der Wartung",
+    "koerperbilder.auto.sofort": "sofort nach jedem geeigneten Video",
+    "koerperbilder.auto.uebernehmen": "Neue Bilder automatisch übernehmen",
+    "koerperbilder.auto.speichern": "Speichern + neu starten",
+    "koerperbilder.auto.fuss": "Lernlauf:",
+    "koerperbilder.auto.von_auto": "automatisch",
+    "koerperbilder.auto.von_taeglich": "täglich",
+    "koerperbilder.neu.titel": "Neue Bilder",
+    "koerperbilder.neu.zweck": "Neue Bilder zählen erst, wenn du sie annimmst.",
+    "koerperbilder.neu.alle": "Alle annehmen",
+    "koerperbilder.neu.annehmen": "Annehmen",
+    "koerperbilder.neu.verwerfen": "Verwerfen",
+    "koerperbilder.neu.leer": "Neue Bilder erscheinen hier nach einem Personen-Lernlauf.",
+    "koerperbilder.neu.pruefung_aus": "Neue Bilder zählen sofort, die Prüfung ist ausgeschaltet.",
+    "koerperbilder.js.fertig": "Gespeichert.",
+    "koerperbilder.js.nicht": "Nicht ausgeführt: {grund}",
+    "koerperbilder.js.fehler": "Keine Antwort vom Dienst. Seite neu laden.",
+    "koerperbilder.js.zahl": "Bitte eine ganze Zahl ab 1 eingeben.",
+    "koerperbilder.js.laeuft": "Startet …",
+    "koerperbilder.grund.anker": "kein Treffer zum Gesichtsbild",
+    "koerperbilder.grund.personbild": "kein Gesichtsbild zum Vergleich",
+    "koerperbilder.grund.clip": "Clip fehlt",
+    "koerperbilder.grund.kurz": "Clip zu kurz",
+    "koerperbilder.grund.person": "Person nicht ganz zu sehen",
+    "koerperbilder.grund.daten": "Ereignisdaten von Frigate fehlen",
+    "koerperbilder.grund.pose": "Modell für Körperhaltungen fehlt",
+    "koerperbilder.grund.speicher": "zu wenig Speicher",
+    "koerperbilder.grund.technik": "Verarbeitung fehlgeschlagen",
+    "koerperbilder.grund.ablage": "Bild ließ sich nicht speichern",
 }

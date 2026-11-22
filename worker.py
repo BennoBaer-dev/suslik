@@ -48,6 +48,13 @@ serialisiert (self.lock) und haelt Timeout/killpg. stdin-EOF (execv-Waise/Ende) 
   {"typ":"rechenprobe","zeitbudget_s":60,"backend_geraet_je_task":{...},"log":"..."}
      (Lieferung C: rechnet jedes Modell auf seinem BETRIEBS-Geraet gegen die CPU —
       Antwortfeld "rechenprobe" = eine Zeile je Modell; gedruckt wird beim Dienst)
+  {"typ":"koerperschnitt","art":"cutter"|"abfrage","eid":"...","person":"...","data_dir":"...",
+   "frigate_url":"...","n":3,"anker_min":0.5,"person_backend":"cpu","log":"..."}
+     (Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW3: im eigenen Koerper-Prozess
+      `personwork`. art cutter schneidet Koerperbilder mit Anker gegen das person.png des
+      Ereignisses, art abfrage dieselbe Rechnung ohne Anker (Stufe KW5). Antwortfeld
+      "schnitt" = core.koerperschnitt.schnitt_job-Ergebnis: grund, detail, zaehler, bilder;
+      den Auftrag baut core.koerperschnitt.auftrag)
   {"typ":"ping"}
   Jeder Job (ausser ping) darf zusaetzlich "rss_max_mb" tragen: die Politik-Grenze
   der In-Job-RSS-Wache (= worker_rss_max_mb des Dienstes; s. _JobRssWache und
@@ -90,7 +97,6 @@ sys.path.insert(0, HERE)
 
 _emb = None                      # der eine warme Embedder je Worker-Leben
 _EchterEmbedder = None
-_werk = {}                       # P1: warme Werkzeuge des personwork-Betriebs (PoseWache)
 _normmass = None                 # die eine warme NormMass je Worker-Leben (Vorrat B2)
 _strukturmass = None             # die eine warme StrukturMass je Worker-Leben (.32x)
 
@@ -406,7 +412,7 @@ def _cgroup_frei_mb(wurzel="/sys/fs/cgroup"):
     Am Prod-Container gemessen (10.08.): current 5534 MB, davon file
     4395 MB (79 %), inactive_file allein 3201 MB. Ein naives Limit-current
     haette bei einem 6-GiB-Docker-Limit nur 610 MB "frei" gemeldet, das
-    min() im Budget (analyze.py koerper_abnehmer) haette 2725 auf 610 MB
+    min() im Budget (damals analyze.py koerper_abnehmer) haette 2725 auf 610 MB
     gedrueckt und damit genau den KeinKoerper-Totalausfall erzeugt, den
     der Fix beseitigt — ausgerechnet auf den speicherbegrenzten
     Installationen, fuer die der Deckel gebaut ist. Der Kernel wirft
@@ -458,21 +464,15 @@ WACHE_INTERVALL_S = 1.0   # Abtast-Takt der In-Job-RSS-Wache. Reine Mess-Kadenz,
 
 def _job_rss_grenze(job):
     """Politik-Grenze der In-Job-Wache in MB (0 = unbekannt -> nur Regel 3).
-    Rangfolge — DECKUNGS-VERTRAG statt zweiter Zahlenquelle (beide Wege speist
-    verifyd aus DERSELBEN Config worker_rss_max_mb):
-      1. Job-Feld "rss_max_mb" (Protokoll oben): setzt der Dienst seit .172
-         per setdefault in WorkerProzess.job auf jeden Nicht-ping-Job — aus
-         derselben Config worker_rss_max_mb wie seine Neustart-Schwelle.
-      2. analyze-Jobs: der --koerper-rss-max-mb-Wert aus argv. verifyd
-         (run_analyze) setzt ihn aus worker_rss_max_mb, allerdings nur bei
-         scharfem Koerperpfad — derselbe Wert auf dem aelteren Transport."""
+    Quelle ist das Job-Feld "rss_max_mb" (Protokoll oben): setzt der Dienst seit .172
+    per setdefault in WorkerProzess.job auf jeden Nicht-ping-Job — aus derselben Config
+    worker_rss_max_mb wie seine Neustart-Schwelle. (Der zweite, aeltere Transport ueber
+    --koerper-rss-max-mb in der analyze-argv ist mit dem Koerper-Abnehmer in Stufe KW6
+    des Bauplans analysen/bauplan_koerperweg_neu.md entfallen.)"""
     try:
         g = job.get("rss_max_mb")
         if g:
             return max(0, int(float(g)))
-        argv = job.get("argv") or []
-        if job.get("typ") == "analyze" and "--koerper-rss-max-mb" in argv:
-            return max(0, int(float(argv[argv.index("--koerper-rss-max-mb") + 1])))
     except Exception:
         pass
     return 0
@@ -591,27 +591,6 @@ class _JobRssWache:
             rss_vor = rss
 
 
-def _koerper_zusatz(argv):
-    """Z5 zusatz-Rueckweg: was der Koerper-Abnehmer im Analyse-Lauf geliefert
-    hat, in die Job-Antwort heben (konzept_frames.md v2 §3.2 'Wo der Lauf
-    wohnt'). Der Dienst sieht damit im Log, ob der zweite Abnehmer wirklich
-    lieferte, ohne die Uebergabe selbst zu oeffnen. Fehlt sie, ist das kein
-    Fehler: dann faehrt der Dienst wie immer seinen eigenen Weg."""
-    try:
-        d = argv[argv.index("--dir") + 1]
-        with open(os.path.join(d, "koerper.json")) as f:
-            k = json.load(f)
-    except Exception:
-        return None
-    return {"koerper_crops": len(k.get("top") or []),
-            "koerper_puffer_mb": k.get("puffer_mb"),
-            "koerper_samples": k.get("samples"),
-            **({"koerper_degradiert": str(k.get("degradiert"))[:40]}
-               if k.get("degradiert") else {}),
-            **({"koerper_ausfall": str(k.get("ausfall"))[:120]}
-               if k.get("ausfall") else {})}
-
-
 @contextlib.contextmanager
 def _fd_umleitung(logpfad):
     """stdout+stderr auf FD-EBENE (dup2) in die Job-Logdatei umleiten.
@@ -691,7 +670,6 @@ def _job_ausfuehren(job, antwort_out=None):
                 # analyze haelt Zustand auf Modulebene -> run_path gibt jedem Lauf ein
                 # frisches Modul-Umfeld; nur der Embedder ueberlebt (Factory oben).
                 runpy.run_path(os.path.join(HERE, "analyze.py"), run_name="__main__")
-                zusatz = _koerper_zusatz(job.get("argv") or [])
             elif typ == "sammle":
                 import anlernen
                 # .536 B3: `nur_eids`/`zeit_deckel_s` reisen auch hier mit. Dieser
@@ -926,44 +904,13 @@ def _job_ausfuehren(job, antwort_out=None):
                 # ist die GPU frei. Der Prozess LIEFERT nur Daten; gedruckt wird vom
                 # Hauptprozess, sonst stuende das Ergebnis nicht im Docker-Log.
                 zusatz = _rechenprobe_fuer_job(job)
-            elif typ == "koerper":
-                # P1 (.202, konzept_speicher.md): das Koerper-URTEIL laeuft im
-                # personwork-Prozess statt als ungedeckelter Thread im Main —
-                # der 15.08. hat den Main fuenfmal daran sterben lassen. Das
-                # RAM-Budget entsteht HIER (eigener VmRSS ist der wahre Stand,
-                # exakt das analyze.py-Muster), damit das 10.08.-Gate samt
-                # Degradation auf diesem Pfad ZUM ERSTEN MAL wirklich greift
-                # (I-1). Melde-/Kontroll-Folgen zieht der Dienst aus der
-                # Antwort — dieser Prozess urteilt nur.
-                from core import personlive as _plv
-                zusatz = {"u": _plv.urteilen(
-                    job["data_dir"], os.environ.get("FRIGATE_URL", ""),
-                    job["eid"], kontrolle=job.get("kontrolle"),
-                    still=bool(job.get("still")),
-                    ram_budget_mb=_koerper_budget(job))}
-            elif typ == "personlauf_ernte":
-                # P1: die ZWEITE Tuer (Personlauf-Ernte lief inline im Main,
-                # Widerleger-Fund W-F1) — EIN Event je Job, PoseWache bleibt
-                # warm (_werk, Muster des Embedder-Factory oben). Die alte
-                # Thread-Zeitwache des Mains entfaellt: haengt ein Event, killt
-                # der Dienst diesen Prozess ueber den Job-Timeout — sauberer
-                # als ein zurueckbleibender Daemon-Thread samt Puffer.
-                from core.personlauf import _proto
-                _proto()
-                import pfad_snapshots
-                from core import personernte as _pe
-                if _werk.get("wache") is None:
-                    from pose_wache import PoseWache
-                    _werk["wache"] = PoseWache()
-                budget = _koerper_budget(job)
-
-                def _extraktor(eid):
-                    return pfad_snapshots.event_verarbeiten(
-                        {"eid": eid}, ram_budget_mb=budget)
-
-                zusatz = {"r": _pe.ernte_event(
-                    job["data_dir"], job["lauf_id"], job["job"],
-                    _werk["wache"], _extraktor)}
+            elif typ == "koerperschnitt":
+                # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW3 Punkt 3 (Entscheid B): der Cutter (art
+                # cutter, mit Anker) und das Abfragebild (art abfrage, ohne Anker; Stufe KW5) im eigenen
+                # Koerper-Prozess. Ablauf und Gruende in core/koerperschnitt.py; das RAM-Budget entsteht hier
+                # (_koerper_budget). Die Bilder gehen in der Antwort zurueck, abgelegt werden sie vom Dienst.
+                from core import koerperschnitt as _ks
+                zusatz = {"schnitt": _ks.schnitt_job(job, ram_budget_mb=_koerper_budget(job))}
             else:
                 return {"ok": False, "fehler": f"unbekannter typ '{typ}'"}
         ok, fehler = True, None

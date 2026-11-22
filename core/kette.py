@@ -17,7 +17,9 @@ Ketten-DATEN; die Auslöse-Logik dazu ist bewusst NICHT Teil dieses Auszugs
 
 EINHAENGE-PUNKTE im Dienst (verifyd.py), unveraendert in Lage und Reihenfolge:
   (a) process() VOR der Analyse  — Quelle-Gate Person: stufe()=="aus" schaltet
-      den Koerper-Strang an der Quelle ab (kein --koerper im Analyse-Job);
+      den Koerper-Strang an der Quelle ab (seit Stufe KW6 des Bauplans
+      analysen/bauplan_koerperweg_neu.md gibt es kein --koerper im Analyse-Job mehr;
+      die Abfrage startet nach der Analyse im eigenen Koerper-Prozess);
   (b) process() NACH der Analyse — entscheide() ueber das Person-Urteil
       (Bedingungs-Quelle ist das PASS-Urteil, Mehr-Personen-Regel B);
   (c1) _vision_anstossen — Quelle-Gate Vision: stufe()=="aus" verhindert den
@@ -58,7 +60,7 @@ DEFAULT_KETTE = (
     {"stufe": "gesicht", "schalter": None, "stufen": ("immer",),
      "scharf_quelle": None, "bedingung": None, "zeitpunkt": "event"},
     {"stufe": "person", "schalter": "person_pfad", "stufen": tuple(KETTE_STUFEN),
-     "scharf_quelle": "personmodell", "bedingung": "gesicht_pass_bestaetigt",
+     "scharf_quelle": "koerper_schublade", "bedingung": "gesicht_pass_bestaetigt",
      "zeitpunkt": "event"},
     {"stufe": "vision", "schalter": "vision_pfad", "stufen": tuple(KETTE_STUFEN),
      "scharf_quelle": "vision_aktiv", "bedingung": "gesicht_pass_bestaetigt",
@@ -80,16 +82,33 @@ def stufe(cfg, weg):
 
 
 def koerper_scharf(data_dir):
-    """Hat der User den Koerper-Strang scharf geschaltet? EINE Auskunft
-    fuer beide Fragesteller: den Job-Parameter --koerper VOR der Analyse
-    (Z5) und das Urteil danach (_person_live)."""
+    """Traegt die Schublade der Koerperbilder das Erkennen? Ja, sobald sie
+    mindestens ein gueltiges Bild hat (Bauplan analysen/bauplan_koerperweg_neu.md,
+    Stufe KW5 Punkte 1 und 5; vorher: Status des alten Personenmodells).
+    Fragesteller: der Ausloeser der Koerper-Abfrage nach der Analyse
+    (Service._person_live, auch im Ketten-Entscheid) und lage(). (Der Job-Parameter
+    --koerper des alten Koerper-Abnehmers ist mit Stufe KW6 entfallen.)
+    -> bool; ein Lesefehler ist eine WARNING und heisst nein"""
     try:
-        from core import personmodell as pm
-        st = pm.status_lesen(data_dir)
+        from core import refquelle as _rq
+        return bool(_rq.body_read({"data_dir": data_dir},
+                                  states=(_rq.basis.BODY_STATES[1],)))
     except Exception:
         _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
         return False
-    return bool(st and st.get("scharf"))
+
+
+def _pose_grund():
+    """Der Grund, wenn das Pose-Modell fehlt (dann schneidet der Koerper-Weg
+    kein Bild, Stufe KW5 Punkt 5). -> englischer Text oder None"""
+    try:
+        from core import livewache as _lw
+        if _lw.pose_verfuegbar():
+            return None
+    except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "pose model counted as missing")
+    from core import koerperschnitt as _ks
+    return _ks.GRUND_POSE
 
 
 def lage(cfg):
@@ -97,14 +116,25 @@ def lage(cfg):
     Stufe UND die tatsaechliche Scharf-Lage. "wirksam" sagt, ob der Weg
     im Live-Betrieb ueberhaupt automatisch anlaufen kann — aus DENSELBEN
     Praedikaten, die die Quell-Hooks benutzen (stufe, koerper_scharf,
-    vision.aktiv): keine zweite Wahrheit."""
+    vision.aktiv): keine zweite Wahrheit. Person (Stufe KW5 Punkt 5):
+    `vorrat` = die Schublade traegt Erkennen; fehlt das Pose-Modell, ist
+    der Weg nicht wirksam und `grund` nennt es. Vision (Stufe KW6 Punkt 6): wirksam nur, wenn auch
+    core.vision.vision_verfuegbar() ja sagt (dasselbe Tor wie der Anstoss); geparkt nennt `grund` es.
+    -> {"person": {...}, "vision": {"stufe", "aktiv", "wirksam"[, "grund"]}}"""
+    from core import vision as _vis
     p, v = stufe(cfg, "person"), stufe(cfg, "vision")
-    scharf = koerper_scharf(cfg["data_dir"])
+    vorrat = koerper_scharf(cfg["data_dir"])
+    grund = _pose_grund()
+    person = {"stufe": p, "vorrat": vorrat,
+              "wirksam": vorrat and p != "aus" and grund is None}
+    if grund:
+        person["grund"] = grund
     aktiv = bool((cfg.get("vision") or {}).get("aktiv"))
-    return {"person": {"stufe": p, "modell_scharf": scharf,
-                       "wirksam": scharf and p != "aus"},
-            "vision": {"stufe": v, "aktiv": aktiv,
-                       "wirksam": aktiv and v != "aus"}}
+    offen, v_grund = _vis.vision_verfuegbar()
+    vision = {"stufe": v, "aktiv": aktiv, "wirksam": aktiv and v != "aus" and offen}
+    if not offen:
+        vision["grund"] = v_grund
+    return {"person": person, "vision": vision}
 
 
 def entscheide(stufen_wert, pass_bestaetigt):

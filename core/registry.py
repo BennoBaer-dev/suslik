@@ -252,16 +252,6 @@ FRAMEITER_AUSNAHMEN = {
         "Schrittweite vor dem Ende). Ueber den Verteiler gefuehrt bewiese sie den "
         "Vertrag des Verteilers, nicht die Kappung; und der Verteiler traegt den "
         "Deckel bewusst NICHT (deklarierte Naht, s. verifyd._ANALYZE_SCHALTER).",
-    "prototyp/frame_vergleich.py":
-        "Prototyp (E-P1b Frame-Vergleich, 03.08.), KEIN Urteilspfad: der Direktzugriff "
-        "sitzt in event_verarbeiten(), und das ruft nur main() dieses Werkzeugs. Der "
-        "Koerper-Strang importiert aus dem Modul ausschliesslich die drei reinen Helfer "
-        "bewegungs_box/schaerfe/clip_laden (pfad_snapshots.py) — keiner davon dekodiert. "
-        "Ehrlich dazu: die Datei liegt sehr wohl im Image (tools/personlern_stage.sh "
-        "staged sie nach docker/personlern_stage/), nur laeuft sie dort kein Urteil. "
-        "Seit Z2 kommt ihr CLIP-Bezug ohnehin aus core.frames (ein Download je Event). "
-        "Z7 laesst Deklaration ODER Umbau zu; deklariert, weil der Umbau Code aenderte, "
-        "den kein Urteil liest — der kleinere Eingriff bei gleicher Aussage.",
 }
 
 # Ordner ausserhalb des Pruefbestands, je mit Grund. Ohne diese Deklaration liefe das
@@ -867,7 +857,8 @@ def export_ergaenzen(store, cfg):
 # --- Herkunft einer Meldung (0.1.0.163, User-Wunsch 09.08.) --------------------------
 # Anlass: die Nachanalyse eines Durchgangs von GESTERN loeste eine Telegram-Meldung
 # aus, als stuende die Person gerade vor der Tuer (Live-Bug 09.08. 08:19). Die Ursache
-# ist gefixt und die Nachanalyse schweigt (core/personlive `still`). Das hier ist die
+# ist gefixt und die Nachanalyse schweigt (damals core/personlive `still`, seit Stufe KW6 des Bauplans
+# analysen/bauplan_koerperweg_neu.md im Archiv; der neue Koerperweg meldet nie). Das hier ist die
 # ZWEITE Verteidigungslinie: jede Meldung, die NICHT aus dem Live-Betrieb kommt, traegt
 # ihre Herkunft im Text — dann ist ein Fehl-Versand am Handy sofort als Nicht-Ereignis
 # lesbar, statt fuer bare Muenze genommen zu werden. Und die GEWOLLTEN Nicht-Live-
@@ -1038,17 +1029,16 @@ WEB_ROUTES = (
     "/ereignisse", "/erkennung", "/erkennung_live", "/erkennungstest", "/faces", "/fremde", "/frigate",
     "/gesichter", "/gpu", "/gpu_speichern", "/gt", "/health", "/heute", "/kalibrierung",
     "/kalibrierung_fuellen", "/kalibrierung_fuellstand", "/kameras", "/kameras/steckbriefe_neu",
-    "/kameras_speichern", "/kette", "/konfig", "/konfiguration", LEBENSZEICHEN_WEG, "/lernen", "/lernlauf",
+    "/kameras_speichern", "/kette", "/koerperbilder", "/koerperbilder/bestaetigen", "/koerperbilder/cutter",
+    "/koerperbilder/entfernen", "/koerperbilder/verwerfen", "/konfig", "/konfiguration", LEBENSZEICHEN_WEG, "/lernen",
+    "/lernlauf",
     "/lernlauf/alte_loeschen", "/lernlauf/anker", "/lernlauf/benenn_pruefung", "/lernlauf/benennen",
     "/lernlauf/lauf_loeschen", "/lernlauf/sichtung", "/lernlauf/uebernehmen", "/lernlauf/verwerfen",
     "/lernlauf_abbruch", "/lernlauf_fortsetzen", "/lernlauf_start", "/lernlauf_status", "/live",
     "/live_alarmbild", "/live_alerts", "/live_kalib_bild", "/live_kalib_leeren", "/live_messung",
     "/live_platz", "/live_schalter", "/live_speichern", "/live_status", "/live_test", "/log",
-    "/log/suslik-logs.tar.gz", "/neustart", "/offen", "/person", "/person/einstellungen",
-    "/person/kontrolle", "/person/modell", "/person/schalter", "/person_loeschen", "/person_umbenennen",
-    "/person_umbenennen/status", "/personlauf", "/personlauf/abnahme", "/personlauf/abnahme_fertig",
-    "/personlauf/bestand", "/personlauf/loeschen", "/personlauf/urteil", "/personlauf_abbruch",
-    "/personlauf_start", "/pruefen", "/qualitaet", "/qualitaet/start", "/qualitaet/status", "/readme",
+    "/log/suslik-logs.tar.gz", "/neustart", "/offen", "/person_loeschen", "/person_umbenennen",
+    "/person_umbenennen/status", "/pruefen", "/qualitaet", "/qualitaet/start", "/qualitaet/status", "/readme",
     "/readme_gesehen", "/readme_noetig", "/reconcile_status", "/ref_entfernen", "/ref_entfernen_batch",
     "/ref_pruef_neu", "/review", "/setup", "/setup_speichern", "/sprache_speichern", "/support/cache_leeren",
     "/support/dateiprobe", "/support/debug", "/support/einspielen", "/support/feinmessung",
@@ -1063,10 +1053,9 @@ WEB_ROUTES = (
     "/vision/test", "/vision/urteil", "/vorrat_aufnehmen", "/vorschlaege_neu", "/vorschlag_aufnehmen",
 )
 WEB_ROUTE_PREFIXES = (
-    "/anlern/crops/", "/clip/", "/doc/", "/event/", "/events/", "/hilfe/", "/kalibrierung/",
+    "/anlern/crops/", "/clip/", "/doc/", "/event/", "/events/", "/hilfe/", "/kalibrierung/", "/koerperbilder/bild/",
     "/lernlauf/crop/", "/lernlauf/satz/", "/lernlauf/vorrat/", "/live/", "/live_bild/",
-    "/live_kalibrierung/", "/pass/", "/person/kontrolle/bild/", "/person/treffer/", "/personlauf/bild/",
-    "/personlauf/fremdbild/", "/static/", "/support/", "/video/", "/vision/galerie/bild/",
+    "/live_kalibrierung/", "/pass/", "/static/", "/support/", "/video/", "/vision/galerie/bild/",
 )
 WEB_ROUTE_OTHER = "other"
 # Routen, deren Zeile nur auf DEBUG steht: /health, der Takt der Selbstwache (LEBENSZEICHEN_WEG), der Sekundentakt
@@ -1164,10 +1153,6 @@ SUPPORT_BEREICHE = {
     "lauf":       {"art": "tar", "wurzel": ("state", "lernlauf"),
                    "je_lauf": True,
                    "text": "one learning run (crops are face images)"},
-    "personlern": {"art": "tar", "wurzel": ("personlern",),
-                   "ausschluss": ("werkstatt",),
-                   "text": "body-recognition material (body images of "
-                           "known people)"},
     "state":      {"art": "tar", "wurzel": ("state",),
                    "dateien": ("deckung.jsonl", "lernlauf.json",
                                "anker.jsonl", "startup.json",
@@ -1180,8 +1165,10 @@ SUPPORT_BEREICHE = {
     # eigener Bereich mit Ordner-Walk (kein "dateien"). Text im Wortlaut des
     # faces-Eintrags: die Marken sind ein Bewegungsprofil (wer wann wo war).
     "anwesenheit": {"art": "tar", "wurzel": ("state", "anwesenheit"),
-                    "text": "presence marks (who was confirmed where, per "
-                            "quarter hour) — personal data, hand out with care"},
+                    "text": "presence marks (who was seen where, per quarter "
+                            "hour: confirmed by face or the live watcher, or via "
+                            "person recognition when that switch is on) — "
+                            "personal data, hand out with care"},
     "data":       {"art": "baum", "wurzel": (),
                    "text": "the whole data folder, read-only: "
                            "/support/data lists every file (path, size, "

@@ -76,6 +76,21 @@ T = {
         "missing. And what 0.1.1.010 learns afterwards is not taken over by a "
         "later update.\n\n"
         "I'm glad about any feedback, especially when something is off.",
+    "readme.person.titel": "Person recognition",
+    "readme.person.text":
+        "Person recognition gives a person a name when their face was not recognized or no face was visible. It's "
+        "optional. On the Recognition page (Body recognition card) you switch it on and choose whether it always "
+        "runs or only when no face was recognized.\n\n"
+        "It learns from videos in which face recognition identified the person with certainty. From this version "
+        "on, suslik notes for every new video whether it is suitable for this. Older videos don't count. On the "
+        "Body images page you choose whether the learning run starts by hand, once a day or right away.\n\n"
+        "By default, a name counts when three pictures from the videos of one pass match the same person. It shows "
+        "on Today and in Appearances and, if you want, also in Frigate, on the Presence page and as a separate "
+        "notification via "
+        "Pushover, Telegram and Home Assistant. You switch these on one by one; they are off by default.\n\n"
+        "I rebuilt all of it. I couldn't carry over the model and the training pictures of the old person learning "
+        "run; the learned faces stay. If you used the old learning run, person recognition has to learn again. "
+        "Thanks for your understanding.",
         "readme.generell.titel": 'General',
     "readme.generell.text": "My scenario detection hangs on Frigate's person detection. As soon as Frigate reports a person, I fetch the whole person event. Such an event is sometimes a few seconds long, sometimes several minutes. I go through all of it to find every person in it.\n\nWhether Frigate's own face recognition is switched on makes no difference. It is only needed if you want faces synced with Frigate.\n\nThe check never runs on the detect stream. It runs on the recording, that is the best stream the camera hands to Frigate.\n\nA check starts in one of two ways. Either from a person event in Frigate, which is the scenario path. Or from the live watcher: it pulls the running stream, straight from the camera or through Frigate's proxy, looks for faces and starts from there.\n\nA person is recognised in three ways. By the face. By the person as a whole, from the picture alone, without a face. By a vision model, and that one is still beta.\n\nI run 4K cameras here, with the frame rate as high as it goes, at least 15 frames per second. Same for the bitrate. A low bitrate leaves moving faces blurred.",
     "readme.aktuell.titel": 'What I am working on',
@@ -408,7 +423,10 @@ T = {
     "konfiguration.kette.gesicht_erkl":
         "the face path is the backbone of every analysis — person and "
         "vision hang off its walk-through verdict",
-    "konfiguration.kette.grund_person": "no trained person model armed yet",
+    "konfiguration.kette.grund_person_vorrat":
+        "no valid body image on the Body images page yet",
+    "konfiguration.kette.grund_person_pose":
+        "the pose model is missing, so no body picture can be cut",
     "konfiguration.kette.grund_vision": "vision detect is switched off",
     "konfiguration.kette.grund_aus": "switched off here",
     "konfiguration.kette.status_aus": "status: not running ({grund})",
@@ -1125,10 +1143,9 @@ T = {
     # Expert-Zeile der Gesichts-Kachel (zwei <a>-Links mitten im Satz),
     # der k_beweis-Trained-Zweig (drei <b>-Inseln + konditionale Anhaenge,
     # §8.10-Grenzfall), der Schluss-Absatz (zwei <a>-Links im Satz) und
-    # der Fuss-Satz mit <b>back</b>. Die Unteroptions-Labels "Always"/
-    # "Only if no face"/"If needed" sind Anzeige==Kennung (§8.2: das JS
-    # ekUnterWert vergleicht den Button-TEXT gegen 'Always', um den
-    # Config-Wert abzuleiten) und bleiben literal; die JS-Statustexte
+    # der Fuss-Satz mit <b>back</b>. Die Unteroptions-Labels kommen seit
+    # Stufe KW12 aus erkennung.unter.* (die Knoepfe tragen ihren Wert in
+    # data-wert, ekUnterWert ist entfallen); die JS-Statustexte
     # ('changed — Save + restart applies it' u. a.) warten auf window.T
     # (Stufe 1). p_erkl/v_erkl sind Whitelist-DATEN mit [:180]-Slice —
     # Slice-vor-Format-Stelle (§8.14), nur markiert.
@@ -1166,20 +1183,26 @@ T = {
     "erkennung.gesicht.beweis_bilder": "{n} reference images",
     "erkennung.gesicht.knopf_verwalten": "Manage people …",
     "erkennung.koerper.titel": "Body recognition",
-    "erkennung.koerper.satz":
-        "Recognizes household members even when no face is visible, by "
-        "build and posture — it learns from the reviewed pictures by "
-        "itself.",
-    "erkennung.koerper.beweis_kein_modell":
-        "no person model yet — learn and review first",
-    "erkennung.status.kein_modell":
-        "not running (no trained person model armed yet)",
+    "erkennung.koerper.satz": "Recognizes household members even when no face is visible, by build and posture. The person learning run cuts the body images for this from your videos.",
+    "erkennung.status.kein_vorrat":
+        "not running (no valid body image on the Body images page yet)",
+    "erkennung.status.pose_fehlt":
+        "not running (the pose model is missing, so no body picture can be cut)",
     "erkennung.status.hier_aus": "not running (switched off here)",
     "erkennung.status.vision_aus":
         "not running (vision detect is switched off)",
-    "erkennung.koerper.link_modell": "model status",
-    "erkennung.koerper.knopf_status": "Model status …",
     "erkennung.koerper.knopf_register": "Register body …",
+    # Stufe KW12 (Bauplan analysen/bauplan_koerperweg_neu.md, Abschnitt Oberflaeche): die Melde-Zeile der Karte
+    # Koerper und die Labels der Unteroptionen; Kanalnamen sind Eigennamen.
+    "erkennung.koerper.melden.titel": "Notifies:",
+    "erkennung.koerper.melden.nur_anzeige": "display only",
+    "erkennung.koerper.melden.leer": "Nothing selected: the name is only shown.",
+    "erkennung.koerper.melden.nicht_eingerichtet": "not set up",
+    "erkennung.koerper.melden.aria": "Notification channels of person recognition",
+    "erkennung.koerper.melden.anwesenheit": "Presence page",
+    "erkennung.unter.immer": "Always",
+    "erkennung.unter.nur_ohne_gesicht": "Only if no face",
+    "erkennung.unter.wenn_noetig": "If needed",
     "erkennung.vision.titel": "AI vision",
     "erkennung.vision.beta": "Beta",
     "erkennung.vision.satz":
@@ -1199,6 +1222,9 @@ T = {
     "erkennung.areas.beweis_keine": "no areas yet — everything counts",
     "erkennung.areas.knopf": "Manage areas &#8230;",
     "erkennung.knopf_speichern": "Save + restart",
+    # Stufe EK1 (Bauplan analysen/bauplan_erkennung_karte.md): state line of the save bar.
+    "erkennung.save.sauber": "All saved",
+    "erkennung.save.offen": "Not saved, saving restarts the service",
     # --------------------------------------------------- routes/faces ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): der dim-Einleitungs-
     # Satz traegt einen <a>-Link mitten im Satz (t_html-Weg spaeterer
@@ -1660,9 +1686,6 @@ T = {
     "nav.anker": "Anchors",
     "nav.lernen": "Suggestions",
     "nav.person": "Body images",
-    "nav.person_kontrolle": "Judged images",
-    "nav.person_modell": "Model status",
-    "nav.personlauf": "Person learning run",
     "nav.vision": "Vision detect",
     "nav.live": "Live watchers",
     "nav.live_alerts": "Live alerts",
@@ -1718,7 +1741,6 @@ T = {
     # diesem Wert); jede Richtung prueft die Gate-Stufe Sprach-Deckung.
     "js.status.fehler": "error",
     "js.status.fehler_gross": "Error",
-    "js.status.fehler_detail": "error: {msg}",
     "js.status.ok": "ok",
     "js.status.speichern": "saving …",
     "js.status.gespeichert": "saved",
@@ -1851,8 +1873,6 @@ T = {
     # js.areas.entfernen_frage: "Default" ist zugleich Kennung der
     # Standard-Area (Anzeige==Kennung §8.2) — bleibt in jeder Sprache.
     "js.areas.entfernen_frage": "Remove area \"{name}\"? Its cameras return to Default — nothing else changes.",
-    "js.personlauf.abbruch_frage": "Abort this person-learn run? Harvested images are kept.",
-    "js.personlauf.verwerfen_frage": "Discard run {lid} completely? All its images are deleted; a new run can re-harvest any time.",
     "js.vision.nicht_erreichbar": "could not reach the service — nothing was saved",
     "js.vision.gespeichert": "saved — recognition uses this connection from now on",
     "js.vision.gespeichert_neustart": "saved — the service restarts in a moment",
@@ -2389,6 +2409,9 @@ T = {
     "vision.schalter.knopf_aus": "Turn off",
     "vision.schalter.knopf_an": "Turn on",
     "vision.schalter.fehlt": "Still missing:",
+    # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW6 Punkt 4: Vision geparkt (Seiten und Schalter).
+    "vision.geparkt_satz":
+        "Vision is paused in this version and cannot be switched on. It comes back once it is rebuilt on the new body images.",
     "vision.schalter.fehlt_galerien": "{n} of {soll} approved galleries — build one under 'Build a gallery'",
     "vision.schalter.fehlt_test": "a green connection test",
     "vision.schalter.fehlt_kandidaten": "judged images to pick a candidate from — they appear while a pass is running; turn on 'diagnostic collection' under Person if you want them to stay",
@@ -2766,310 +2789,6 @@ T = {
     "visionwizard.neu.satz":
         "Nothing changes on its own &mdash; the gallery you approved "
         "stays exactly as it is until you build and approve a new one.",
-    # --- routes/personwizard.py ---
-    "personwizard.wer.alle": "all known people",
-    "personwizard.wer.fremde": "strangers",
-    "personwizard.titel": "Learn people — body recognition",
-    "personwizard.kopf.satz":
-        "A second, independent recognition path: it learns what a person "
-        "looks like as a WHOLE (build, hair, posture) so it can recognize "
-        "residents even when no face is visible.",
-    "personwizard.kopf.wie_titel": "How this works — you stay in control",
-    "personwizard.kopf.schritt1":
-        "1 · You choose how many events to scan and WHO to learn (one "
-        "person, or all known people).",
-    "personwizard.kopf.schritt2":
-        "2 · The run harvests full-body images from your own recordings. "
-        "A picture is tied to a person only when a face-confirmed "
-        "walk-through proves it — deliberately conservative.",
-    "personwizard.kopf.schritt3":
-        "3 · YOU review every harvested image; one click rejects a wrong "
-        "one. Nothing is learned without your approval.",
-    "personwizard.kopf.schritt4":
-        "4 · Training then runs locally in seconds, and a decision "
-        "threshold is measured so strangers stay below it.",
-    "personwizard.kopf.tempo":
-        "A note on speed: harvesting currently runs on the CPU, so please "
-        "bear with a run taking a little while (roughly 15&ndash;30 s per "
-        "event). Moving this to the GPU/NPU is planned for a later "
-        "version.",
-    "personwizard.kopf.warum":
-        "Why at least one person first: this path can only tell people "
-        "apart after it has learned — and you have reviewed — what at "
-        "least one resident looks like. Until then body recognition stays "
-        "OFF and never sends an alert. When it does alert later "
-        "(Pushover/Telegram), the message is marked as coming from person "
-        "recognition, not from face recognition.",
-    "personwizard.vorb.titel": "Preparing the run &hellip;",
-    "personwizard.vorb.zeile":
-        "tying the last {n} events to {wer} via confirmed walk-throughs",
-    "personwizard.vorb.satz":
-        "This takes a minute or two — the page refreshes on its own, "
-        "harvesting starts right after.",
-    "personwizard.ernte.stand":
-        "{events}/{von} events · {bilder} images harvested",
-    "personwizard.ernte.startet": "starting …",
-    "personwizard.ernte.titel": "A person-learn run is active",
-    "personwizard.ernte.zeile": "learning {wer} · {stand}",
-    "personwizard.ernte.satz":
-        "This page refreshes on its own. A new run can be started once it "
-        "finishes.",
-    "personwizard.ernte.knopf_abbruch": "Abort run",
-    "personwizard.ernte.abbruch_hinweis": "harvested images are kept",
-    "personwizard.unterbrochen.titel": "Last run was interrupted",
-    "personwizard.unterbrochen.satz":
-        "Probably a service restart. Start the same run again below — "
-        "already-harvested events are skipped automatically (resume), "
-        "nothing is lost.",
-    "personwizard.abnahme.titel": "Last run finished — your review is next",
-    "personwizard.abnahme.zeile":
-        "{n} images harvested for {wer} (run {lauf}).",
-    "personwizard.abnahme.knopf": "Review the images now",
-    "personwizard.abnahme.hinweis":
-        "finish the review to unlock the next run",
-    "personwizard.abnahme.knopf_verwerfen": "Discard this run",
-    "personwizard.abnahme.verwerfen_hinweis":
-        "bad result? throw it all away",
-    "personwizard.leer.verwaist":
-        "Skipped on purpose: {liste} — these names were deleted from your "
-        "people; their old confirmed events stay as history but are not "
-        "harvested.",
-    "personwizard.leer.titel":
-        "Run finished without images — here is why",
-    "personwizard.leer.satz":
-        "Nothing was changed; you can start another run below any time.",
-    "personwizard.fertig.verwaist":
-        "Skipped on purpose: {liste} — deleted people; their old confirmed "
-        "events are not harvested.",
-    "personwizard.fertig.fremd":
-        "{n} confirmed stranger images moved into the stranger pool — the "
-        "next training uses them right away.",
-    "personwizard.fertig.titel": "Review finished — material adopted",
-    "personwizard.fertig.zeile":
-        "{abgenommen} images approved as learning material, {verworfen} "
-        "rejected (run {lauf}).",
-    "personwizard.fertig.knopf": "View the learned material",
-    "personwizard.fehler.titel": "Last run failed",
-    "personwizard.auswahl.opt_alle": "All known people",
-    "personwizard.auswahl.opt_fremde":
-        "Strangers — collect stranger images",
-    "personwizard.auswahl.titel": "Who to learn",
-    "personwizard.auswahl.satz":
-        "Pick one person to review in small, focused batches — or all at "
-        "once. People come from your face collection; learning one at a "
-        "time keeps the review short.",
-    "personwizard.auswahl.fremde_satz":
-        "Strangers: harvests walk-throughs where nobody was recognized "
-        "(street-only passes, unconfirmed visitors). You confirm in the "
-        "review which really are strangers — they go into the stranger "
-        "pool and sharpen the decision threshold.",
-    "personwizard.umfang.knopf_letzte": "last {n}",
-    "personwizard.umfang.attr_eigen": "own N",
-    "personwizard.umfang.knopf_go": "go",
-    "personwizard.umfang.titel": "Scope (events, not days)",
-    "personwizard.umfang.satz":
-        "Start small (50) — you will review every harvested image by "
-        "hand.",
-    "personwizard.bilanz.ohne":
-        "last {n} person events for {wer} — the binding balance is "
-        "computed when the run is created",
-    # Zaehler-Split an der <b>-Grenze (§8.10): vor/nach rahmen die
-    # hervorgehobene Zahl, Rand-Leerzeichen gehoeren zum Wert.
-    "personwizard.bilanz.zahl_vor": "last {n} person events · ",
-    "personwizard.bilanz.zahl_nach":
-        " can be tied to {wer} via confirmed walk-throughs",
-    "personwizard.bilanz.fremd": " · {n} stranger candidates",
-    "personwizard.bilanz.erkl_fremd":
-        "Candidates are walk-throughs where nobody was recognized — "
-        "street-only passes and unconfirmed visitors. Everything is a "
-        "SUSPICION until your review; mark anyone who is NOT a stranger "
-        "there.",
-    "personwizard.bilanz.erkl":
-        "Tying is conservative: only walk-throughs with exactly one "
-        "face-confirmed person count. Everything you see afterwards can "
-        "be rejected with one click.",
-    "personwizard.bilanz.titel": "Your selection",
-    "personwizard.bilanz.knopf": "Create this run",
-    "personwizard.review.stempel": "WRONG",
-    "personwizard.review.h_fremde": "Strangers",
-    "personwizard.review.frage_fremd":
-        "click every image that is NOT a stranger (a resident, a known "
-        "visitor) or unusable. A second click takes it back. Everything "
-        "is saved instantly; unmarked images are adopted as confirmed "
-        "strangers and sharpen the decision threshold.",
-    "personwizard.review.frage":
-        "click every image that is WRONG (not this person, or unusable). "
-        "A second click takes it back. Everything is saved instantly; "
-        "unmarked images count as approved.",
-    "personwizard.review.titel": "Review the harvest",
-    "personwizard.review.kopf": "Run {lauf} — {frage}",
-    # Der Zeilenumbruch ist Teil des Originals (Template-Literal) und
-    # bleibt fuer die Byte-Treue im Wert.
-    "personwizard.review.zurueck": "&larr; back to the\nwizard",
-    "personwizard.review.knopf_fertig":
-        "Finish review — adopt approved images",
-    "personwizard.kontrolle.sammeln_titel": "Collect mode is ON",
-    "personwizard.kontrolle.sammeln_rest":
-        " — every judged image is kept for 30 days so you can check the "
-        "decisions later. Expect roughly 20&ndash;40 MB a day.",
-    "personwizard.kontrolle.schlank_titel": "Lean mode (default)",
-    "personwizard.kontrolle.schlank_rest":
-        " — judged images only live while a pass is running; afterwards "
-        "only the winning image and the verdict log below remain. This is "
-        "the privacy-friendly default for a fresh installation.",
-    "personwizard.kontrolle.titel": "Judged images",
-    "personwizard.kontrolle.satz":
-        "What body recognition actually looked at, one block per "
-        "walk-through: the image it judged, the class it came out with, "
-        "the score, and where the picture came from. Useful when a person "
-        "was missed, or someone was recognized who should not have been.",
-    "personwizard.kontrolle.leer_titel": "Nothing recorded yet",
-    "personwizard.kontrolle.tag_fremd": "stranger",
-    "personwizard.kontrolle.tag_drueber": "above threshold",
-    "personwizard.kontrolle.tag_drunter": "below threshold",
-    "personwizard.kontrolle.schwelle": " &middot; thr {schwelle}",
-    "personwizard.kontrolle.kopfzeile.eins":
-        "{wann} — {judged} judged, {n} image kept",
-    "personwizard.kontrolle.kopfzeile.viele":
-        "{wann} — {judged} judged, {n} images kept",
-    "personwizard.tabelle.fremd_zeile": "Strangers (extra class)",
-    "personwizard.tabelle.kein_fremd":
-        "No stranger class yet — recognition works much better with one: "
-        "confirmed stranger images teach the model what does NOT belong "
-        "and calibrate the decision threshold.",
-    "personwizard.tabelle.q_eichung": "measured",
-    "personwizard.tabelle.q_user": "set by you",
-    "personwizard.tabelle.q_standard": "built-in default",
-    "personwizard.tabelle.f_modell": "Active model",
-    "personwizard.tabelle.f_schwelle": "Threshold",
-    "personwizard.tabelle.f_scharf": "Armed",
-    "personwizard.tabelle.scharf_ja": "YES",
-    "personwizard.tabelle.scharf_ja_rest": " — judging live",
-    "personwizard.tabelle.scharf_nein": "no — not armed",
-    "personwizard.tabelle.konf_vor":
-        "Largest cross-group confusion in the calibration: ",
-    "personwizard.tabelle.konf_nach":
-        " — the strongest score any image reached for the WRONG group; "
-        "the closer to 1, the closer two groups are.",
-    "personwizard.tabelle.titel": "Learned groups",
-    "personwizard.karte.scharf": "Armed",
-    "personwizard.karte.unscharf": "Not armed yet",
-    "personwizard.karte.fehler":
-        "Last training attempt FAILED: {fehler} — this card shows the "
-        "previous model.",
-    "personwizard.karte.titel": "Model status",
-    "personwizard.karte.zeile":
-        "trained {wann} in {dauer} s — {bilder} images: {je} · {modell} · ",
-    "personwizard.karte.link": "details",
-    "personwizard.bestand.titel":
-        "Person material — what has been learned",
-    "personwizard.bestand.satz":
-        "Approved full-body images per person. Pick a group below to see "
-        "its images; delete a single image (&times; on the tile) — a new "
-        "run can always re-harvest afterwards. Deletions take effect on "
-        "the next training.",
-    "personwizard.bestand.leer_titel": "No approved material yet",
-    "personwizard.bestand.stark_titel": "What makes this model strong",
-    "personwizard.bestand.chip_fremde": "Strangers ({n})",
-    "personwizard.bestand.zeigen_titel": "Show images of",
-    "personwizard.bestand.zeigen_satz":
-        "Pick a group — its images open below, newest first.",
-    "personwizard.bestand.marker_tage.eins":
-        "only {n} day — recognition improves most with images from more "
-        "days, outfits and light",
-    "personwizard.bestand.marker_tage.viele":
-        "only {n} days — recognition improves most with images from more "
-        "days, outfits and light",
-    "personwizard.bestand.attr_loeschen": "delete this image",
-    "personwizard.bestand.z_bilder": "{n} images",
-    "personwizard.bestand.z_tage.eins": "{n} day",
-    "personwizard.bestand.z_tage.viele": "{n} days",
-    "personwizard.bestand.z_kameras.eins": "{n} camera",
-    "personwizard.bestand.z_kameras.viele": "{n} cameras",
-    "personwizard.modell.titel": "Person model — status",
-    "personwizard.modell.satz":
-        "The body-recognition model, trained from your approved images. "
-        "It retrains automatically after every finished review and after "
-        "deletions.",
-    "personwizard.modell.leer_titel": "No model yet",
-    "personwizard.modell.fremd_keine":
-        "none yet — threshold measured between your people only",
-    "personwizard.modell.fremd_gesammelt":
-        "{n} collected — {min} needed before they are trained and "
-        "calibrate the threshold",
-    "personwizard.modell.fremd_geeicht":
-        "{n} in training · threshold calibrated against real strangers",
-    "personwizard.modell.fremd_ungeeicht":
-        "{n} in training — the threshold calibration did not run (see the "
-        "note below)",
-    "personwizard.modell.f_trainiert": "Trained",
-    "personwizard.modell.f_dauer": "Training time",
-    "personwizard.modell.f_modell": "Model",
-    "personwizard.modell.f_bilder": "Images total",
-    "personwizard.modell.f_personen": "Persons",
-    "personwizard.modell.f_fremd": "Stranger negatives",
-    "personwizard.modell.scharf_ja": "YES — live judging active",
-    "personwizard.modell.scharf_nein": "no — not armed yet",
-    "personwizard.modell.fehler":
-        "Last training attempt FAILED ({zeit}): {fehler} — the model "
-        "shown here is the previous one and does not include your latest "
-        "changes.",
-    "personwizard.modell.aktuell_titel": "Current model",
-    "personwizard.modell.material_titel": "Learning material per person",
-    "personwizard.modell.kopf_person": "person",
-    "personwizard.modell.kopf_bilder": "approved images",
-    "personwizard.modell.kopf_anteil": "share",
-    "personwizard.modell.summe": "total",
-    "personwizard.modell.q_eichung": "measured on your material",
-    # {pct} vorformatiert (round) aus der Route (§8.8).
-    "personwizard.modell.eich_fremd":
-        "Measured by {folds}-fold cross-validation over {n} held-out "
-        "images of your people plus {n_fremd} confirmed strangers: the "
-        "strongest resident confidence any real stranger reached was "
-        "{max} &rarr; threshold {schwelle}; {pct}% of the genuine images "
-        "pass. The other side of the coin: {ueber} of your own images "
-        "would reach that threshold for the WRONG person (strongest "
-        "{vmax}).",
-    "personwizard.modell.eich_intern":
-        "Measured by {folds}-fold cross-validation over {n} held-out "
-        "images: strongest confidence for a WRONG person {max} &rarr; "
-        "threshold {schwelle}; {pct}% of the genuine images pass. Honest "
-        "limit: this calibrates BETWEEN your learned people — real "
-        "strangers are not in the material yet.",
-    "personwizard.modell.regeln_titel": "Judgment settings",
-    "personwizard.modell.schwelle_vor": "Decision threshold: ",
-    "personwizard.modell.r_fenster": "Fire window",
-    "personwizard.modell.r_feuer": "Supporting events to fire",
-    "personwizard.modell.r_karenz": "Cool-down after an alert",
-    "personwizard.modell.regeln_satz":
-        "Leave the threshold empty to follow the measured value "
-        "automatically (it re-measures with every training). The fire "
-        "rule: alert only after this many supporting events inside the "
-        "window, then stay quiet for the cool-down.",
-    "personwizard.modell.knopf_speichern": "Save settings",
-    "personwizard.modell.satz_user":
-        "The decision threshold is set by you ({schwelle})",
-    "personwizard.modell.satz_user_eich":
-        " — the calibration against {n} confirmed strangers would be "
-        "{alt}",
-    "personwizard.modell.satz_geeicht":
-        "The decision threshold is calibrated against {n} confirmed "
-        "stranger images.",
-    "personwizard.modell.satz_ungeeicht":
-        "The decision threshold is not yet calibrated against stranger "
-        "material — treat alerts as a preview and keep an eye on them.",
-    "personwizard.modell.satz_fremd_drop":
-        " A body the model reads as a stranger is dropped before it can "
-        "become a hit.",
-    "personwizard.modell.live_titel": "Live switch",
-    "personwizard.modell.live_an":
-        "ARMED — the body path judges live events and may alert.",
-    "personwizard.modell.live_aus":
-        "Not armed — the body path stays silent.",
-    "personwizard.modell.live_hinweis":
-        "Alerts carry the note &quot;person recognition, not face&quot;.",
-    "personwizard.modell.knopf_disarm": "Disarm",
-    "personwizard.modell.knopf_arm": "Arm body recognition",
     # --- webui/bausteine.py ---
     # Nur die gt_leiste-ANZEIGE-Texte; die Speicherwerte (GT_OFFEN_LABELS,
     # GT_KEIN_MENSCH) und KAT_LABELS/KAT_FARBE bleiben literal (Kommentar
@@ -3129,13 +2848,6 @@ T = {
     "vision.modell.js_id_fehlt": "enter an id first",
     "vision.modell.js_prueft": "checking …",
     "vision.modell.js_fehler": "error",
-    # --- routes/personwizard.py (Review-Script + Schalter) ---
-    "personwizard.review.js_zaehl": " of {n} marked wrong",
-    "personwizard.review.js_frage_vor": "Finish the review? ",
-    "personwizard.review.js_frage_mitte":
-        " images will be adopted as learning material, ",
-    "personwizard.review.js_frage_nach": " rejected.",
-    "personwizard.modell.js_fehler": "error ",
     # --- verifyd.py POST-Antworten (antwort.*, Nutzungs-Reihenfolge) ---
     "antwort.person_entfernt":
         "{person} removed ({n} reference set(s) archived — nothing deleted)",
@@ -3227,10 +2939,7 @@ T = {
         "running finishes, then the pictures are removed",
     "antwort.passernte_abbruch_leer":
         "nothing to cancel — this check is not running any more",
-    "antwort.personlauf_kein_review": "no run awaiting review",
-    "antwort.personlauf_kein_lauf": "no active run",
     "antwort.events_bereich": "events must be 1..{max}",
-    "antwort.personlauf_aktiv": "a person-learn run is already active",
     "antwort.lernlauf_tag_ungueltig": "invalid day (YYYY-MM-DD)",
     # {phase} ist die interne Phasen-Kennung (sprachneutral, §8.19).
     "antwort.lernlauf_phase":
@@ -3373,8 +3082,8 @@ T = {
     #    == erkennung.koerper.knopf_register.
     #  - hilfe.koerper.satz4 + hilfe.vision.satz1/satz4 zitieren die
     #    Unteroptions-Labels <b>Only if no face</b>/<b>Always</b>/<b>If
-    #    needed</b> — die sind Anzeige==Kennung (§8.2) und noch LITERAL in
-    #    routes/erkennung.py: erst entkoppeln, dann beides wortgleich.
+    #    needed</b> == erkennung.unter.* (seit Stufe KW12 entkoppelt,
+    #    wortgleich je Sprache).
     #  - hilfe.vision.satz3 nennt die "Vision page" == nav.vision
     #    ("Vision detect"); "Register vision" auf der Vision-Kachel
     #    == erkennung.vision.knopf_register (hilfe.vision "mehr"-Block,
@@ -3427,10 +3136,7 @@ person.</p>""",
     "hilfe.koerper.satz2": """<p>It is built for exactly this case: no usable face, you still want to know
 who it was, and you do not want to hand the pictures to an AI vision model
 for it.</p>""",
-    "hilfe.koerper.satz3": """<p>It learns from material you approve. <b>Register body</b> starts a short
-learning run for one person: the system collects pictures of them from your
-cameras, you review the result once, and from then on it keeps learning by
-itself.</p>""",
+    "hilfe.koerper.satz3": "<p>It works with body images from your own videos. <b>Register body</b> opens the Body images page. There you start the person learning run: it cuts body images from videos in which exactly one person was in view and their face was recognized with certainty. By default, new images count only after you accept them.</p>",
     "hilfe.koerper.satz4": """<p>With the switch above you choose whether and when it runs. <b>Only if no
 face</b> means it stays quiet unless the face check came up empty.
 <b>Always</b> means it checks every pass. Off means it never runs.</p>""",
@@ -3653,64 +3359,6 @@ between.</p>""",
         "picture of the SAME view moves up. This does not touch your "
         "learning material; it only says &bdquo;not as a gallery "
         "cell&ldquo;.",
-    # routes/personwizard.py.
-    "personwizard.kopf.stark_satz":
-        "<b>What makes the model strong:</b> variety beats volume. Images "
-        "from <b>many different days</b> (outfits, light, cameras) help "
-        "far more than many images from one walk — run the harvest "
-        "again on new days rather than harvesting one day deeper. "
-        "Confirmed stranger images sharpen the decision threshold the "
-        "same way.",
-    # ZITAT: "Model status" == nav.person_modell (+ erkennung.koerper.
-    # knopf_status "Model status …").
-    "personwizard.fertig.training_satz":
-        "Training on the approved material starts automatically after the "
-        'review — see <a href="/person/modell">Model status</a>. You '
-        "can start another run below any time.",
-    # ZITAT-KOPPLUNG: "Configuration" == nav.bereich.configuration,
-    # "Advanced" == nav.konfiguration. Der alte Wortlaut "Settings" war
-    # GEDRIFTET (Bereich seit .210 "Configuration") — toter Wegweiser,
-    # gleiche faktische Klasse wie der "(Settings)"-Fix vom 20.08.,
-    # deshalb an der Quelle korrigiert (kein Stil-Eingriff).
-    "personwizard.kontrolle.schalter_satz":
-        'Switch it under <a href="/konfiguration">Configuration &rarr; '
-        "Advanced</a>, key <code>diagnostic_collection</code>. Images and "
-        "log expire together with the hit log after 30 days &mdash; "
-        "nothing here is kept longer than the recognition record itself.",
-    # ZITAT: "Model status" == nav.person_modell.
-    "personwizard.kontrolle.leer_satz":
-        "Entries appear once body recognition is armed on "
-        '<a href="/person/modell">Model status</a> and a person walks '
-        "through.",
-    # ZITAT: "Person learn" == nav.personlauf.
-    "personwizard.bestand.leer_satz":
-        'Run <a href="/personlauf">Person learn</a> and finish the review '
-        "— approved images appear here.",
-    "personwizard.bestand.stark_satz":
-        "Variety beats volume: images from <b>many different days</b> "
-        "(outfits, light) help far more than many images from one walk. "
-        "Aim for several days per person and let the harvest cover all "
-        "your cameras.",
-    # {n} = Fremd-Bilderzahl (Route liefert die rohe Zahl).
-    "personwizard.bestand.fremd_satz":
-        "<b>Strangers:</b> {n} confirmed stranger images calibrate the "
-        "decision threshold — the more strangers the model has seen, "
-        "the more reliable that line is. (Collected in "
-        "<code>personlern/fremd/</code>; a page for growing this set from "
-        "your own street traffic is planned.)",
-    "personwizard.bestand.fremd_erklaerung":
-        "Confirmed stranger images — they train the extra class and "
-        "calibrate the decision threshold. Deleting one retrains the model "
-        "right away (files live in <code>personlern/fremd/</code>).",
-    # ZITAT: "Person learn" == nav.personlauf.
-    "personwizard.modell.leer_satz":
-        'Run <a href="/personlauf">Person learn</a> and finish a review '
-        "— training starts automatically afterwards.",
-    # ZITAT: "Body images" == nav.person.
-    "personwizard.modell.material_satz":
-        "Manage the images under "
-        '<a href="/person">Body images</a> — deletions retrain the '
-        "model automatically.",
     # ---- Meldetexte (Stufe 4) --------------------------------------------
     # Pushover-/Telegram-TEXTE (konzept_sprache.md §4.4 + §6.4). Sie
     # entstehen OHNE Request: die Sprache kommt am Meldeweg aus dem
@@ -3765,6 +3413,9 @@ between.</p>""",
     # "{_vt_wort or 'match'}").
     "meldung.person.wort_ersatz": "match",
     "meldung.person.zahl": "[score {score}]",
+    # Stufe KW12 Punkt 8: Meldungen der Personenerkennung (Pushover, Telegram); {zusatz} == heute.pass.via_koerper.
+    "meldung.koerper.satz": "{name} recognised ({kamera}, {zeit}) – {zusatz}",
+    "meldung.koerper.telegram": "{kamera}\n{name} at {zeit}, {zusatz} (suslik)",
     # Vision-Meldungen (verifyd._vision_melden). "picture(s)"/
     # "comparison(s)" bleiben EINE Form (§8.18), der Gedankenstrich-Zusatz
     # ist ein eigener Schluessel (§8.11).
@@ -3883,8 +3534,9 @@ between.</p>""",
     "heute.waechter.cnt.viele": "{n} live watcher alerts",
     "heute.waechter.mehr": "all {n} alerts ({m} more)",
     "heute.anw.dauer": "present about {h} h",
-    "heute.anw.title": "presence by hour, all cameras — red: confirmed present, green: system running, nobody seen",
+    "heute.anw.title": "presence by hour, all cameras — red: confirmed present, light with red border: via person recognition, green: system running, nobody seen",
     "heute.anw.title_gesamt": "presence by hour — all cameras, not filtered by the area view",
+    "heute.anw.zelle": "{zeit} · {zustand}",
     "heute.pass.mehr_kameras": "all {n} cameras ({m} more)",
     "heute.pass.live": "live",
     "heute.pass.live_title": "a live watcher reported a name during this pass",
@@ -3968,34 +3620,6 @@ between.</p>""",
     # Antwort der Support-Einspielung. Jetzt 503 mit diesem Satz.
     "antwort.einspielen.frigate_fehlt":
         "frigate_url is not configured on this installation",
-    # ---- personlauf-Design (Nachzug) ----
-    # 20.08.: /personlauf traegt jetzt dasselbe Lauf-Design wie der
-    # Gesichts-Lernlauf (Vier-Kachel-Fluss, Saeule, Suchknopf mit Popup).
-    # Alle bisherigen personwizard.*-Texte bleiben unveraendert in Gebrauch —
-    # neu sind nur die Beschriftungen, die es im alten Karten-Layout gar
-    # nicht gab (Kachel-Titel und je ein Klartext-Satz je Kachel-Leerzustand).
-    # Was wortgleich schon existiert, wird wiederverwendet statt verdoppelt:
-    # Kachel 1/4 heissen wie drueben (lernwizard.kachel.lauf/.fertig), die
-    # erste Saeulen-Marke ist lernwizard.seg.vorbereiten, dazu
-    # lernwizard.k1.gestartet/.k1.scope, .such.klein, .knopf_abbrechen,
-    # .knopf_neuer_lauf und erkennung.link_how.
-    # ACHTUNG Uebersetzungsrunde: diese sieben Schluessel fehlen noch in
-    # de/es/it/fr — das ist die bewusst deklarierte Fehlmenge.
-    "personwizard.kachel.sammeln": "Collect images",
-    "personwizard.kachel.pruefen": "Review the pictures",
-    "personwizard.k1.satz":
-        "Choose who to learn and how far back to look &mdash; the run then "
-        "collects the pictures from your own recordings.",
-    "personwizard.k2.satz":
-        "Harvests full-body pictures from your recordings, and only from "
-        "walk-throughs a face already confirmed.",
-    "personwizard.k3.satz":
-        "The step that needs you: every harvested picture gets your yes or "
-        "no before anything is learned.",
-    "personwizard.k4.satz":
-        "Approved pictures train the body model right away &mdash; it can "
-        "then recognize people with no face in sight.",
-    "personwizard.such.titel": "Set up a person-learn run",
     # --------------------------------------------- routes/systemstat ---
     "systemstat.titel": "System load",
     "systemstat.sub":
@@ -4113,7 +3737,7 @@ between.</p>""",
     # --- routes/anwesenheit.py (.409, Anwesenheitsseite) ---
     "anwesenheit.titel": "Presence",
     "anwesenheit.knopf": "Presence",
-    "anwesenheit.knopf_tip": "Presence: who was confirmed on the property, quarter hour by quarter hour",
+    "anwesenheit.knopf_tip": "Presence: who was seen on the property, quarter hour by quarter hour",
     "anwesenheit.kopf_satz": "One row per person, the day in quarter-hour cells. Red = confirmed present in that quarter hour (event analysis or live watcher, shown once). With cautious recognition only a few cells turn red — that is normal, not an error.",
     "anwesenheit.seit": "Recording since {datum}.",
     "anwesenheit.fenster_auto": "Day window {von}–{bis} h, set automatically from the sightings of the last {tage} days; the hours outside it are one cell per hour.",
@@ -4147,6 +3771,7 @@ between.</p>""",
     "anwesenheit.quelle_worker": "event analysis",
     "anwesenheit.quelle_live": "live watcher",
     "anwesenheit.quelle_beide": "live watcher and event analysis",
+    "anwesenheit.quelle_koerper": "person recognition",
     "anwesenheit.nav.heute": "Today",
     "anwesenheit.nav.gestern": "yesterday",
     "anwesenheit.nav.attr_vortag": "previous day",
@@ -4241,4 +3866,81 @@ between.</p>""",
     "gpu.laeuft_wie_eingestellt": 'Active: the service is computing on {n} thread(s).',
     "gpu.vorschau_zu_wenig": 'Does not fit — {fehlt} short. Switch off a live watcher or take a thread back.',
     "gpu.speichern_gesperrt": 'Not enough graphics memory for this number of threads.',
+    # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW4: Seite „Body images“ (routes/koerperbilder.py)
+    "koerperbilder.satz": "When a face can't be seen, suslik recognizes a person by body images it cuts from your videos.",
+    "koerperbilder.zustand.erkennen": "Body recognition:",
+    "koerperbilder.zustand.pruefung": "Review of new images:",
+    "koerperbilder.zustand.an": "on",
+    "koerperbilder.zustand.aus": "off",
+    "koerperbilder.zustand.nur_ohne_gesicht": "only without a face",
+    "koerperbilder.zustand.unbekannt": "unknown setting",
+    "koerperbilder.zustand.ohne_bilder": "no images yet",
+    "koerperbilder.fuss.einstellungen": "Settings:",
+    "koerperbilder.teilmenge": "Part of the data could not be read, so this page may be incomplete. The reason is in the service log.",
+    "koerperbilder.vorrat.titel": "Stock",
+    "koerperbilder.vorrat.zweck": "Tap a person to see their images.",
+    "koerperbilder.vorrat.bilder.eins": "{n} image",
+    "koerperbilder.vorrat.bilder.viele": "{n} images",
+    "koerperbilder.vorrat.tage": "on {tage} of the last {max_tage} days",
+    "koerperbilder.vorrat.neuest": "newest {datum}",
+    "koerperbilder.vorrat.weitere.eins": "{n} more person has no images in stock yet.",
+    "koerperbilder.vorrat.weitere.viele": "{n} more people have no images in stock yet.",
+    "koerperbilder.vorrat.keine_bilder": "No body images in stock yet. The person learning run cuts them from suitable videos.",
+    "koerperbilder.vorrat.entfernen": "Remove this image",
+    "koerperbilder.vorrat.leer": "No body images and no known person yet.",
+    "koerperbilder.vorrat.leer_hinweis": "suslik learns faces first. Body images come from videos in which a face was recognized.",
+    "koerperbilder.cutter.titel": "Person learning run",
+    "koerperbilder.cutter.zweck": "Goes through the suitable videos and cuts body images from them.",
+    "koerperbilder.cutter.weg_aus": "Body recognition is switched off. You can still collect images.",
+    "koerperbilder.cutter.keine_titel": "No suitable videos yet",
+    "koerperbilder.cutter.keine_satz": "A video is suitable when exactly one person is in view and their face was recognized with certainty. The last {tage} days count. Videos that suslik analyzed before this feature existed do not count. As soon as there are suitable videos, you start the learning run here.",
+    "koerperbilder.cutter.personen_waehlen": "Choose people",
+    "koerperbilder.cutter.personen_hilfe": "Without a choice, all people are included.",
+    "koerperbilder.cutter.wartend.eins": "{n} video",
+    "koerperbilder.cutter.wartend.viele": "{n} videos",
+    "koerperbilder.cutter.videos": "How many videos to check per person",
+    "koerperbilder.cutter.balken": "Progress of the learning run",
+    "koerperbilder.cutter.start.eins": "Start learning run ({n} video available)",
+    "koerperbilder.cutter.start.viele": "Start learning run ({n} videos available)",
+    "koerperbilder.cutter.start_ohne_zahl": "Start learning run",
+    "koerperbilder.cutter.laeuft": "Running: {videos} of {offen} videos checked, new images: {bilder}.",
+    "koerperbilder.cutter.letzter": "Last run {zeit}",
+    "koerperbilder.cutter.geprueft.eins": "{n} video checked",
+    "koerperbilder.cutter.geprueft.viele": "{n} videos checked",
+    "koerperbilder.cutter.behalten.eins": "{n} image kept",
+    "koerperbilder.cutter.behalten.viele": "{n} images kept",
+    "koerperbilder.cutter.ausgefallen.eins": "{n} skipped: {gruende}",
+    "koerperbilder.cutter.ausgefallen.viele": "{n} skipped: {gruende}",
+    "koerperbilder.cutter.fehler": "the run did not run through: {grund}",
+    "koerperbilder.auto.lauf": "Start learning run",
+    "koerperbilder.auto.hand": "by hand",
+    "koerperbilder.auto.taeglich": "once a day with the maintenance",
+    "koerperbilder.auto.sofort": "right after each suitable video",
+    "koerperbilder.auto.uebernehmen": "Accept new images automatically",
+    "koerperbilder.auto.speichern": "Save + restart",
+    "koerperbilder.auto.fuss": "Learning run:",
+    "koerperbilder.auto.von_auto": "automatic",
+    "koerperbilder.auto.von_taeglich": "daily",
+    "koerperbilder.neu.titel": "New images",
+    "koerperbilder.neu.zweck": "New images count only after you accept them.",
+    "koerperbilder.neu.alle": "Accept all",
+    "koerperbilder.neu.annehmen": "Accept",
+    "koerperbilder.neu.verwerfen": "Discard",
+    "koerperbilder.neu.leer": "New images appear here after a person learning run.",
+    "koerperbilder.neu.pruefung_aus": "New images count right away, the review is switched off.",
+    "koerperbilder.js.fertig": "Saved.",
+    "koerperbilder.js.nicht": "Not done: {grund}",
+    "koerperbilder.js.fehler": "No answer from the service. Reload the page.",
+    "koerperbilder.js.zahl": "Enter a whole number from 1.",
+    "koerperbilder.js.laeuft": "Starting …",
+    "koerperbilder.grund.anker": "no match with the face image",
+    "koerperbilder.grund.personbild": "no face image to compare with",
+    "koerperbilder.grund.clip": "clip missing",
+    "koerperbilder.grund.kurz": "clip too short",
+    "koerperbilder.grund.person": "person not fully in view",
+    "koerperbilder.grund.daten": "event data from Frigate missing",
+    "koerperbilder.grund.pose": "model for body poses missing",
+    "koerperbilder.grund.speicher": "not enough memory",
+    "koerperbilder.grund.technik": "processing failed",
+    "koerperbilder.grund.ablage": "image could not be saved",
 }

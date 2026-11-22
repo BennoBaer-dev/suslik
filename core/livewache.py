@@ -3876,8 +3876,11 @@ class Melder:
     def telegram(self, kamera, video, text, bild=None, titel_schluessel=None, namen=None, nur_video=False):
         """Dieselbe Meldung ueber Telegram: die Zeile nach E13 als erste Zeile der Beschriftung, darunter der Text;
         ein leerer Text gibt nur die Zeile. `nur_video` (PW3) reicht an telegram_video durch: nur das Video, ohne
-        Rueckfall auf Foto oder Text. -> Rueckgabe von melden.telegram_video (True nur bei Annahme)"""
+        Rueckfall auf Foto oder Text. -> Rueckgabe von melden.telegram_video (True nur bei Annahme); steht
+        telegram_modus auf aus, False ohne Sendeversuch (Stufe TG1, O1320)"""
         from core import melden
+        if not melden.telegram_an(self.cfg):
+            return False
         _sprache.aktivieren()                     # Eintrittspunkt (c)
         zeile = self._titel(kamera, titel_schluessel, namen)
         return melden.telegram_video(self.cfg, video, f"{zeile}\n{text}" if text else zeile,
@@ -3931,7 +3934,7 @@ class Melder:
                     gesendet.append("pushover")
             except Exception as e:
                 fehler.append(f"pushover: {e}")
-        if "telegram" in kanaele:
+        if "telegram" in kanaele and melden.telegram_an(self.cfg):     # TG1: bei aus kein Telegram
             try:
                 if melden.telegram_video(self.cfg, None,
                                          _sprache.t("meldung.wache.caption",
@@ -5412,7 +5415,10 @@ class Engine:
         # wenn ein Push-Kanal zu senden oder eine 'none'-Zeile faellig ist.
         # PW5 (E14): nur Kanaele mit <kanal>_known. Bleibt keiner und steht MQTT nicht in kanaele, schreibt der Faden
         # eine 'none'-Zeile wie im kanallosen Fall, damit die Live-Sicht den Namen nicht verliert.
-        senden = ([kanal for kanal in k.cfg["kanaele"] if kanal != "mqtt" and k.cfg[f"{kanal}_known"]]
+        # TG1 Punkt 5: Telegram zaehlt bei telegram_modus aus nicht mit; bleibt dann kein Push-Kanal, ebenso die none-Zeile.
+        from core import melden as _melden
+        senden = ([kanal for kanal in k.cfg["kanaele"] if kanal != "mqtt" and k.cfg[f"{kanal}_known"]
+                   and (kanal != "telegram" or _melden.telegram_an(self.cfg))]
                   if push_offen else [])
         ohne_kanal = push_offen and not senden
         if ohne_kanal and "mqtt" in k.cfg["kanaele"]:
@@ -5862,9 +5868,11 @@ class Engine:
 
     def _video_start(self, k, buffer, mono, text, pfad):
         """Startet beim ersten Gesicht eines freigegebenen Auftritts die Aufnahme (PW3, E4, PV5; seit PW5 ohne
-        Gesichtsmeldung ueber Push): Telegram in kanaele, telegram_video an, Melder da.
+        Gesichtsmeldung ueber Push): Telegram in kanaele, telegram_video an, Melder da, telegram_modus nicht aus (TG1).
         -> None; laeuft schon eine Aufnahme dieses Waechters, keine zweite"""
-        if not (self.melder and "telegram" in k.cfg["kanaele"] and k.cfg["telegram_video"]) or k.stop_ev.is_set():
+        from core import melden as _melden
+        if not (self.melder and "telegram" in k.cfg["kanaele"] and k.cfg["telegram_video"]
+                and _melden.telegram_an(self.cfg)) or k.stop_ev.is_set():
             return
         # Rasterrate der Quelle; ist sie schneller als VIDEO_FPS_MAX, nimmt die Aufnahme nur jedes schritt-te
         # Rasterbild, und die Eingangsrate des Videos ist rate (Codex Runde 1 und 2, B2).

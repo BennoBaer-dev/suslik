@@ -217,12 +217,8 @@ HTML_SCHLUESSEL = frozenset({
     "visiontest.kopf.wege_satz", "visiontest.vision.einrichten_satz",
     "visionwizard.groesse.satz", "visionwizard.vorschlag.vergessen_satz",
     "visionwizard.vorschlag.satz",
-    "personwizard.kopf.stark_satz", "personwizard.fertig.training_satz",
-    "personwizard.kontrolle.schalter_satz",
-    "personwizard.kontrolle.leer_satz", "personwizard.bestand.leer_satz",
-    "personwizard.bestand.stark_satz", "personwizard.bestand.fremd_satz",
-    "personwizard.bestand.fremd_erklaerung",
-    "personwizard.modell.leer_satz", "personwizard.modell.material_satz",
+    # (die zehn personwizard.*-Schluessel sind mit der Seite in Stufe KW6 des Bauplans
+    # analysen/bauplan_koerperweg_neu.md entfallen)
 })
 
 

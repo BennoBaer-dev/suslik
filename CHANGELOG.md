@@ -5,6 +5,21 @@ never pushed to GHCR; they ship bundled with the next release (each release entr
 says which steps it bundles). This file keeps the last five releases; the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git history.
 
+## 0.1.1.110 (2026-11-22)
+
+Test release. 0.1.1.104 to 0.1.1.109 were never published; their changes are part of this version.
+
+- Person recognition (preview) is rebuilt and optional. It learns body images per person from videos in which the face path recognized exactly that person. An event without a recognized face and with exactly one person then counts as a vote when its body picture is close enough to one of them; by default a name counts when one pass gives the same person three votes (`koerper_stimmen`). Details: `docs/person-recognition.md` and the chapter Person recognition in Read me first.
+- Only videos analyzed with this version can give body images; older videos don't count. The path does nothing until there is at least one valid body image.
+- New page **Person → Body images**: start the learning run, choose how many videos per person to check, accept or discard new images (by default only images you accept count) and see the stock per person. `koerper_lauf` sets when the run starts: `hand` (by the button, the default), `taeglich` (once a day with the maintenance at 06:00) or `sofort` (right after each suitable video).
+- A body name is shown on **Today**, **Passes** and **Appearances**. Five switches, all off by default, let it go further: `koerper_meldet_frigate` (sub label, needs `sub_label_schreiben`), `koerper_meldet_pushover`, `koerper_meldet_telegram`, `koerper_meldet_ha` (MQTT topic `koerper_erkannt`) and `koerper_meldet_anwesenheit` (marks on the **Presence** page and in the hour bar on **Today**, nothing sent outside). Pushover, Telegram and Home Assistant send at most once per pass and person, and stay silent when the face path confirmed the same person within `anwesenheit_cooldown`.
+- **Recognition** page: the body card shows these switches and the choice **Start learning run** directly. The save button is now a bar at the bottom of the page, grey with "All saved" until you change something, then highlighted with "Not saved, saving restarts the service".
+- New settings, all on the **Advanced** page: `koerper_auswahl_stimmen` (6), `koerper_bilder_je_video` (3), `koerper_anker_min` (0.5), `koerper_sichtpruefung` (on), `koerper_lauf` (`hand`), `koerper_max_tage` (10), `koerper_max_je_person` (50), `koerper_schwelle` (0.65), `koerper_marge` (0.02), `koerper_stimmen` (3) and the five switches above (off). None of the defaults is measured on more than one system; see `docs/configuration.md`.
+- The old person-learn run is removed: its pages, its model and training pictures, the alerts with the note "person recognition, not face" and the MQTT message `person_erkennung`. The learned faces stay. If you used it, person recognition has to learn again. The maintenance step "data cleanup" moves the folder `personlern/` into the trash, which is emptied 7 days later.
+- Vision detect is parked: it is switched off and cannot be switched on in this version, a saved "on" is set to off once at the first start, and the Vision pages say why.
+- Telegram: with `telegram_modus` set to `aus` (off, the default), nothing is sent over Telegram any more, including fault messages and the messages and videos of the live watchers. The channel test on the page still works.
+- Body images live in `refquelle/koerperbilder/` in the data folder and are part of the full backup and of `/support/faces`; the support area `/support/personlern` is gone. The images no longer carry the DINOv2 model file.
+
 ## 0.1.1.103 (2026-11-18)
 
 - Accelerator images (cuda, gpu, gpu-legacy, rocm) no longer report OK when their GPU or NPU is not working at startup: the startup log shows FAIL, `/health` reports `ok: false`, every page shows a red line in the header, and the System page gives cause and fix under the Backend tile.
@@ -36,7 +51,3 @@ Test release. 0.1.1.058 was never published; its changes are part of this versio
 ## 0.1.1.057 (2026-11-08)
 
 - Margin rule for names: a face votes for a person only if its best match leads the second best by at least `stapel_abstand` (default 0.075, adjustable in Advanced Settings); closer faces give no vote and no preliminary name, in the analysis worker and the live watcher.
-
-## 0.1.1.056 (2026-11-07)
-
-- The self-watch now checks that the service is alive instead of how long the health report takes, restarts only the web server when just that stops answering, and the health report is served from a regularly updated snapshot.

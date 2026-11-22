@@ -278,6 +278,9 @@ nav .live .d { width: 7px; height: 7px; border-radius: 50%; background: var(--ok
 .hk-anw .hk-anw-da { background: var(--crit); }
 .hk-anw .hk-anw-n { opacity: .35; }
 .hk-anw .hk-anw-da.hk-anw-n { opacity: .8; }
+/* Stufe KW14: Stunde nur ueber Personenerkennung, wie das Abzeichen "Koerper" (.badge.koerper) */
+.hk-anw .hk-anw-koerper { background: var(--crit-bg); box-shadow: inset 0 0 0 1px var(--crit); }
+.hk-anw .hk-anw-koerper.hk-anw-n { opacity: .8; }
 .hk-anw-t { font-size: 11px; color: var(--faint); margin-top: 2px; }
 .hk-mehr { margin: -12px 0 24px; }
 .hk-mehr > summary { cursor: pointer; color: var(--accent); font-size: 13px; list-style: none;
@@ -1029,6 +1032,40 @@ body.easy .nur-expert { display: none; }
 .ek-unter button.an { background: var(--accent-weak); color: var(--accent); }
 .ek-card.aus .ek-satz, .ek-card.aus .ek-beweis { opacity: .55; }
 .ek-card.aus .ek-unter { display: none; }
+/* Stufe KW12 (Bauplan analysen/bauplan_koerperweg_neu.md): Zeile "Meldet an" der Karte Koerper und ihr Gitter der
+   Melde-Schalter; bei person_pfad aus verborgen wie die Unteroption. */
+.ek-melden { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px;
+             color: var(--dim); }
+.ek-melden b { color: var(--text); font-weight: 600; }
+.ek-melden-gitter { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.ek-melden-zelle { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+                   padding: 8px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ek-melden-zelle .ek-kippzeile { flex-wrap: wrap; }
+.ek-melden-zelle .ek-zl { min-width: 0; overflow-wrap: anywhere; }
+.ek-melden-fehlt { font-size: 12px; color: var(--dim); }
+.ek-melden-leer { grid-column: 1 / -1; margin: 0; font-size: 12px; color: var(--dim); }
+/* Stufe KW14: der fuenfte Schalter (Seite Anwesenheit) ueber die ganze Breite, abgesetzt: er meldet nichts nach aussen */
+.ek-melden-zelle.ek-melden-anw { grid-column: 1 / -1; margin-top: 4px; border-style: dashed; }
+.ek-card.aus .ek-melden-block { display: none; }
+/* Stufe EK1 Punkt 7: die Zeile „Lernlauf starten“ bricht um; bei 360 px rutscht die Auswahl unter ihr Label, statt die
+   Karte zu verbreitern (ohne Umbruch gemessen 368 px). */
+.ek-kippzeile.ek-lauf { flex-wrap: wrap; }
+/* Stufe EK1 (Bauplan analysen/bauplan_erkennung_karte.md): Speicherleiste der Seite Erkennung, klebt unten (Bauart
+   .vs-savebar in routes/vision.py). Ohne Aenderung ruhig: Knopf grau mit aria-disabled, er bleibt fokussierbar; nach
+   einer Aenderung (.offen) Rand und Zustandszeile in --warn, der Knopf traegt dann .on. scroll-padding-bottom haelt
+   fokussierte Elemente ueber der Leiste frei (WCAG 2.2, 2.4.11); Wert = groesste gemessene Hoehe der Leiste (Chromium
+   22.11.2026: 61 px bei 1280 px Breite, bis 111 px bei 360 px Breite deutsch mit Aenderung, Zustandszeile zweizeilig). */
+html:has(#ek-savebar) { scroll-padding-bottom: 112px; }
+.ek-savebar { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+              margin: 14px 0 0; padding: 12px 14px; border-radius: 10px; background: var(--surface);
+              border: 1px solid var(--border); box-shadow: 0 -6px 18px rgba(0,0,0,.28); }
+.ek-savebar .gtb { font-size: 15px; font-weight: 600; padding: 8px 18px; margin: 0; }
+.ek-savebar .gtb[aria-disabled="true"] { color: var(--dim); cursor: default; }
+.ek-savebar .gtb[aria-disabled="true"]:hover { border-color: var(--border); }
+.ek-save-zustand { color: var(--dim); font-size: 13px; }
+.ek-savebar #cfg-status:empty { display: none; }
+.ek-savebar.offen { border-color: var(--warn); }
+.ek-savebar.offen .ek-save-zustand { color: var(--warn); font-weight: 600; }
 .ek-knopf { display: inline-block; width: 100%; text-align: center; background: var(--surface-2);
             border: 1px solid var(--border); border-radius: 8px; color: var(--text);
             font-size: 13px; font-weight: 600; padding: 8px 10px; box-sizing: border-box; }
@@ -1376,6 +1413,9 @@ body:not(.easy) .nur-easy { display: none; }
   background-image:linear-gradient(225deg,var(--bg) 0,var(--bg) 3px,transparent 3px)}
 .anw-z.anw-da{background:var(--crit);border-color:var(--crit);height:20px;opacity:1}
 .anw-z.anw-da.anw-n{height:16px}
+/* Stufe KW14: nur ueber Personenerkennung (Koerper-Marke), Muster .badge.koerper — gehoert zur Person, ist nicht rot */
+.anw-z.anw-koerper{background:var(--crit-bg);border-color:var(--crit);height:20px;opacity:1}
+.anw-z.anw-koerper.anw-n{height:16px}
 .anw-z.anw-zukunft{border-style:dotted;opacity:.5}
 .anw-z.anw-jetzt{outline:2px solid var(--accent);outline-offset:0;position:relative;z-index:1}
 .anw-datum{white-space:nowrap}
@@ -1387,6 +1427,7 @@ a.anw-z:hover{outline:2px solid var(--accent);outline-offset:1px}
 .anw-legende>span{display:inline-flex;align-items:center;gap:5px}
 .anw-legende .anw-z{display:inline-block;height:14px}
 .anw-legende .anw-z.anw-da{height:14px}
+.anw-legende .anw-z.anw-koerper{height:14px}
 /* Der klarstellende Satz unter der Legende (Weiss = "lief nicht"). Er steht dort, wo bis
    .518 die Doppeldeutigkeit stand, und darf deshalb nicht wegoptimiert werden. */
 .anw-legsatz{font-size:12px;margin:0 0 8px}

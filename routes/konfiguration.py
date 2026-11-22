@@ -52,6 +52,16 @@ def kette_sektion(cfg, kette, lage, whitelist, auto_hinweis):
         stufe_name = g["stufe"]
         anz = anzeige.get(stufe_name) or {"titel": stufe_name,
                                           "kosten": "", "zeitpunkt": ""}
+        kopf = (f'<div class="kamhead"><b>{html.escape(anz["titel"])}</b>'
+                f'<span class="dim num">{html.escape(anz["zeitpunkt"])}</span></div>')
+        lg = (lage or {}).get(stufe_name) or {}
+        # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW9 Punkt 3: Vision geparkt (lage traegt den Grund; bei
+        # person nennt grund ein fehlendes Pose-Modell, dort aendert sich nichts): der Parksatz statt des Felds, ohne
+        # cfg-Kennung, ohne Status-, Erklaer-, Kosten- und Auto-Zeile.
+        if stufe_name == "vision" and lg.get("grund"):
+            karten.append(f'<div class="card kt-stufe">{kopf}<div class="kt-zeile">'
+                          f'{html.escape(t("vision.geparkt_satz"))}</div></div>')
+            continue
         schalter = g.get("schalter")
         if schalter:
             wert = cfg.get(schalter)
@@ -68,7 +78,6 @@ def kette_sektion(cfg, kette, lage, whitelist, auto_hinweis):
                     f'<span class="dim">{t("konfiguration.kette.immer_hinweis")}</span>')
             erkl = t("konfiguration.kette.gesicht_erkl")
             auto = ""
-        lg = (lage or {}).get(stufe_name) or {}
         if not schalter:
             status = ""
         elif lg.get("wirksam"):
@@ -76,8 +85,12 @@ def kette_sektion(cfg, kette, lage, whitelist, auto_hinweis):
             status = ('<div class="dim kt-zeile">status: <b>armed</b> — '
                       'runs by itself</div>')
         else:
-            if stufe_name == "person" and not lg.get("modell_scharf"):
-                grund = t("konfiguration.kette.grund_person")
+            # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW5 Punkt 9: der Grund
+            # des Koerperwegs aus lage() — kein gueltiges Bild, Pose-Modell fehlt, aus
+            if stufe_name == "person" and not lg.get("vorrat"):
+                grund = t("konfiguration.kette.grund_person_vorrat")
+            elif stufe_name == "person" and lg.get("grund"):
+                grund = t("konfiguration.kette.grund_person_pose")
             elif stufe_name == "vision" and not lg.get("aktiv"):
                 grund = t("konfiguration.kette.grund_vision")
             else:
@@ -85,9 +98,7 @@ def kette_sektion(cfg, kette, lage, whitelist, auto_hinweis):
             status = (f'<div class="dim kt-zeile">'
                       f'{t("konfiguration.kette.status_aus", grund=html.escape(grund))}</div>')
         karten.append(
-            f'<div class="card kt-stufe">'
-            f'<div class="kamhead"><b>{html.escape(anz["titel"])}</b>'
-            f'<span class="dim num">{html.escape(anz["zeitpunkt"])}</span></div>'
+            f'<div class="card kt-stufe">{kopf}'
             f'<div class="kt-zeile">{feld}</div>'
             + status
             + (f'<div class="dim kt-zeile">{html.escape(erkl)}</div>'

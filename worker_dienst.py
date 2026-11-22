@@ -19,7 +19,8 @@ vom E2-Gate.
 1. JOB-PROTOKOLL, erweitert um MEHR-JOB-BETRIEB. Jede Antwort traegt eine
    Job-Id (`id`), mehrere analyze-Jobs laufen gleichzeitig in den Rechenstraengen
    des Kerns. Die uebrigen Job-Typen (ernte, norm, refqs, sammle, vorschlaege,
-   passernte, rechenprobe, koerper, personlauf_ernte) laufen seit E2c MIT — auf
+   passernte, rechenprobe; die alten Typen koerper und personlauf_ernte sind mit
+   Stufe KW6 des Bauplans analysen/bauplan_koerperweg_neu.md entfallen) laufen seit E2c MIT — auf
    einem eigenen Strang, EINER zur Zeit, parallel zu den Analyse-Straengen.
    Antwortfelder wie worker.py (ok/cpu_s/wall_s/rss_mb/vmhwm_mb/
    rss_spitze_mb/frame_rueckfaelle/fehler/verwurf_grund), dazu die neuen
@@ -35,7 +36,7 @@ vom E2-Gate.
    Die Job-Zweige selbst (hintergrund_lauf) rufen dieselben Funktionen mit
    denselben Argumenten wie worker.py; anlernen/core.ernte/core.normlauf/
    core.passernte sind UNVERAENDERT. Was NICHT umzieht: e/t (core/guete), p
-   (pose_wache), StrukturMass und der Personen-Pfad — sie binden alle den
+   (pose_wache) und StrukturMass — sie binden alle den
    CPU-Provider und vertragen sich mit dem OV-Kern (Fundstellen im bild_kern-Kopf).
    Offen fuer E3: die Rechenprobe liefert nur noch einen Bindungs-Bericht statt des
    Werte-Vergleichs je Modell (Begruendung bei Dienst.rechenprobe).
@@ -232,7 +233,7 @@ FRIST_VORGABE_S = 900.0
 # Job-Protokolls von `worker.py:18-60`; `ping` und `analyze` stehen bewusst nicht
 # darin (der eine wird sofort beantwortet, der andere geht in die Rechenstraenge).
 HINTERGRUND_TYPEN = ("sammle", "vorschlaege", "refqs", "ernte", "norm", "passernte",
-                     "rechenprobe", "koerper", "personlauf_ernte",
+                     "rechenprobe",
                      # E3.4 (14.09.2026): die KURZFORM der Start-Proben (Konzept §4
                      # Schicht 1). Sie laeuft auf dem Hintergrund-Strang, weil sie
                      # rechnet — aber OHNE Exklusivfenster: die Vollform gehoert in
@@ -537,7 +538,7 @@ def argv_lesen(argv):
     Job beantwortet."""
     eids, labels, persons, out, unbekannt = [], [], [], None, []
     fest = dict(ARGV_VORGABE)
-    koerper, debug = False, False
+    debug = False
     kalib = {"deckel": 0, "data_dir": "", "kamera": ""}
     rest = list(argv)
     i = 0
@@ -576,23 +577,18 @@ def argv_lesen(argv):
             kalib[t[8:].replace("-", "_")] = rest[i + 1]
             i += 2
             continue
-        if t == "--koerper":
-            koerper = True
-            i += 1
-            continue
         if t == "--urteil-debug":
             debug = True
             i += 1
             continue
-        if t in ("--koerper-rss-max-mb", "--timeline"):
-            # bekannt, aber ohne Wirkung in dieser Etappe: der Koerper-Abnehmer haengt
-            # am alten Frame-Verteiler (E3/E2c), --timeline ist reine Diagnose-Ausgabe.
-            i += 2 if t == "--koerper-rss-max-mb" else 1
+        if t == "--timeline":
+            # bekannt, aber ohne Wirkung: --timeline ist reine Diagnose-Ausgabe.
+            i += 1
             continue
         unbekannt.append(t)
         i += 1
     return {"eids": eids, "labels": labels, "persons": persons, "dir": out,
-            "argv_fest": fest, "koerper": koerper, "debug": debug, "kalib": kalib,
+            "argv_fest": fest, "debug": debug, "kalib": kalib,
             "unbekannt": unbekannt}
 
 
@@ -623,7 +619,6 @@ def felder_lesen(job):
     Schalter — der Zwischenschritt „--urteil-guete-e" faellt damit ganz weg):
       eids/labels/persons/dir   wie die Positionen und --labels/--persons/--dir
       latten {schluessel: zahl} die Urteils-Latten; None heisst „nicht gesetzt"
-      koerper (bool)            der Koerper-Abnehmer faehrt mit
       debug (bool)              Urteils-Debugzeilen
       kalib {deckel,data_dir,kamera}   der Kalibrier-Vorrat aus der Analyse
       personenzahl {eid: zahl}  Bauplan K3, KP3: die Personenzahl je Ereignis (verifyd ueber
@@ -669,7 +664,7 @@ def felder_lesen(job):
             "labels": list(job.get("labels") or []),
             "persons": list(job.get("persons") or []),
             "dir": job.get("dir"), "argv_fest": fest,
-            "koerper": bool(job.get("koerper")), "debug": bool(job.get("debug")),
+            "debug": bool(job.get("debug")),
             "kalib": {"deckel": deckel,
                       "data_dir": str(kal.get("data_dir") or ""),
                       "kamera": str(kal.get("kamera") or "")},
@@ -689,7 +684,7 @@ def argv_zu_job(argv):
     E3.1 nur noch `felder_lesen`."""
     o = argv_lesen(argv)
     return {"eids": o["eids"], "labels": o["labels"], "persons": o["persons"],
-            "dir": o["dir"], "latten": o["argv_fest"], "koerper": o["koerper"],
+            "dir": o["dir"], "latten": o["argv_fest"],
             "debug": o["debug"], "kalib": o["kalib"],
             "unbekannt_argv": o["unbekannt"]}
 
@@ -1236,8 +1231,11 @@ def results_zeile(label, eid, zeilen, persons, wache, lat, stat, profil,
     # den ungerundeten Kern-Zeilen. Der Dienst uebernimmt `namen` als `confirmed` fuer
     # verdict_v2 und verdict (verifyd); ohne dieses Feld urteilt er wie bisher.
     if stapel is not None:
+        # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW1 Punkt 1: dazu die gueltigen Gesichter und die
+        # abgegebenen Stimmen aus der Zaehlung des Stapels (core.koerperweg.marke_bauen liest sie)
         z["stapel"] = {"namen": stapel["namen"], "stimmen": stapel["stimmen"],
-                       "je_name": stapel["je_name"]}
+                       "je_name": stapel["je_name"], "gueltig": stapel["diagnose"]["gueltig"],
+                       "gestimmt": stapel["diagnose"]["stimmen"]}
     if bild is not None:
         z["bild"] = bild                                  # NZ1: Bildgroesse und Bildrate einmal je Akte
     return z
@@ -2068,7 +2066,7 @@ class Dienst:
         self.fabrik = None                     # E2c: Embedder/NormMass auf der Engine
         self._bild = None
         self._bild_schloss = threading.Lock()
-        self._werk = {}                        # warme Werkzeuge (PoseWache, StrukturMass)
+        self._werk = {}                        # warme Werkzeuge (StrukturMass)
         self._eich_schloss = threading.Lock()  # E2d: Eichmarke der Kompilat-Probe
         self._eich_umfeld = None
         self.kompilat_bericht = {"stand": "ungeprueft"}
@@ -3498,32 +3496,6 @@ class Dienst:
             pass
         os._exit(1)
 
-    def koerper_budget(self, job):
-        """DAS RAM-BUDGET EINES KOERPER-/PERSONLAUF-JOBS, GETEILT (W2-B11, E3.3).
-
-        `worker._koerper_budget` rechnet die Politik-Grenze des Jobs minus dem VmRSS
-        des PROZESSES (und, wenn lesbar, gegen den cgroup-Rest). Das war richtig,
-        solange ein Prozess EINEN Job hielt: der Rest gehoerte ihm ganz. Im Dienst
-        halten N Rechenstraenge gleichzeitig Jobs — dieselbe Zahl wuerde jedem von
-        ihnen den GANZEN Rest zusagen. Zwei Koerper-Zuege, die beide „du hast 2 GB"
-        hoeren, belegen 4: genau die Ueberbuchung, gegen die W2-B11 geschrieben ist.
-
-        Geteilt wird durch die Zahl der GERADE offenen Jobs, nicht durch die
-        Strang-Zahl: ein Prozess mit vier Straengen, in dem nur dieser eine Job
-        laeuft, soll nicht ein Viertel bekommen. Der Boden ist der des Originals —
-        `worker._NORMMASS_MARGE_MB`, dieselbe Marge, die dort als Budget-Boden steht
-        (worker.py:125). Eine zweite 256 gibt es hier nicht.
-
-        EHRLICHE GRENZE: die Teilung ist eine ANNAHME ueber Gleichverteilung. Ein
-        Analyse-Job neben einem Koerper-Job braucht nicht dasselbe. Sie ist trotzdem
-        richtiger als die Zusage des vollen Rests an jeden, denn die ist nachweislich
-        falsch — und ein zu kleines Budget lehnt `Koerper._start` LAUT ab, ein zu
-        grosses erzeugt den OOM."""
-        from worker import _koerper_budget, _NORMMASS_MARGE_MB   # noqa: PLC0415
-        voll = float(_koerper_budget(job))
-        halter = max(1, self.offen_n())
-        return max(voll / halter, float(_NORMMASS_MARGE_MB))
-
     def rueckfall_melden(self, lauf, art, text):
         """Ein Rueckfall auf CPU/Software — EINE Zeile je Ereignis (User-Auflage
         13.09.: „Bei Rueckfall auf CPU eine Information im Log, aber nur einmal pro
@@ -4005,12 +3977,6 @@ class Dienst:
         # und sie hat einen anderen Namen, weil sie eine andere Frage beantwortet.
         antwort["placement_fallback_prozess"] = sorted(
             k[len("rueckfall_"):] for k in self.zaehler if k.startswith("rueckfall_"))
-        # Feldbefunde Punkt 6 (O290): das Merkmal der Personen-Sitzung DIESES Prozesses
-        # (core/personmodell.FALLBACK), ueber denselben Weg wie die Prozess-Felder
-        # darueber; ohne geladenes Modul gibt es keine Sitzung und keinen Rueckfall.
-        _pm = sys.modules.get("core.personmodell")
-        antwort["person"] = (dict(_pm.FALLBACK) if _pm is not None
-                             else {"fallback": False, "backend": None})
         if lauf.kompilat_n:
             # E3.3 (W2-B29): der Kompilat-/Geometrie-Bau, DIESEM Job gebucht. Ohne das
             # Feld steckt der Bauschritt unsichtbar in `wall_s` und `fussabdruck_mb`.
@@ -4217,29 +4183,6 @@ class Dienst:
             # E3a-4 (J6, J10): die Fabrik, nicht der Embedder — das Rechenwerk wird
             # erst nach der Eingangspruefung angelegt (ohne Job-Feld nie).
             return {"dateisatz": _dateisatz.job(job, face_audit.Embedder)}
-        if typ == "koerper":
-            from core import personlive as _plv             # noqa: PLC0415
-            return {"u": _plv.urteilen(
-                job["data_dir"], os.environ.get("FRIGATE_URL", ""),
-                job["eid"], kontrolle=job.get("kontrolle"),
-                still=bool(job.get("still")),
-                ram_budget_mb=self.koerper_budget(job))}    # E3.3: je Prozess geteilt
-        if typ == "personlauf_ernte":
-            from core.personlauf import _proto              # noqa: PLC0415
-            from core import personernte as _pe             # noqa: PLC0415
-            _proto()
-            import pfad_snapshots                           # noqa: PLC0415
-            if self._werk.get("wache") is None:
-                from pose_wache import PoseWache            # noqa: PLC0415
-                self._werk["wache"] = PoseWache()
-            budget = self.koerper_budget(job)               # E3.3: je Prozess geteilt
-
-            def _extraktor(eid):
-                return pfad_snapshots.event_verarbeiten({"eid": eid},
-                                                        ram_budget_mb=budget)
-
-            return {"r": _pe.ernte_event(job["data_dir"], job["lauf_id"], job["job"],
-                                         self._werk["wache"], _extraktor)}
         raise ValueError(f"unbekannter typ '{typ}'")
 
     def strukturmass(self):
@@ -4802,6 +4745,11 @@ class Dienst:
                               wache, lat, stat, profil, samples_moeglich=_s_moegl,
                               sample_deckel=(_deckel if (_gekappt or wache.geplant is None) else 0),
                               stapel=stapel, bild={"breite": W, "hoehe": H, "fps": fps})
+        # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW1 Punkt 2: die Unbekannt-Gruppen, die der Bildvorrat
+        # dieses Laufs hielt (nicht die Bilanz: die zaehlt nur Gruppen mit geschriebenem Satz); steht der Stapel auf aus
+        # (einer der zwei Deckel 0, worker_kern.Bildvorrat._unbekannt_einordnen), null: nicht gezaehlt ist nicht null
+        zeile["unbekannt_gruppen"] = (len(vorrat.unbekannt) if lat["unbekannt_rahmen_max"] > 0
+                                      and lat["unbekannt_bilder_je_gruppe"] > 0 else None)
         # pro Clip SOFORT persistieren, geflusht (analyze.py:925-1004)
         with open(results_pfad, "a", encoding="utf-8") as rf:
             rf.write(json.dumps(zeile, default=float, ensure_ascii=False) + "\n")

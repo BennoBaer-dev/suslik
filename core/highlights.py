@@ -12,10 +12,60 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.103"   # 0.1.1.103: neuer Box-Eintrag mit einem Satz zur roten Anzeige, wenn der Beschleuniger nicht
+STAND = "0.1.1.110"   # 0.1.1.110: Eigentuemer 22.11.2026 17:29:51 (Veroeffentlichung, Auftragszeile) und 19:31:37
+                      # "passt" (neuer Text des CHANGELOG-Abschnitts, Ablage
+                      # analysen/pruefungen/2026-11-22_1919_changelog_0110_entwurf/). Der Eintrag zuoberst steht unter
+                      # 0.1.1.110 (vorher 0.1.1.109, davor 0.1.1.107), Wortlaut der Box unveraendert. 0.1.1.109 lief nur
+                      # als lokales Image auf der Produktion des Eigentuemers und wurde nicht veroeffentlicht (Lauf
+                      # 20261122_172936 rot, weil die Lesungen nicht gestartet wurden, solange der Text des CHANGELOG
+                      # offen war). Im Produkt neu sind nur der Text des CHANGELOG und die Nummer.
+                      # Davor 0.1.1.109: Eigentuemer 22.11.2026 17:09:04 "Ja, korrigieren" (auf die Frage, die Probe zu
+                      # korrigieren und den Lauf als 0.1.1.109 neu zu starten). Die Box bleibt eingefroren nach dem Satz
+                      # vom 21.11.2026 14:27:01 (er steht im Kommentar zu 0.1.1.105 darunter): nur STAND geht hoch, der
+                      # Eintrag zuoberst steht seit dem Wort des Eigentuemers vom 22.11.2026 17:25:12 unter 0.1.1.109
+                      # (vorher 0.1.1.107), der Text des CHANGELOG-Abschnitts bleibt. 0.1.1.108 lief nur
+                      # als lokales Image auf der Produktion des Eigentuemers und wurde nicht veroeffentlicht (Stufe 5
+                      # des Laufs 20261122_143725 rot, weil die Probe rq_papierkorb nicht nachgezogen war). Neu ist nur
+                      # Punkt 12 der Stufe KW12 des Bauplans analysen/bauplan_koerperweg_neu.md (die Probe, am Produkt
+                      # nichts).
+                      # Davor 0.1.1.108: Eigentuemer 22.11.2026 14:05:04 "lauf starten alle normal". Die Box bleibt
+                      # eingefroren nach dem Satz vom 21.11.2026 14:27:01 (er steht im Kommentar zu 0.1.1.105 darunter):
+                      # nur STAND geht hoch, der Eintrag 0.1.1.107 bleibt zuoberst, der Text des CHANGELOG-Abschnitts
+                      # bleibt. 0.1.1.107 lief nur als lokales Image auf der Produktion des Eigentuemers und wurde nicht
+                      # veroeffentlicht. Neu im Code ist die Stufe EK1 des Bauplans analysen/bauplan_erkennung_karte.md
+                      # (Karte Koerpererkennung mit allen Schaltern, Speicherleiste der Seite Erkennung).
+                      # Davor 0.1.1.107: Eigentuemer 22.11.2026 09:52:46 "Lass uns das gpu Release starten". Die Box zeigt
+                      # zuoberst den Eintrag 0.1.1.107 aus der Stufe KW15 des Bauplans analysen/bauplan_koerperweg_neu.md
+                      # (Wortlaut abgenommen 21.11.2026 20:51:52, Satz zu den drei Bildern 22.11.2026 08:25:38), der
+                      # Eintrag 0.1.1.104 ist mit KW15 entfallen. Der Text des CHANGELOG-Abschnitts bleibt nach dem
+                      # Satz vom 21.11.2026 14:27:01 (er steht im Kommentar zu 0.1.1.105 darunter). 0.1.1.106 lief nur
+                      # als lokales Image auf der Produktion des Eigentuemers und wurde nicht veroeffentlicht. Neu im
+                      # Code sind die Stufen KW12 bis KW15 desselben Bauplans (Melde-Schalter, Automatik des
+                      # Personen-Lernlaufs, Anwesenheit aus der Personenerkennung, Hinweistexte).
+                      # Davor 0.1.1.106: Eigentuemer 21.11.2026 16:05:32 "Ja, Nummer 106" (Knopf auf die Frage, ob fuer die
+                      # Stufe KW11 die Nummer 0.1.1.106 eingetragen werden soll). Die Box bleibt eingefroren nach seinem
+                      # Satz vom 14:27:01 (er steht im Kommentar zu 0.1.1.105 darunter): nur STAND geht hoch, der Eintrag
+                      # 0.1.1.104 bleibt, der Text des CHANGELOG-Abschnitts bleibt. 0.1.1.105 lief nur als lokales Image
+                      # auf der Produktion des Eigentuemers und wurde nicht veroeffentlicht. Neu im Code ist die Stufe
+                      # KW11 des Bauplans analysen/bauplan_koerperweg_neu.md (das Feld heisst "Wie viele Videos je
+                      # Person untersuchen", ein Balken zeigt den Fortschritt des Personen-Lernlaufs).
+                      # Davor 0.1.1.105: Eigentuemer 21.11.2026 14:27:01 (Befehlsbuch): "Also merke dir einmal fest, bis zur
+                      # nächsten Version, die wir veröffentlichen wollen, brauchst du mich nach den Hinweistexten nicht
+                      # zu fragen. Das WhatsApp bleibt eingefroren." und 14:28:20 "das whats new meine ich" (das Diktat
+                      # schrieb WhatsApp, gemeint ist What's new). Box unveraendert: nur STAND geht hoch, der Eintrag
+                      # 0.1.1.104 bleibt, der Text des CHANGELOG-Abschnitts bleibt. 0.1.1.104 wurde nicht
+                      # veroeffentlicht (Lauf 20261121_093544 endete in Stufe 5 rot). Neu im Code sind die Stufen KW6
+                      # Punkt 8, KW8, KW9 und KW10 des Bauplans analysen/bauplan_koerperweg_neu.md. Der Wortlaut von
+                      # Box und CHANGELOG wird vor der naechsten Veroeffentlichung neu abgestimmt (die neue Funktion
+                      # heisst in der Oberflaeche jetzt Personen-Lernlauf).
+                      # Davor 0.1.1.104: neuer Box-Eintrag zum neuen Koerperweg (Vorschlag der Hauptsession 21.11.2026 09:18;
+                      # Wortlaut DE und der CHANGELOG mit sieben Punkten abgenommen 21.11.2026 09:24:41 "Whats new keine
+                      # Änderungen Release lauf starten"; Lesart der Hauptsession: der Vorschlag bleibt unveraendert).
+                      # Dahinter steht der Bauplan analysen/bauplan_koerperweg_neu.md, Stufen TG1 und KW1 bis KW7.
+                      # Davor 0.1.1.103: Box-Eintrag mit einem Satz zur roten Anzeige, wenn der Beschleuniger nicht
                       # arbeitet (Vorschlag der Hauptsession 18.11.2026 18:54; Wortlaut DE und der CHANGELOG mit vier
-                      # Punkten abgenommen 19:32:51 "Passt so"). Dahinter steht der Bauplan
-                      # analysen/bauplan_beschleuniger_lage.md, Stufen BL1 bis BL4.
+                      # Punkten abgenommen 19:32:51 "Passt so"; Bauplan analysen/bauplan_beschleuniger_lage.md, Stufen
+                      # BL1 bis BL4).
                       # Davor 0.1.1.102: Box-Eintrag mit einem Satz zum Clip-Abruf (Wunsch des Eigentuemers 16.11.2026
                       # 14:38:28 "kurz und knapp was wir geändert haben, ein satz"; Wortlaut DE abgenommen 14:39:22
                       # "Passt so", Nummer und CHANGELOG mit dem Ketten-Go 14:43:11). Dahinter steht der Bauplan
@@ -894,6 +944,39 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.1.110 — EIN Eintrag, MIT DEM EIGENTUEMER ABGESTIMMT 21.11.2026 (Auftrag 18:38:19: „bis auf weiteres“ in Rot
+    # „Testversion“, ein Satz zum Neubau der Personenerkennung, Verweis auf Read me first; Wortlaut DE abgenommen
+    # 20:51:52 „Passt“, text_zur_abnahme.md der Ablage analysen/pruefungen/2026-11-21_2025_koerper_hinweistexte_entwurf/).
+    # EN von der Hauptsession, gegengelesen 22.11.2026; ES, IT, FR und FI nach EN mit dem Kopf aus 0.1.1.101 und den
+    # Begriffen der Oberflaeche (ES, IT und FI mit du, FR mit vous). Marke `betont`: der Teil vor dem Gedankenstrich
+    # wird rot und fett; Marke `readme` "person": der Knopfname (readme.knopf, je Sprache woertlich im Text) wird zum
+    # Link auf das Kapitel „Personenerkennung“ (core/readmefirst.py KAPITEL). Der Eintrag 0.1.1.104 (nie
+    # veroeffentlicht, sein Satz „der Name wird nur angezeigt“ stimmt nach KW12 nicht mehr) entfaellt (Entscheid 2).
+    # Was dahinter steht: analysen/bauplan_koerperweg_neu.md, Stufen KW1 bis KW14, Box und Kapitel Stufe KW15.
+    # Bis 22.11.2026 stand der Eintrag unter 0.1.1.107, auf das Wort des Eigentuemers vom 22.11.2026 17:25:12 dann
+    # unter 0.1.1.109; jetzt steht er unter der Nummer des Laufs 0.1.1.110, weil 0.1.1.107 bis 0.1.1.109 nicht
+    # veroeffentlicht wurden (Stufe KW15 Punkt 1).
+    ("0.1.1.110", (
+        {"de": "Testversion — Die Personenerkennung ist neu gebaut. Sie ist optional und greift, wenn ein Gesicht "
+               "nicht erkannt oder keines gefunden wurde, auf Wunsch auch immer. Nähere Informationen unter "
+               "„Bitte zuerst lesen“.",
+         "en": "Test release — Person recognition has been rebuilt. It's optional and steps in when a face wasn't "
+               "recognized or none was found, or always if you choose. More details under “Read me first”.",
+         "es": "Versión de prueba — El reconocimiento de personas se ha rehecho. Es opcional y entra en acción "
+               "cuando una cara no se ha reconocido o no se ha encontrado ninguna, o siempre si así lo eliges. Más "
+               "detalles en «Léeme primero».",
+         "it": "Versione di prova — Il riconoscimento della persona è stato ricostruito. È facoltativo e interviene "
+               "quando un volto non è stato riconosciuto o non ne è stato trovato nessuno, oppure sempre, se vuoi. "
+               "Maggiori dettagli in «Leggimi prima».",
+         "fr": "Version de test — La reconnaissance de personne a été reconstruite. Elle est facultative et intervient "
+               "quand un visage n'a pas été reconnu ou qu'aucun n'a été trouvé, ou toujours si vous le choisissez. "
+               "Plus de détails sous « À lire d'abord ».",
+         "fi": "Testiversio — Henkilöntunnistus on rakennettu uudelleen. Se on valinnainen ja tulee käyttöön, kun "
+               "kasvoja ei tunnistettu tai niitä ei löytynyt, tai halutessasi aina. Lisätietoja kohdassa ”Lue tämä "
+               "ensin”.",
+         "betont": True,
+         "readme": "person"},
+    )),
     # 0.1.1.103 — EIN Eintrag, MIT DEM EIGENTUEMER ABGESTIMMT 18.11.2026 (Vorschlag der Hauptsession 18:54; Wortlaut DE
     # abgenommen 19:32:51 „Passt so“). EN von der Hauptsession, ES, IT, FR und FI nach EN; Begriffe wie in den Texten
     # der Stufe BL3 (ui.lage.*, system.lage.grund.*: Seite System, Ursache und Abhilfe; FR mit vous, FI „image“ als

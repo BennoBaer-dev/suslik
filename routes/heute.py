@@ -13,9 +13,11 @@ Personenkarten sichtbar (9.7), Durchgangs-Block gedeckelt behalten (9.2),
 Stunden-Balken nur mit Anwesenheits-Datei (9.4), kein Live-Zaehler (9.5 Nachtrag).
 
 Die Anwesenheits-Miniatur nutzt DIESELBE Zustandsregel wie /anwesenheit
-(routes.anwesenheit.zustand + nacht_zustand — Deckungsvertrag, K2), aber eine
-EIGENE Darstellung: 24 Stundenzellen als <span> in einer flex-Reihe, kein Pitch
-der grossen Leiste (--anw-pitch bleibt in style.css bei der Leiste).
+(routes.anwesenheit.zustand + nacht_zustand — Deckungsvertrag, K2), mit ihren
+vier Zustaenden (seit Stufe KW14 auch "koerper" = ueber Personenerkennung), aber
+eine EIGENE Darstellung: 24 Stundenzellen als <span> in einer flex-Reihe, kein
+Pitch der grossen Leiste (--anw-pitch bleibt in style.css bei der Leiste); jede
+Zelle nennt Uhrzeit und Zustand in title und aria-label.
 """
 import html
 import time
@@ -42,10 +44,11 @@ def deckel(liste, n):
 
 
 def anw_stunden(person_eintrag, zellen):
-    """24 Stunden-Zustaende 'da'/'weg'/'leer' aus den Viertelstunden einer
-    Person (tag_lesen()['personen'][p]) und den Tages-Zellen (tag_lesen()
+    """24 Stunden-Zustaende 'da'/'koerper'/'weg'/'leer' aus den Viertelstunden
+    einer Person (tag_lesen()['personen'][p]) und den Tages-Zellen (tag_lesen()
     ['zellen']). Je Stunde gilt die Nacht-Regel der grossen Leiste: rot, sobald
-    eine Viertelstunde rot ist; gruen nur, wenn alle vier gruen sind."""
+    eine Viertelstunde rot ist; sonst koerper, sobald eine nur ueber
+    Personenerkennung belegt ist; gruen nur, wenn alle vier gruen sind."""
     person_eintrag = person_eintrag or {}
     zellen = zellen or {}
     aus = []
@@ -87,10 +90,14 @@ def anw_balken_html(person_eintrag, zellen, fenster, gesamt=False):
     # Sprach-Deckungs-Scan des Gates liest Schluessel-Literale nur in der Form
     # t("…") — sonst gilt der zweite Schluessel als tot (Lauf-1-Befund .412).
     titel = _sp.t("heute.anw.title_gesamt") if gesamt else _sp.t("heute.anw.title")
-    zellen_html = "".join(
-        f'<span class="hk-anw-z hk-anw-{z}{" hk-anw-n" if (h < von or h >= bis) else ""}"'
-        f' title="{h:02d}:00"></span>'
-        for h, z in enumerate(anw_stunden(person_eintrag, zellen)))
+    # Stufe KW14: der Zustand in Worten aus den Schluesseln der Legende (Muster der Zellen auf /anwesenheit)
+    worte = {"da": _sp.t("anwesenheit.legende_da"), "koerper": _sp.t("heute.pass.via_koerper"),
+             "weg": _sp.t("anwesenheit.legende_weg"), "leer": _sp.t("anwesenheit.legende_leer")}
+    zellen_html = ""
+    for h, z in enumerate(anw_stunden(person_eintrag, zellen)):
+        tip = html.escape(_sp.t("heute.anw.zelle", zeit=f"{h:02d}:00", zustand=worte[z]), quote=True)
+        zellen_html += (f'<span class="hk-anw-z hk-anw-{z}{" hk-anw-n" if (h < von or h >= bis) else ""}"'
+                        f' title="{tip}" aria-label="{tip}"></span>')
     dauer = _sp.t("heute.anw.dauer", h=dauer_text(anw_dauer_h(person_eintrag)))
     return (f'<div class="hk-anw" title="{html.escape(titel, quote=True)}">{zellen_html}</div>'
             f'<div class="hk-anw-t">{html.escape(dauer)}</div>')

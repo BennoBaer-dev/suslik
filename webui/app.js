@@ -1255,47 +1255,6 @@ function areaEntfernen(btn) {
   areasSpeichern(btn, _areasSammeln().filter(function (q) { return q[0] !== n; }));
 }
 
-// PE1 B4 (stufe2.md): Person-Learn-Lauf starten (Wizard /personlauf).
-async function personlaufStart(n, btn) {
-  var sel = document.getElementById('pl-person');
-  var person = sel ? sel.value : '';
-  btn.disabled = true;
-  var st = document.getElementById('pl-status');
-  try {
-    var r = await fetch('/personlauf_start', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ events: n, person: person })
-    });
-    var d = await r.json();
-    if (r.ok && d.ok) { location.href = '/personlauf'; return; }
-    if (st) st.textContent = TT('js.status.fehler_detail', 'error: {msg}', {msg: d.msg || r.status});
-  } catch (e) {
-    if (st) st.textContent = TT('js.status.fehler_detail', 'error: {msg}', {msg: e});
-  }
-  btn.disabled = false;
-}
-
-// PE1: laufenden Person-Learn-Lauf abbrechen (Geerntetes bleibt).
-async function personlaufAbbruch(btn) {
-  if (!confirm(TT('js.personlauf.abbruch_frage', 'Abort this person-learn run? Harvested images are kept.'))) return;
-  btn.disabled = true;
-  try {
-    var r = await fetch('/personlauf_abbruch', { method: 'POST' });
-    if (r.ok) { location.reload(); return; }
-  } catch (e) { /* Reload zeigt den echten Zustand */ }
-  btn.disabled = false;
-}
-
-// PE2b: kompletten Lauf verwerfen (schlechtes Ergebnis), Wizard wird frei.
-async function personlaufVerwerfen(lid) {
-  if (!confirm(TT('js.personlauf.verwerfen_frage', 'Discard run {lid} completely? All its images are deleted; a new run can re-harvest any time.', {lid: lid}))) return;
-  var r = await fetch('/personlauf/loeschen', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ lauf_id: lid })
-  });
-  if (r.ok) location.reload();
-}
-
 /* .133: die Review-&-sync-Seite braucht beim Laden zwei Dinge — den Zaehler auf den
    echten Haken-Stand und, falls die Vorpruefung noch rechnet, den Fortschritts-Poll.
    app.js laeuft mit defer, das DOM steht hier also schon. */
@@ -1726,6 +1685,8 @@ function vwWeg(i) {
       VW_ZELLEN[i].schluessel = r.msg.schluessel;
       k.style.opacity = '1';
       k.className = 'vw-z' + (neu.geliehen_aus ? ' geliehen' : '');
+      // Die Route /personlauf/bild/ ist mit Stufe KW6 (Bauplan analysen/bauplan_koerperweg_neu.md) ausgebaut;
+      // Vision ist geparkt, der Wizard zeigt dann keine Kandidaten-Zelle, dieser Zweig laeuft nicht.
       k.querySelector('img').src = '/personlauf/bild/'
         + encodeURIComponent(neu.lauf_id) + '/' + encodeURIComponent(neu.datei);
       // Die Begruendungszeile kommt FERTIG vom Server (core/visiongalerie) —
