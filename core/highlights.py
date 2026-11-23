@@ -16,7 +16,14 @@ seiner ersten Fundstelle im Text als Verweis auf den Pfad, wie `readme` den Knop
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.111"   # 0.1.1.111: Eigentuemer 23.11.2026 14:20:59 "Ja, mit Veröffentlichung" und 14:43:58 "Texte
+STAND = "0.1.1.112"   # 0.1.1.112: Eigentuemer 23.11.2026 19:39:13 "Können wir den Lauf starten ? Whats new würde ich
+                      # nicht änder" und 19:40:58 "Heute" (auf die Vorlage des CHANGELOG-Textes durch die Hauptsession,
+                      # Text in .suslik_tmp/release_0.1.1.112/text_changelog.md). Die Box bleibt unveraendert: kein
+                      # neuer Eintrag, der Eintrag zuoberst steht weiter unter 0.1.1.111 (veroeffentlicht), nur STAND
+                      # geht hoch, die Box erscheint nicht neu. Im Produkt neu: die Koerpererkennung an der Spur,
+                      # unabhaengig von der Zahl der Personen im Video (Bauplan analysen/bauplan_koerper_spur.md, Stufen
+                      # KS1 und KS2, Commits cdcc8d10 und 6ea0a15b).
+                      # Davor 0.1.1.111: Eigentuemer 23.11.2026 14:20:59 "Ja, mit Veröffentlichung" und 14:43:58 "Texte
                       # abnehmen" (Box-Satz, Satz im Kapitel Personenerkennung und CHANGELOG-Abschnitt, Ablage
                       # analysen/pruefungen/2026-11-23_1422_changelog_0111_entwurf/). Im Produkt neu: die Seite Benannte
                       # Personen mit Korrektur, die Einstellungen des Lernlaufs nur noch auf der Seite Erkennung, das

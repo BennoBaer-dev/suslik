@@ -25,7 +25,7 @@ ist sein einziger bestaetigter Name. Ohne Personenliste gilt der Lauf fuer alle 
 Lauf startet `koerper_lauf` (Stufe KW13): von Hand, taeglich mit der Wartung (alle wartenden Ereignisse je Person,
 n_je_person None) oder sofort nach jedem geeigneten Ereignis (dann ohne diese Auswahl, genau die vorgemerkten Kennungen).
 
-DAS ERKENNEN NACH DEM ABSTAND (Stufe KW5): Hat ein Ereignis kein bestaetigtes Gesicht, stoesst der Dienst
+DAS ERKENNEN NACH DEM ABSTAND (Stufe KW5): Hat die Person der Spur kein bestaetigtes Gesicht, stoesst der Dienst
 (Service._person_live) eine Abfrage im Koerper-Prozess an, wenn `abfrage_noetig` ja sagt und die Schublade ein gueltiges
 Bild hat (core.kette.koerper_scharf). Die Antwort (Fingerabdruecke der Abfragebilder) vergleicht `vergleichen` mit den
 gueltigen Bildern der Schublade; eine reine Rechnung ohne Modell. Das Ergebnis geht als Zeile in die eigene Datei
@@ -39,9 +39,11 @@ DIE REGEL DER KOERPER-ERKENNUNG (Stufe KW12, R1 bis R3; Eigentuemer 21.11.2026 â
       eine Stimme.
   R2. Ein Koerper-Name gilt, sobald die Person im Durchgang `koerper_stimmen` Stimmen hat (Werk 3), gezaehlt ueber alle
       ihre Treffer-Ereignisse des Durchgangs; die geparkte Vision-Stimme zaehlt im Durchgang ohne Gesicht eine dazu.
-  R3. `koerper_namen` sagt allein, fuer welche Ereignisse eines Durchgangs ein Koerper-Name gilt: ohne Gesichts-Namen
-      die Ereignisse der Namen, die szenarien.py zeigt; mit Gesichts-Namen nur fuer eine Person, die das Gesicht nennt,
-      auf den Ereignissen ohne eigenen Gesichts-Namen, wenn deren Stimmen `koerper_stimmen` erreichen.
+  R3. `koerper_namen` sagt allein, fuer welche Ereignisse eines Durchgangs ein Koerper-Name gilt, und zwar nur auf
+      Ereignissen ohne eigenen Gesichts-Namen (Feld `spur_ohne_namen` der Zeile von evs, Stufe KS2 des Bauplans
+      analysen/bauplan_koerper_spur.md; fehlt es, gilt: keine bestaetigten Namen im Clip): fuer eine Person mit Quelle
+      koerper, die szenarien.py zeigt, alle ihre Treffer-Ereignisse, gleich ob der Durchgang Gesichts-Namen hat; fuer
+      eine Person, die das Gesicht nennt, ihre Treffer-Ereignisse, wenn deren Stimmen `koerper_stimmen` erreichen.
 Gemeldet wird nur auf Wunsch, je Weg ein Schalter aus `MELDE_SCHALTER` (ab Werk alle aus, dann nur Anzeige); die
 Entscheidung je Durchgang und Person steht in `meldung_faellig`, der Merker in `MELDE_DATEI` (`meldung_merken`).
 
@@ -66,8 +68,10 @@ LESARTEN (wo der Plan offen ist, die engste; im Zweifel kein Name):
      Markiert der Nutzer einen Namen als falsch (Seite Benannte Personen, Stufe FN4), haengt `treffer_korrigieren`
      dieselbe Zeile mit person null und `falsch` = bisheriger Name an; danach uebergeht `treffer_karte` jede spaetere
      Zeile dieses Ereignisses, so dass kein neuer Vergleich und kein Umbenennen den Namen zurueckbringt.
-  5. Ausloeser: Kategorie weder erkannt noch fehler und Frigate-Personenzahl genau 1; eine unbekannte Personenzahl
-     (None) ist nicht 1.
+  5. Ausloeser (Bauplan analysen/bauplan_koerper_spur.md, Stufe KS1): Kategorie nicht fehler und die Person der Spur
+     ohne Gesichts-Namen (`spur_ohne_namen`), gleich wie viele Personen das Video zeigt. Traegt die Akte-Zeile das Feld
+     `namenszuordnung` (Frigate zaehlt zwei und mehr Personen), gilt dessen Name; sonst (eine Person, eingespielt,
+     Fehler der Zuordnung, keine brauchbare Personenzahl) heisst ohne Namen: im Clip ist niemand bestaetigt.
 
 EHRLICHE GRENZEN:
   - Was nicht gezaehlt werden konnte, gilt nicht als geeignet: eine Zeile ohne Marke (vor dieser Version, alte
@@ -201,14 +205,23 @@ def cutter_auswahl(zeilen, bearbeitet, cfg, personen, n_je_person, von):
     return out
 
 
-def abfrage_noetig(entry, personenzahl):
+def spur_ohne_namen(zeile):
+    """Ob die Person der Spur einer Akte-Zeile keinen Gesichts-Namen hat (Kopf, Lesart 5): mit dem Feld namenszuordnung
+    gilt dessen Name, sonst die bestaetigten Namen des Clips. -> bool"""
+    zeile = zeile or {}
+    if "namenszuordnung" in zeile:
+        return not (zeile["namenszuordnung"] or {}).get("name")
+    return not zeile.get("bestaetigt")
+
+
+def abfrage_noetig(entry):
     """Ob ein Ereignis eine Koerper-Abfrage bekommt, ohne Blick in die Schublade (Kopf, Lesart 5).
     -> (bool, Grund als englischer Text; bei ja "query")"""
     kategorie = (entry or {}).get("kategorie")
-    if kategorie in ("erkannt", "fehler"):
+    if kategorie == "fehler":
         return False, f"category is {kategorie!r}"
-    if personenzahl != 1:
-        return False, f"person count is {personenzahl}, not 1"
+    if not spur_ohne_namen(entry):
+        return False, "the track has a face name"
     return True, "query"
 
 
@@ -388,13 +401,12 @@ def koerper_namen(durchgang, karte, ab):
     """Fuer welche Ereignisse eines Durchgangs (aus szenarien.szenarien_des_tages) ein Koerper-Name gilt (R3); karte aus
     treffer_karte, ab = koerper_stimmen. -> {Person: [Kennungen]}; leer, wenn keiner gilt"""
     pers = durchgang.get("pers") or {}
-    gesicht = [p for p, d in pers.items() if d.get("quelle") != "koerper"]
-    ohne = [(x["eid"], karte[x["eid"]]) for x in durchgang.get("evs") or ()
-            if not x.get("conf") and x.get("eid") in karte]       # nur Ereignisse ohne eigenen Gesichts-Namen
+    ohne = [(x["eid"], karte[x["eid"]]) for x in durchgang.get("evs") or ()      # nur Ereignisse ohne eigenen
+            if x.get("spur_ohne_namen", not x.get("conf")) and x.get("eid") in karte]  # Gesichts-Namen (KS2)
     out = {}
-    for p in gesicht or [p for p, d in pers.items() if d.get("quelle") == "koerper"]:
+    for p, d in pers.items():
         eigene = [(e, z) for e, z in ohne if z.get("person") == p]
-        if eigene and (not gesicht or stimmen_zaehlen(z for _e, z in eigene) >= ab):
+        if eigene and (d.get("quelle") == "koerper" or stimmen_zaehlen(z for _e, z in eigene) >= ab):
             out[p] = [e for e, _z in eigene]
     return out
 

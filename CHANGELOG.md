@@ -5,6 +5,15 @@ never pushed to GHCR; they ship bundled with the next release (each release entr
 says which steps it bundles). This file keeps the last five releases; the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git history.
 
+## 0.1.1.112 (2026-11-23)
+
+Test release. Person recognition stays a preview.
+
+- Person recognition now starts whenever the tracked person of an event got no face name, no matter how many people the video shows. Until now it needed a video with exactly one person.
+- A body name now also counts next to a face name on the same walk-through once the person has `koerper_stimmen` votes (default 3). The walk-through then shows both names, and the body name goes to presence, notifications and Frigate like any other. Until now it did not count next to a face that names someone else.
+- A body name that a face in the same video already confirmed is not used.
+- With `person_pfad` on `nur_wenn_gesicht_leer`, an event is always checked when the video shows several people and the tracked person got no face name.
+
 ## 0.1.1.111 (2026-11-23)
 
 Test release. Person recognition stays a preview.
@@ -43,18 +52,3 @@ Test release. 0.1.1.104 to 0.1.1.109 were never published; their changes are par
 - Event clips: suslik now waits until Frigate has stored the recording up to the end of an event before it fetches the clip, so the end is no longer cut off by fetching too early. Thanks for the report in #40.
 - The setting `clip_delay` was removed.
 - New setting `clip_aufnahme_deckel_s` (factory value 20 s, 5 to 120 s): the longest time suslik waits for the recording.
-
-## 0.1.1.101 (2026-11-11)
-
-Test release. 0.1.1.058 was never published; its changes are part of this version.
-
-- Today: the page now shows only cards, in three bands (Recognized, Probably recognized, Unknown), each card with its action. The list of passes and the numbers of the day moved to the new tab Passes. Card pictures are sent scaled down.
-- Unknown people seen by a live watcher on Today: an appearance that a live watcher judges as an unknown person gets a card in the Unknown band, whatever channel the watcher reports on. The card opens the live alert. It has no identity and cannot be named there.
-- Live watchers page: one page with slots replaces the tile overview and the separate settings page. A camera is assigned to a slot; below the slot bar are the settings of the selected slot: Push messages (a table with all nine push switches), Home Assistant (MQTT), Visit, Frigate (optional), and the folded sections Advanced and Diagnostics. "End after no face" is now "Visit ends after" and "Re-armed after" is now "Push pause"; the saved values are unchanged. The counter in the head reads "reported" instead of "alerts".
-- Second look: a face that resembles nobody known must be found a second time by the detector before it counts as an unknown person. This keeps leaves, bushes and similar things out of the alerts and the unknown pool. Checked on Intel GPU and CPU, untested on AMD.
-- The calibration samples of a live watcher keep all filter values.
-- New setting `vorlauf_timeout_s` (factory value 60 s, 10 to 300 s): how long the service waits for the connection when it fetches a clip.
-- Live watcher MQTT: every message has the field event, faces_recognized and appearance_ended are new. MQTT no longer waits for image, video or push, and "Push pause" no longer holds it back. Old fields are unchanged. Details in Read me first.
-- Live watcher on Pushover and Telegram: the first face is no longer reported there. Known people come right away with name and a small picture, unknown people once the appearance is over, and Telegram gets one video per reported appearance. Each message type has its own switch per watcher, and "Push pause" now starts at the first face of a reported appearance.
-- NVIDIA under Windows with Docker Desktop (WSL 2): the cuda image now detects the card without the device nodes /dev/nvidia*, so recognition, decoding and display videos run on the GPU there. Not yet verified on our own hardware. Thanks for the report in #37.
-- Live alerts: the video of an appearance now also plays in Safari.

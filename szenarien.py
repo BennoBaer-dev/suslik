@@ -426,8 +426,12 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
     vision_map (Fix vision-stimme-2): pass_key -> juengstes Vision-Urteil
     (visionurteil.protokoll_karte). None = bei Bedarf selbst laden, s.u.
     koerper_ab (seit Stufe KW12 des Bauplans analysen/bauplan_koerperweg_neu.md, R2): die Zahl der STIMMEN, die
-    eine Person im Durchgang ohne Gesichts-Namen fuer einen Koerper-Namen braucht (core.koerperweg.stimmen_zaehlen
-    ueber ihre Treffer-Ereignisse); die Aufrufer reichen koerper_stimmen aus der Config herein."""
+    eine Person ohne Gesichts-Namen im Durchgang fuer einen Koerper-Namen braucht (core.koerperweg.stimmen_zaehlen
+    ueber ihre Treffer-Ereignisse); die Aufrufer reichen koerper_stimmen aus der Config herein.
+    Stufe KS2 des Bauplans analysen/bauplan_koerper_spur.md: mit koerper_map traegt jede Zeile von evs zusaetzlich
+    `spur_ohne_namen` (core.koerperweg.spur_ohne_namen der Akte-Zeile); es zaehlen nur Treffer auf solchen Ereignissen,
+    gleich ob der Durchgang Gesichts-Namen hat. Mit Gesichts-Namen entfallen Vision-Stimme, Fremd-Urteil und das Leeren
+    des Unbekannt-Topfs."""
     now = now if now is not None else time.time()
     # Vision-STIMME (Fix vision-stimme-2, Rueckweg-Fall 10.08.): das
     # Vision-Urteil eines Durchgangs zaehlt als EINE zusaetzliche Stimme
@@ -478,11 +482,13 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
         if neu:
             grp.append(cur)
     szenarien = []
+    if koerper_map:
+        from core import koerperweg as _kw          # KW12 R2, KS2: nur Aufrufer mit Karte laden
     for g in grp:
         pers, unbek, noface = {}, 0, 0
         verworfen = []          # .356: vom Vorrang-Riegel abgelehnte Koerper-Namen
-                                # (hier, NICHT im Koerper-Zweig: der laeuft nur, wenn
-                                #  gar kein Gesicht bestaetigt hat — sonst NameError)
+                                # (hier, NICHT im Koerper-Zweig: der laeuft nur mit
+                                #  Karte, und nur ohne Gesichts-Namen verwirft er)
         unbek_stark = 0        # Issue #16 Automatik: unerkannte Events MIT
         # ernstzunehmendem Gesicht (fremd_verdacht bzw. User-Fremd-Label);
         # ein Pass, dessen Unbekannte alle nur schwach sind, bekommt die
@@ -500,6 +506,8 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
             cam = str(x.get("camera", "?"))
             ev_liste.append({"eid": x.get("eid"), "t": x.get("start") or x.get("ts") or 0, "cam": cam,
                              "conf": list(x.get("bestaetigt") or [])})
+            if koerper_map:                         # KS2: die Person der Spur ohne Gesichts-Namen (Leser koerper_namen)
+                ev_liste[-1]["spur_ohne_namen"] = _kw.spur_ohne_namen(x)
             best = x.get("bestaetigt") or []
             ours = x.get("ours") or {}
             cl = kams.setdefault(cam, {"n": 0, "erk": _coll.Counter(),
@@ -563,20 +571,23 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
                 cl["unbek_eid"] = cl["unbek_eid"] or x.get("eid")
             else:
                 noface += 1
-        if not pers and koerper_map:
+        if koerper_map:
             # ZUSCHREIBUNG via Koerper-Strang (User 05.08., Fusion Schritt 1):
-            # kein Gesicht im ganzen Durchgang, aber der Personen-Strang kennt
-            # die Person mit genug Stimmen (>= koerper_ab Stimmen ueber ihre
-            # Treffer-Ereignisse, KW12 R2) -> der Pass GEHOERT ihr: Karte zaehlt ihn, kein
+            # der Personen-Strang kennt eine Person ohne Gesichts-Namen im
+            # Durchgang mit genug Stimmen (>= koerper_ab Stimmen ueber ihre
+            # Treffer-Ereignisse, KW12 R2) -> der Pass GEHOERT (auch) ihr: Karte zaehlt ihn, kein
             # "no known person", kein Unknown-Besucher-Kandidat. quelle=
             # "koerper" haelt die Urteilsquelle fuer die Anzeige unterscheidbar;
-            # Gesichts-Urteile je Event bleiben unangetastet.
+            # Gesichts-Urteile je Event bleiben unangetastet. KS2 (Entscheid E1):
+            # es zaehlen nur Treffer auf Ereignissen mit spur_ohne_namen, gleich
+            # wie viele Personen das Video zeigt; mit Gesichts-Namen im Durchgang
+            # entfallen Vision-Stimme, Fremd-Urteil und das Leeren des Unbekannt-Topfs.
+            gesicht_namen = bool(pers)
             khits = {}
-            for x in evs_g:
+            for x, ev in zip(evs_g, ev_liste):
                 t3 = koerper_map.get(x.get("eid"))
-                if t3 and t3.get("person"):
+                if t3 and t3.get("person") and ev["spur_ohne_namen"] and t3["person"] not in pers:
                     khits.setdefault(t3["person"], []).append((x, t3))
-            from core import koerperweg as _kw          # KW12 R2: Stimmen je Person, nur Aufrufer mit Karte laden
             _st = {p: _kw.stimmen_zaehlen(t for _x, t in h) for p, h in khits.items()}
             # Vision-STIMME: EIN Urteil je Durchgang = hoechstens EINE
             # Stuetze. Sie zaehlt nur, wenn (a) das Qualitaets-Sieb
@@ -601,7 +612,7 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
             # nur hier tolerante Suche erzeugte Anzeige-Widersprueche und
             # aenderte an 74 Echt-Passen ueber 4 Tage exakt nichts).
             stimme = None
-            if khits and vision_map and cfg.get("vision_stimme", True):
+            if khits and vision_map and cfg.get("vision_stimme", True) and not gesicht_namen:
                 vz = vision_map.get(_pass_schluessel(g["start"], g.get("kette"))) or {}
                 vp = vision_stimme_gilt(vz)
                 if vp and vp in khits and all(
@@ -622,7 +633,7 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
             # KEIN 'or'-Rueckfall: ein bewusst konfiguriertes 0 (Regel aus)
             # waere sonst als falsy auf den Vorgabewert zurueckgefallen —
             # dieselbe Bauform hat im Projekt schon einmal geaergert.
-            _fremd, _grund = fremd_urteil(
+            _fremd, _grund = (False, None) if gesicht_namen else fremd_urteil(
                 evs_g, int(_ab) if _ab is not None else FREMD_AB_GESICHTER)
             if _fremd:
                 for p, hits in khits.items():
@@ -656,7 +667,7 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
                     # Quelle bleibt koerper; count bleibt die Zahl der
                     # Koerper-Treffer-Events.
                     pers[p]["vision_stimme"] = True
-            if pers:
+            if pers and not gesicht_namen:
                 # Zugeschriebene Passe verlassen den Unbekannt-Topf der SEITE
                 # (der persistente Pool/Reconcile bleibt Gesichts-Sache).
                 unbek_eids, unbek_eid = [], None

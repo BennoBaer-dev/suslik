@@ -13019,7 +13019,7 @@ class Service:
         # Ketten-Schalter (Issue #21): Enum aus KETTE_STUFEN (eine Quelle fuer
         # Default, Whitelist und UI-Dropdown). "aus" ueberspringt den Weg an
         # der QUELLE — die teuren Rechnungen starten gar nicht erst.
-        "person_pfad": (list, KETTE_STUFEN, None, "person (body) recognition path: an event without a recognised face and with exactly one person gets a body name when a body picture cut from its video is close enough to a valid picture on the Body images page; it needs at least one valid picture there. The name is shown (Today, walk-throughs, appearances); it notifies only on the ways you switch on (koerper_meldet_frigate, koerper_meldet_pushover, koerper_meldet_telegram, koerper_meldet_ha, all off by default). The cut runs in its own background process, one event at a time; an event that does not get its turn in time gets no body name. immer = every such event is checked | nur_wenn_gesicht_leer = only when the FACE path could NOT confirm everyone on the walk-through | aus = the path never starts by itself and no body picture is cut for recognition (the biggest saving on weak CPUs)"),
+        "person_pfad": (list, KETTE_STUFEN, None, "person (body) recognition path: an event whose tracked person got no face name gets a body name when a body picture cut from its video is close enough to a valid picture on the Body images page; it needs at least one valid picture there. The name is shown (Today, walk-throughs, appearances); it notifies only on the ways you switch on (koerper_meldet_frigate, koerper_meldet_pushover, koerper_meldet_telegram, koerper_meldet_ha, all off by default). The cut runs in its own background process, one event at a time; an event that does not get its turn in time gets no body name. immer = every such event is checked | nur_wenn_gesicht_leer = only when the FACE path could NOT confirm everyone on the walk-through; when a video shows several people, an event whose tracked person got no face name is always checked | aus = the path never starts by itself and no body picture is cut for recognition (the biggest saving on weak CPUs)"),
         "vision_pfad": (list, KETTE_STUFEN, None, "vision detect path: immer = a run starts automatically at the end of every walk-through, as long as vision detect itself is switched on (today's behavior) | nur_wenn_gesicht_leer = the automatic run only starts when the FACE path could NOT confirm everyone on the walk-through | aus = no automatic vision runs at all; runs you start yourself on the Vision page keep working"),
         "diagnostic_collection": (bool, None, None, "keep every JUDGED body image for inspection (Person -> Judged images): on = images of all passes stay for 30 days, roughly 20-40 MB a day; off (default) = they only live while the pass is running, then only the winning image and the verdict log remain"),
         "vision_gitter_behalten": (bool, None, None, "keep the candidate grid image of vision runs that ended WITHOUT a verdict, even in lean mode: it is the only evidence to judge later whether a 'neither' was right; grids still expire with the normal 30-day trim (default: off)"),
@@ -25865,21 +25865,26 @@ class Service:
                 _m7.append(("mqtt", time.monotonic()))
                 # Stufe KW5 (Bauplan analysen/bauplan_koerperweg_neu.md Punkt 1):
                 # die Koerper-Abfrage im eigenen Koerper-Prozess, nur wenn die
-                # Schublade ein gueltiges Bild hat und das Ereignis ohne
-                # bestaetigtes Gesicht genau eine Person zeigt (_person_live);
-                # laeuft im Daemon-Thread, blockiert den Gesichts-Pfad nie.
+                # Schublade ein gueltiges Bild hat und die Person der Spur
+                # keinen Gesichts-Namen hat, gleich wie viele Personen das
+                # Video zeigt (_person_live; Bauplan analysen/bauplan_koerper_spur.md,
+                # Stufe KS1); laeuft im Daemon-Thread, blockiert den Gesichts-Pfad nie.
                 # Ketten-Schalter davor (Issue #21): "aus" wurde schon VOR der
                 # Analyse laut uebersprungen (eine Zeile je Lauf, steht oben);
                 # "nur_wenn_gesicht_leer" laesst das teure Urteil (Embedding)
                 # nur an, wenn der Gesichts-Weg den DURCHGANG nicht restlos
-                # bestaetigt hat (Mehr-Personen-Regel B, s. Helfer).
+                # bestaetigt hat (Mehr-Personen-Regel B, s. Helfer). Hat die
+                # Namenszuordnung die Spur ohne Namen gelassen (Stufe KS1 Punkt 3),
+                # hat das Gesicht nicht jeden im Video bestaetigt: dann sperrt die
+                # Stufe nicht, und das Pass-Urteil wird nicht gefragt.
                 # Modulumbau R2: der Stufen-Entscheid faellt in core/kette.
                 # Das Pass-Urteil kommt lazy (nur "nur_wenn_gesicht_leer"
                 # wertet es aus) und in der ALTEN Reihenfolge: erst
                 # Scharf-Frage, dann Pass-Urteil.
+                _spur_leer = "namenszuordnung" in entry and _koerperweg.spur_ohne_namen(entry)
                 _p_urteil = _kette.entscheide(
                     kette_person,
-                    lambda: self._koerper_scharf()
+                    lambda: not _spur_leer and self._koerper_scharf()
                     and self._gesicht_pass_bestaetigt(eid=eid, entry=entry))
                 if _p_urteil == "aus":
                     pass
@@ -25888,7 +25893,7 @@ class Service:
                              f"confirmed the whole pass "
                              f"(person_pfad=nur_wenn_gesicht_leer)")
                 else:
-                    self._person_live(entry.get("eid"), entry, _pzahl)
+                    self._person_live(entry.get("eid"), entry)
                 # V4 (konzept_vision.md §7): dritter Weg, Auslöser auf
                 # PASS-Ebene und erst am Durchgangs-Ende (Debounce). Nur ein
                 # Timer-Start, keine Arbeit, kein Lock — die Analyse laeuft
@@ -25903,7 +25908,7 @@ class Service:
                 # Lauf startet. Seit Stufe KW5 meldet der Koerper-Weg nie (nur
                 # Anzeige), die fruehere Stille-Sperre (.163) entfaellt damit. Seit KW12 meldet er auf Wunsch,
                 # aus einem Nachhol-Lauf aber nie (nachhol reist mit).
-                self._person_live(entry.get("eid"), entry, _pzahl, nachhol)
+                self._person_live(entry.get("eid"), entry, nachhol)
             _m7.append(("person", time.monotonic()))
             # .408 Anwesenheits-Marke (Konzept §3, Quelle A): zwischen fertigem
             # entry und dem Akte-Append, UNABHAENGIG von nachhol — der
@@ -27315,15 +27320,16 @@ class Service:
                                         eid, entry)
 
 
-    def _person_live(self, eid, entry, personenzahl, nachhol=0):
+    def _person_live(self, eid, entry, nachhol=0):
         """Ausloeser der Koerper-Abfrage (Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW5 Punkt 1): fuer ein
-        Ereignis ohne bestaetigtes Gesicht mit Frigate-Personenzahl genau 1 (core.koerperweg.abfrage_noetig) und eine
-        Schublade mit mindestens einem gueltigen Bild (core.kette.koerper_scharf) startet ein eigener Faden die Abfrage
-        im Koerper-Prozess (_person_lauf); die Analyse wartet nie auf ihn. Seit Stufe KW12 Punkt 2 reisen entry und
+        Ereignis, dessen Person an der Spur keinen Gesichts-Namen hat, gleich wie viele Personen das Video zeigt
+        (core.koerperweg.abfrage_noetig, Bauplan analysen/bauplan_koerper_spur.md, Stufe KS1), und eine Schublade mit
+        mindestens einem gueltigen Bild (core.kette.koerper_scharf) startet ein eigener Faden die Abfrage im
+        Koerper-Prozess (_person_lauf); die Analyse wartet nie auf ihn. Seit Stufe KW12 Punkt 2 reisen entry und
         nachhol mit (gemeldet wird nur auf Wunsch, aus einem Nachhol-Lauf nie).
         -> None"""
         from core import koerperweg as _kw
-        noetig, grund = _kw.abfrage_noetig(entry, personenzahl)
+        noetig, grund = _kw.abfrage_noetig(entry)
         if not eid or not noetig:
             self.log.debug(f"{eid}: body query not started — {grund}")
             return
@@ -27360,7 +27366,8 @@ class Service:
         faellt die Abfrage dieses Ereignisses mit WARNING aus; eine Schlange fuer spaeter gibt es nicht), die
         Abfragebilder gegen die gueltigen Bilder der Schublade (core.koerperweg.vergleichen) und das Ergebnis in die
         Treffer-Datei. Stufe KW12 Punkt 3a: mit Namen und mindestens einem Melde-Schalter an ein Anstoss des
-        Auswerters mit dem Abfragebild des Werts. Kein Personenname im Dienst-Log. -> None"""
+        Auswerters mit dem Abfragebild des Werts. Stufe KS1 Punkt 4 (Bauplan analysen/bauplan_koerper_spur.md): ein Name
+        aus `bestaetigt` derselben Akte-Zeile wird ohne Namen gebucht. Kein Personenname im Dienst-Log. -> None"""
         from core import frames as _frames
         from core import koerperschnitt as _ks
         from core import koerperweg as _kw
@@ -27394,6 +27401,11 @@ class Service:
                 return
             erg = _kw.vergleichen([b["fingerabdruck"] for b in bilder],
                                   _rq.body_read(cfg, states=(_rq.basis.BODY_STATES[1],)), cfg)
+            # Bauplan analysen/bauplan_koerper_spur.md, Stufe KS1 Punkt 4: ein Name, den das Gesicht im selben Clip schon
+            # bestaetigt hat, gilt nicht; gebucht wird ohne Namen (die letzte Zeile je Ereignis gilt)
+            if erg["person"] and erg["person"] in ((entry or {}).get("bestaetigt") or ()):
+                erg = dict(erg, person=None, stimmen=0, bild=None,
+                           grund="the name is already confirmed by a face in this clip")
             _kw.treffer_buchen(dd, eid, erg)
             if erg["person"]:                            # Stufe FN3 Punkt 2: das verglichene Bild fuer /koerpernamen
                 try:

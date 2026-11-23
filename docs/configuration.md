@@ -214,8 +214,9 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   [person-recognition.md](person-recognition.md)).
 - **Body images and person recognition** — see [person-recognition.md](person-recognition.md) for how the
   path works. **`person_pfad`** (`immer` = always, the default \| `nur_wenn_gesicht_leer` = only when the
-  face path could not confirm everyone on the walk-through \| `aus` = off; a fresh install starts with `aus`):
-  an event without a recognized face and with exactly one person gets a body name when a body picture cut
+  face path could not confirm everyone on the walk-through; when a video shows several people, an event whose
+  tracked person got no face name is always checked \| `aus` = off; a fresh install starts with `aus`):
+  an event whose tracked person got no face name gets a body name when a body picture cut
   from its video is close enough to a valid image on the **Body images** page. It needs at least one valid
   image there. By default the name is only shown. Four switches, all off by default, let it report:
   **`koerper_meldet_frigate`** (sub label in Frigate, needs `sub_label_schreiben`),

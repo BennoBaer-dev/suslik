@@ -121,9 +121,14 @@ cleanup. Clothes change, so the stock stays fresh.
 
 ## Recognition by distance
 
-After the analysis of an event with no recognized face and exactly one
-person, suslik cuts body pictures from that video in the same way (without
-the face check) and compares them with the valid images of all people.
+After the analysis of an event whose tracked person got no face name,
+suslik cuts body pictures from that video in the same way (without the
+face check) and compares them with the valid images of all people. The
+number of people in the video does not matter. When Frigate counts two or
+more people, suslik decides which name belongs to the tracked person; if
+that person got no name, the event is checked. Otherwise an event is
+checked only when no face in the clip was confirmed. A body name that a
+face in the same clip already confirmed is not used.
 
 - Each picture is compared with the closest valid image of each person.
 - The threshold is the higher of two values: the floor `koerper_schwelle`
@@ -134,8 +139,10 @@ the face check) and compares them with the valid images of all people.
 - If two pictures of the event point to different people, there is no
   name.
 - With `person_pfad` on `nur_wenn_gesicht_leer`, this runs only when the
-  face path could not confirm everyone on the walk-through. With `aus` it
-  never runs. It also needs at least one valid body image.
+  face path could not confirm everyone on the walk-through; when a video
+  shows several people and the tracked person got no face name, it always
+  runs. With `aus` it never runs. It also needs at least one valid body
+  image.
 
 One event at a time is checked. If the background process has no room in
 time, that event gets no body name; it is not queued for later.
@@ -151,12 +158,16 @@ walk-through add up.
 - The name counts when the person has at least `koerper_stimmen` votes
   (default 3) on the walk-through: one video with three votes is enough,
   so are two videos with two and one.
+- Only votes from events where the tracked person has no face name count,
+  no matter how many people the video shows.
 - On a walk-through without a face name it is shown on the **Passes** tab
   of Activity, marked *via person recognition, no face*, and on the
-  appearances page and the recognition test.
-- It does not count when the face path saw many good faces of the
-  walk-through and none of them came close to anyone you know (then it was
-  most likely a stranger), and not next to a face that names someone else.
+  appearances page and the recognition test. It does not count there when
+  the face path saw many good faces of the walk-through and none of them
+  came close to anyone you know (then it was most likely a stranger).
+- Next to a face that names someone else it counts too: the walk-through
+  shows both names, and the body name goes to presence, notifications and
+  Frigate like any other.
 - Next to a face that names the same person it counts too, for the events
   without a face of their own; the page then shows the face name.
 
