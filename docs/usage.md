@@ -7,8 +7,8 @@ analysis runs as Frigate produces person events.
 
 ## The web UI
 The UI has **eleven sections** (top bar): **Activity** (Today / Passes / Events / Unknown),
-**People** (your reference library), **Person** (the Body images page of the body-recognition
-path — see [person-recognition.md](person-recognition.md)), **Vision** (vision detect, parked in this
+**People** (your reference library), **Person** (the Body images and Named persons pages of the
+body-recognition path — see [person-recognition.md](person-recognition.md)), **Vision** (vision detect, parked in this
 version: the page says why), **Live**
 (live watchers — see [live-watchers.md](live-watchers.md)), **Areas** (camera groups),
 **Learn** (face learning runs and anchors), **Frigate sync** (the

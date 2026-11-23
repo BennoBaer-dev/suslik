@@ -2977,6 +2977,18 @@ def ground_truth_path(data_dir):
     return os.path.join(data_dir, "state", "ground_truth.jsonl")
 
 
+def ground_truth_anhaengen(data_dir, eid, personen):
+    """Eine Wahrheits-Zeile {ts, eid, label, personen} an die Ground-Truth-Datei haengen, label ueber
+    szenarien.gt_label_aus_personen (Stufe FN4 Punkt 3; Schreiber: /gt und Service.koerper_korrektur). -> label"""
+    import szenarien as _szen
+    label = _szen.gt_label_aus_personen(personen)
+    with open(ground_truth_path(data_dir), "a") as f:
+        f.write(json.dumps({"ts": round(time.time(), 1), "eid": eid, "label": label, "personen": personen},
+                           ensure_ascii=False) + "\n")
+        f.flush()
+    return label
+
+
 def master_persons(cfg):
     """Personenliste (AP1) — Frigate-unabhaengig. Seit E3b-2a (Bauplan analysen/bauplan_refquelle_einbau.md,
     Stufe E3 Punkt 2, Entscheid 6) aus der Referenz-Quelle statt aus den Ordnern unter faces/: die Personen mit
@@ -27383,6 +27395,12 @@ class Service:
             erg = _kw.vergleichen([b["fingerabdruck"] for b in bilder],
                                   _rq.body_read(cfg, states=(_rq.basis.BODY_STATES[1],)), cfg)
             _kw.treffer_buchen(dd, eid, erg)
+            if erg["person"]:                            # Stufe FN3 Punkt 2: das verglichene Bild fuer /koerpernamen
+                try:
+                    _kw.treffer_bild_ablegen(dd, eid, bilder[erg["bild"]]["png"])
+                except Exception as e:                   # noqa: BLE001  laut im Log, der Treffer bleibt
+                    self.log.warning(f"{eid}: body hit picture not saved ({type(e).__name__}: {e}) — the body name "
+                                     f"stays, the named persons page shows it without a tile")
             self.log.info(f"{eid}: body query done — {'a body name' if erg['person'] else 'no body name'} "
                           f"(best {erg['score']}, threshold {erg['schwelle']}: {erg['grund']})")
             if erg["person"] and any(cfg.get(k) for k in _kw.MELDE_SCHALTER):
@@ -27568,6 +27586,52 @@ class Service:
         finally:
             if not behalten:
                 self._koerper_eingereiht.discard(eid)
+
+    def koerper_korrektur(self, eid, richtig):
+        """Einen Koerper-Namen auf der Seite Benannte Personen als falsch markieren (Stufe FN4 Punkt 5): Treffer-Datei,
+        Frigate (Punkt 6), mit gewaehlter Person eine Wahrheits-Zeile, eine INFO ohne Namen. -> (Status, dict)"""
+        import szenarien as _szen
+        from core import koerperweg as _kw
+        cfg, dd = self.cfg, self.cfg["data_dir"]
+        if _kw.treffer_korrigieren(dd, eid, nicht=richtig) is None:
+            return 409, {"ok": False, "msg": "the event has no body name (or the same name was chosen)"}
+        if not cfg["sub_label_schreiben"] or self.dry_alert:
+            wort = "off"
+        elif frigate_read_only(cfg):
+            wort = "read-only"                           # suslik hat dort nie geschrieben: kein Abruf, keine Zeile
+        else:
+            wort = "queued"
+            neu = richtig if richtig != _szen.GT_OFFEN_LABELS[0] else ""
+            self._spur(f"body name correction {eid}", lambda: self._koerper_frigate_zurueck(eid, neu))
+        if richtig:                                      # haelt Ordner und Bild in crops_retention
+            ground_truth_anhaengen(dd, eid, [richtig])
+        self.log.info(f"{eid}: body name marked wrong on the named persons page — Frigate: {wort}; "
+                      f"correct person chosen: {'yes' if richtig else 'no'}")
+        return 200, {"ok": True, "frigate": wort}
+
+    def _koerper_frigate_zurueck(self, eid, neu):
+        """Den als falsch markierten Koerper-Namen in Frigate entfernen (neu leer) oder durch die gewaehlte Person ersetzen
+        (Stufe FN4 Punkt 6, Bauart _koerper_frigate, in der Spur); nur einen Koerper-Namen, den suslik dort schrieb.
+        -> None (gesendet) oder _SPUR_UNCOUNTED"""
+        from core import koerperweg as _kw
+        nicht = f"{eid}: body name correction — Frigate not touched — not a body name suslik wrote"
+        if eid not in self.own_writes_koerper:
+            self.log.info(nicht)
+            return self._SPUR_UNCOUNTED
+        ist = api(self.cfg, f"/api/events/{eid}").get("sub_label")
+        if not ist or ist not in self._sublabel_target(eid, ist, None)[2]:
+            self.log.info(nicht)
+            return self._SPUR_UNCOUNTED
+        wert = _kw.NUTZER_WERT if neu else None
+        with self.__dict__.setdefault("_eigen_schreib_schloss", threading.Lock()):
+            if eid not in self.own_writes_koerper:       # eine Gesichts-Schreibung ist inzwischen beschlossen
+                self.log.info(nicht)
+                return self._SPUR_UNCOUNTED
+            self._writes_append(eid=eid, label=neu, score=wert, cos=None, quelle="koerper", berichtigt=ist)
+        api_post(self.cfg, f"/api/events/{eid}/sub_label",
+                 {"subLabel": neu, "subLabelScore": wert} if neu else {"subLabel": ""})
+        self.log.info(f"{eid}: body name correction — {'replaced' if neu else 'removed'} in Frigate")
+        return None
 
     def _koerper_senden(self, m, person, eids, wege):
         """Eine Koerper-Meldung einer Person ueber die eingeschalteten Wege (Stufe KW12 Punkte 5 bis 7); m aus
@@ -30524,6 +30588,21 @@ def make_handler(svc):
                 else:
                     _stkb, _akb = _r_kb.zustand_setzen(cfg, _dkb, pfad == "/koerperbilder/bestaetigen")
                 return self._send(_stkb, json.dumps(_akb, ensure_ascii=False), "application/json")
+            if pfad == "/koerpernamen/falsch":
+                # Bauplan analysen/bauplan_feldnachzug_0110.md, Stufe FN4 Punkt 4: einen Koerper-Namen als falsch
+                # markieren. Koerper {"eid": Kennung, "richtig": leer (weiss nicht), eine Person oder Fremd}.
+                import szenarien as _szen_kn
+                _dkn = self._body_json(4096, erwartet=dict)
+                if _dkn is _ABGEWIESEN:
+                    return
+                _ekn, _rkn = str(_dkn.get("eid") or ""), str(_dkn.get("richtig") or "").strip()
+                if not re.match(r"^[\w.\-]+$", _ekn) or (_rkn and (
+                        not _szen_kn.gt_pruefen([_rkn], set(master_persons(cfg)))[0] or _rkn in _szen_kn.GT_EXKLUSIV)):
+                    return self._send(400, json.dumps({"ok": False, "msg": "eid must be an event id, richtig empty, a "
+                                                       f"known person or {_szen_kn.GT_OFFEN_LABELS[0]}"}),
+                                      "application/json")
+                _skn, _akn = svc.koerper_korrektur(_ekn, _rkn)
+                return self._send(_skn, json.dumps(_akn, ensure_ascii=False), "application/json")
             if pfad == "/lernlauf_start":
                 # E2: Lauf anlegen — atomar via core.lernlauf, UNTER dem Starter-Lock
                 # (zwei gleichzeitige POSTs waren ein check-then-act-Rennen, F2.2).
@@ -32375,12 +32454,7 @@ def make_handler(svc):
                 if not ok:
                     return self._send(400, json.dumps({"ok": False, "msg": grund}),
                                       "application/json")
-                label = _szen.gt_label_aus_personen(personen)
-                with open(os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl"), "a") as f:
-                    f.write(json.dumps({"ts": round(time.time(), 1), "eid": eid,
-                                        "label": label, "personen": personen},
-                                       ensure_ascii=False) + "\n")
-                    f.flush()
+                label = ground_truth_anhaengen(cfg["data_dir"], eid, personen)
                 return self._send(200, json.dumps({"ok": True, "personen": personen,
                                                    "label": label}, ensure_ascii=False),
                                   "application/json")
@@ -34188,6 +34262,16 @@ def make_handler(svc):
                 from routes import koerperbilder as _r_kb
                 inhalt = _r_kb.seite(cfg, svc.log_path, getattr(svc, "_cutter_stand", None))
                 return self._send(200, webui.layout(_sprache.t("nav.person"), "/koerperbilder", inhalt, self._banner()))
+            if path == "/koerpernamen":                # Bauplan Feldnachzug 0.1.1.110 FN3: Seite „Named persons“ (Person)
+                import webui
+                from routes import koerpernamen as _r_kn
+                # die Koerper-Namen, die an Frigate gingen: eine Kopie unter dem Schloss, das jeder Schreiber der Menge haelt
+                # (gelesen wie in _maybe_sublabel: ein Dienst ohne die Menge, etwa eine Attrappe ohne __init__, hat keine)
+                with svc.__dict__.setdefault("_eigen_schreib_schloss", threading.Lock()):
+                    _gkn = set(svc.__dict__.get("own_writes_koerper") or ())
+                inhalt = _r_kn.seite(cfg, svc.log_path, _gkn, personen=master_persons(cfg))   # FN4: Auswahl „Richtig wäre“
+                return self._send(200, webui.layout(_sprache.t("nav.koerpernamen"), "/koerpernamen", inhalt,
+                                                    self._banner()))
             if path.startswith("/koerperbilder/bild/"):  # KW4 Punkt 4: ein Bild der Schublade (core.refquelle)
                 from core import refquelle as _rq_kb
                 _bkb = path[len("/koerperbilder/bild/"):]
@@ -35227,13 +35311,15 @@ def make_handler(svc):
                 status, inhalt = _r_event.render(cfg, svc.log_path, eid,
                                                  gt_schnellpersonen, master_persons)
                 return self._send(status, webui.layout(_sprache.t("titel.event"), "/heute", inhalt, self._banner()))
-            m = re.match(rf"^/events/({_reg.EID_RE})/({_reg.DATEI_RE}\.(?:jpg|log|jsonl))$", path)
+            m = re.match(rf"^/events/({_reg.EID_RE})/({_reg.DATEI_RE}\.(?:jpg|png|log|jsonl))$", path)
             if m:                                          # Crops/Logs ausliefern (Pfad strikt validiert)
                 base = os.path.realpath(os.path.join(cfg["data_dir"], "events"))
                 p = os.path.realpath(os.path.join(base, m.group(1), m.group(2)))
                 # realpath-Containment: der Regex laesst ".." als Segment durch ([\w.-] enthaelt Punkte)
                 if p.startswith(base + os.sep) and os.path.isfile(p):
-                    ct = "image/jpeg" if p.endswith(".jpg") else "text/plain; charset=utf-8"
+                    # Stufe FN3 Punkt 3: png ist das Treffer-Bild der Seite Benannte Personen
+                    ct = ("image/jpeg" if p.endswith(".jpg") else "image/png" if p.endswith(".png")
+                          else "text/plain; charset=utf-8")
                     _daten = open(p, "rb").read()
                     from core import kleinbild as _kleinbild
                     if ct == "image/jpeg" and _kleinbild.verlangt(qs):   # TY1 Punkt 2: Kachel und Chip der Seite Today
@@ -36958,6 +37044,14 @@ def main():
                                             store_laden=_lade_config_store, store_schreiben=_store_schreiben)
     except Exception as e:                        # noqa: BLE001
         svc.log.error(f"live slots: assigning the slots at start failed ({type(e).__name__}: {e})")
+    # Bauplan feldnachzug_0110 FN1: abgeschaffte Waechter-Felder einmal raeumen, gleiche Bauart wie die Plaetze und vor
+    # start_live_aufsicht. Ein Fehler steht als ERROR im Log, die WARNING des Lesers bleibt, der naechste Start versucht es.
+    try:
+        with _cfg_lock:
+            _lw_plaetze.abgeschaffte_raeumen(svc.cfg, log=svc.log, store_pfad=_config_store_pfad,
+                                             store_laden=_lade_config_store, store_schreiben=_store_schreiben)
+    except Exception as e:                        # noqa: BLE001
+        svc.log.error(f"live fields: removing fields of an earlier version at start failed ({type(e).__name__}: {e})")
     # Stufe LZ2b Fix-Stelle 1: Erzeugung und Start des Webservers stehen in Service.webserver_starten (Faden `webserver`,
     # der Dienst merkt sich Server und Faden), damit die Selbstwache ihn allein neu starten kann (Entscheid 12).
     svc.webserver_starten()

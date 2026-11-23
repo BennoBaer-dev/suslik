@@ -88,10 +88,12 @@ def _nav():
         # Person als EIGENER Hauptbereich neben People (User 04.08. abend):
         # People zeigt die GESICHTER, Person die KOERPER-Bilder je Person.
         # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW4 Punkt 2: die flache
-        # Seite „Body images“ (/koerperbilder) ist die einzige Seite dort. Die alten
-        # Eintraege (/person, /person/kontrolle, /person/modell, /personlauf) sind
-        # aus dem Menue; ihre Routen und Seiten sind mit Stufe KW6 ausgebaut.
-        (t("nav.bereich.person"), [("/koerperbilder", t("nav.person"))]),
+        # Seite „Body images“ (/koerperbilder); seit Stufe FN3 (Bauplan
+        # analysen/bauplan_feldnachzug_0110.md) dahinter „Named persons“ (/koerpernamen).
+        # Die alten Eintraege (/person, /person/kontrolle, /person/modell, /personlauf)
+        # sind aus dem Menue; ihre Routen und Seiten sind mit Stufe KW6 ausgebaut.
+        (t("nav.bereich.person"), [("/koerperbilder", t("nav.person")),
+                                   ("/koerpernamen", t("nav.koerpernamen"))]),
         # Vision detect zwischen Person und Area (konzept_vision.md v2 §4): der
         # dritte Erkennungspfad. V1 zeigt Verbindung + Test; Galerie-Wizard und
         # Status folgen. Der Reiter steht auch AUS sichtbar da — eine Seite, die
@@ -626,10 +628,10 @@ def whatsnew_block():
         # Seit .298 (§6.3) sind Eintraege mehrsprachig: dict {en,de,es,it,fr
         # [,betont]} mit en-Fallback; Alt-Eintraege bleiben str (nur englisch),
         # dort traegt weiter das BETONT-Praefix die Marke.
-        readme = False
+        readme = seite = False
         if isinstance(txt, dict):
             betont = bool(txt.get("betont"))
-            readme = txt.get("readme")
+            readme, seite = txt.get("readme"), txt.get("seite")
             txt = txt.get(code) or txt["en"]
         else:
             betont = txt.startswith(BETONT)
@@ -662,6 +664,13 @@ def whatsnew_block():
         if readme and anker in anker_bekannt:
             rmn = html.escape(t("readme.knopf"))
             koerper = koerper.replace(rmn, f'<a href="/readme#rm-{html.escape(anker)}">{rmn}</a>', 1)
+        # Bauplan analysen/bauplan_feldnachzug_0110.md, Stufe FN5: die Marke `seite` nennt einen Pfad des Menues; dessen
+        # Menuename der aktiven Sprache (aus _nav()) wird an seiner ersten Fundstelle Verweis auf den Pfad, wie oben bei
+        # `readme`. Kennt das Menue den Pfad nicht oder steht der Name nicht im Text, bleibt der Eintrag ohne Verweis.
+        snm = seite and dict(k for _ab, kinder in _nav() for k in kinder).get(seite)
+        if snm:
+            snm = html.escape(snm)
+            koerper = koerper.replace(snm, f'<a href="{html.escape(seite)}">{snm}</a>', 1)
         li.append(f'<li{f' class="{kl}"' if kl else ""}>{chip}'
                   + koerper + "</li>")
     mehr = len(eintraege) - 3

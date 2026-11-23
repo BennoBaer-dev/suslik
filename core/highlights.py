@@ -6,13 +6,23 @@ JEDEM Release MIT dem User abgestimmt — nie selbststaendig fuellen
 liest AUSSCHLIESSLICH diese Liste. Das Gate prueft, dass der neueste Eintrag
 der VERSION entspricht. Import-frei wie core/registry.py.
 
-Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas."""
+Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
+
+Marke `seite` eines Eintrags (dict, Bauplan analysen/bauplan_feldnachzug_0110.md, Stufe FN5): ihr Wert ist ein Pfad
+des Menues, etwa "/koerpernamen"; webui.whatsnew_block setzt den Menuenamen dieser Seite in der aktiven Sprache an
+seiner ersten Fundstelle im Text als Verweis auf den Pfad, wie `readme` den Knopfnamen."""
 
 # STAND = bis zu welcher VERSION der Box-Inhalt MIT dem User abgestimmt ist (das Gate
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.110"   # 0.1.1.110: Eigentuemer 22.11.2026 17:29:51 (Veroeffentlichung, Auftragszeile) und 19:31:37
+STAND = "0.1.1.111"   # 0.1.1.111: Eigentuemer 23.11.2026 14:20:59 "Ja, mit Veröffentlichung" und 14:43:58 "Texte
+                      # abnehmen" (Box-Satz, Satz im Kapitel Personenerkennung und CHANGELOG-Abschnitt, Ablage
+                      # analysen/pruefungen/2026-11-23_1422_changelog_0111_entwurf/). Im Produkt neu: die Seite Benannte
+                      # Personen mit Korrektur, die Einstellungen des Lernlaufs nur noch auf der Seite Erkennung, das
+                      # einmalige Raeumen alter Waechter-Felder (Bauplan analysen/bauplan_feldnachzug_0110.md, Stufen
+                      # FN1 bis FN6).
+                      # Davor 0.1.1.110: Eigentuemer 22.11.2026 17:29:51 (Veroeffentlichung, Auftragszeile) und 19:31:37
                       # "passt" (neuer Text des CHANGELOG-Abschnitts, Ablage
                       # analysen/pruefungen/2026-11-22_1919_changelog_0110_entwurf/). Der Eintrag zuoberst steht unter
                       # 0.1.1.110 (vorher 0.1.1.109, davor 0.1.1.107), Wortlaut der Box unveraendert. 0.1.1.109 lief nur
@@ -944,6 +954,26 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.1.111 — EIN Eintrag, MIT DEM EIGENTUEMER ABGESTIMMT 23.11.2026 (sein Vorschlag 14:21:46 und 14:22:13:
+    # „Testversion“ bleibt, dahinter ein Satz zur neuen Seite, der Seitenname als Verweis; Wortlaut DE abgenommen
+    # 14:43:58, text_zur_abnahme.md der Ablage analysen/pruefungen/2026-11-23_1422_changelog_0111_entwurf/). EN von der
+    # Hauptsession, ES, IT, FR und FI nach EN.
+    ("0.1.1.111", (
+        {"de": "Testversion — Unter „Benannte Personen“ kannst du dir jetzt die Bilder ansehen, denen die "
+               "Personenerkennung einen Namen gegeben hat.",
+         "en": "Test release — Under “Named persons” you can now look at the images that person recognition gave a "
+               "name to.",
+         "es": "Versión de prueba — En «Personas nombradas» ahora puedes ver las imágenes a las que el "
+               "reconocimiento de personas ha dado un nombre.",
+         "it": "Versione di prova — In «Persone con nome» ora puoi vedere le immagini a cui il riconoscimento della "
+               "persona ha dato un nome.",
+         "fr": "Version de test — Sous « Personnes nommées », vous pouvez maintenant voir les images auxquelles la "
+               "reconnaissance de personne a donné un nom.",
+         "fi": "Testiversio — Kohdassa ”Nimetyt henkilöt” voit nyt katsoa kuvia, joille henkilöntunnistus on antanut "
+               "nimen.",
+         "betont": True,
+         "seite": "/koerpernamen"},
+    )),
     # 0.1.1.110 — EIN Eintrag, MIT DEM EIGENTUEMER ABGESTIMMT 21.11.2026 (Auftrag 18:38:19: „bis auf weiteres“ in Rot
     # „Testversion“, ein Satz zum Neubau der Personenerkennung, Verweis auf Read me first; Wortlaut DE abgenommen
     # 20:51:52 „Passt“, text_zur_abnahme.md der Ablage analysen/pruefungen/2026-11-21_2025_koerper_hinweistexte_entwurf/).

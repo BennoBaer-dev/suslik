@@ -89,7 +89,7 @@ T = {
         "été reconnu.\n\n"
         "Elle apprend à partir de vidéos dans lesquelles la reconnaissance faciale a identifié la personne avec "
         "certitude. À partir de cette version, suslik note pour chaque nouvelle vidéo si elle s'y prête. Les "
-        "vidéos plus anciennes ne comptent pas. Sur la page Images de corps, vous choisissez si l'apprentissage "
+        "vidéos plus anciennes ne comptent pas. Sur la page Reconnaissance, vous choisissez si l'apprentissage "
         "démarre à la main, une fois par jour ou tout de suite.\n\n"
         "Par défaut, un nom est retenu quand trois images des vidéos d'un même passage correspondent à la même "
         "personne. Il "
@@ -1653,6 +1653,7 @@ T = {
     "nav.anker": "Points d'ancrage",
     "nav.lernen": "Suggestions",
     "nav.person": "Images de corps",
+    "nav.koerpernamen": "Personnes nommées",
     "nav.vision": "Détection par vision",
     "nav.live": "Surveillance en direct",
     "nav.live_alerts": "Alertes en direct",
@@ -3981,7 +3982,6 @@ connues.</p>""",
     "koerperbilder.auto.taeglich": "une fois par jour avec la maintenance",
     "koerperbilder.auto.sofort": "juste après chaque vidéo adaptée",
     "koerperbilder.auto.uebernehmen": "Accepter les nouvelles images automatiquement",
-    "koerperbilder.auto.speichern": "Enregistrer + redémarrer",
     "koerperbilder.auto.fuss": "Apprentissage :",
     "koerperbilder.auto.von_auto": "automatique",
     "koerperbilder.auto.von_taeglich": "quotidien",
@@ -4007,4 +4007,20 @@ connues.</p>""",
     "koerperbilder.grund.speicher": "mémoire insuffisante",
     "koerperbilder.grund.technik": "échec du traitement",
     "koerperbilder.grund.ablage": "l'image n'a pas pu être enregistrée",
+    # Bauplan analysen/bauplan_feldnachzug_0110.md, Stufe FN3 : page « Personnes nommées » (routes/koerpernamen.py)
+    "koerpernamen.satz": "À qui la reconnaissance corporelle a donné un nom, avec l'image qu'elle a comparée.",
+    "koerpernamen.leer_aus": "La reconnaissance corporelle est désactivée ou n'a pas encore d'images de corps valides, il n'y a donc aucun nom ici.",
+    "koerpernamen.leer_keine": "Ces {tage} derniers jours, la reconnaissance corporelle n'a donné de nom à personne.",
+    "koerpernamen.ohne_bild.eins": "{n} nom sans image (d'avant cette version).",
+    "koerpernamen.ohne_bild.viele": "{n} noms sans image (d'avant cette version).",
+    "koerpernamen.frigate": "vers Frigate",
+    "koerpernamen.titel": "{kamera} · score {wert} · seuil {schwelle} · votes {stimmen}",
+    # Stufe FN4 : correction sur la page (x sous la vignette, ligne « Ce serait plutôt »)
+    "koerpernamen.falsch": "Le nom est faux",
+    "koerpernamen.richtig": "Ce serait plutôt :",
+    "koerpernamen.weiss_nicht": "je ne sais pas",
+    "koerpernamen.fremd": "personne inconnue",
+    "koerpernamen.speichern": "Enregistrer",
+    "koerpernamen.js.nicht": "Non effectué : {grund}",
+    "koerpernamen.js.fehler": "Pas de réponse du service. Rechargez la page.",
 }

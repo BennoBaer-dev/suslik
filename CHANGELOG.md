@@ -5,6 +5,17 @@ never pushed to GHCR; they ship bundled with the next release (each release entr
 says which steps it bundles). This file keeps the last five releases; the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git history.
 
+## 0.1.1.111 (2026-11-23)
+
+Test release. Person recognition stays a preview.
+
+- New page **Person → Named persons**: the people who got a body name in the last three days (at least `koerper_stimmen` votes on one pass), plus body names suslik wrote to Frigate. One row per person, newest picture on the left, at most twelve. Each picture is the one the comparison used and opens its event; date and time below it, camera, score, threshold and votes on hover.
+- Every event whose body comparison names a person now keeps the compared picture in its event folder (`koerper_treffer.png`), removed with the folder after `aufbewahrung_tage` days. Names from before this version have no picture; the page only counts them.
+- A wrong name is fixed with the small ✕ below its picture: choose the correct person, "stranger" or "don't know", then **Save**. The event loses its body name for good, on every page, and the log notes the correction without names. If suslik wrote the name to Frigate, it removes it there or puts in the person you chose; a chosen person is saved as your verdict for the event.
+- A correction can't be undone on the page. Notifications already sent and presence marks stay, and the event never gets a body name again, not even the right one.
+- **Recognition** page: the switch **Accept new images automatically** is now on the body card below **Start learning run**. Both are set only there (and on **Advanced**). The **Body images** page has no settings and no save button any more; its footer shows the current setting with a link to **Recognition**.
+- Live watchers: fields that earlier versions left in saved watchers are removed once at the first start, with one line in the log. The warning "… was removed in an earlier version" then no longer shows up.
+
 ## 0.1.1.110 (2026-11-22)
 
 Test release. 0.1.1.104 to 0.1.1.109 were never published; their changes are part of this version.
@@ -47,7 +58,3 @@ Test release. 0.1.1.058 was never published; its changes are part of this versio
 - Live watcher on Pushover and Telegram: the first face is no longer reported there. Known people come right away with name and a small picture, unknown people once the appearance is over, and Telegram gets one video per reported appearance. Each message type has its own switch per watcher, and "Push pause" now starts at the first face of a reported appearance.
 - NVIDIA under Windows with Docker Desktop (WSL 2): the cuda image now detects the card without the device nodes /dev/nvidia*, so recognition, decoding and display videos run on the GPU there. Not yet verified on our own hardware. Thanks for the report in #37.
 - Live alerts: the video of an appearance now also plays in Safari.
-
-## 0.1.1.057 (2026-11-08)
-
-- Margin rule for names: a face votes for a person only if its best match leads the second best by at least `stapel_abstand` (default 0.075, adjustable in Advanced Settings); closer faces give no vote and no preliminary name, in the analysis worker and the live watcher.

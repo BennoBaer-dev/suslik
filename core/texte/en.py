@@ -83,7 +83,7 @@ T = {
         "runs or only when no face was recognized.\n\n"
         "It learns from videos in which face recognition identified the person with certainty. From this version "
         "on, suslik notes for every new video whether it is suitable for this. Older videos don't count. On the "
-        "Body images page you choose whether the learning run starts by hand, once a day or right away.\n\n"
+        "Recognition page you choose whether the learning run starts by hand, once a day or right away.\n\n"
         "By default, a name counts when three pictures from the videos of one pass match the same person. It shows "
         "on Today and in Appearances and, if you want, also in Frigate, on the Presence page and as a separate "
         "notification via "
@@ -1686,6 +1686,7 @@ T = {
     "nav.anker": "Anchors",
     "nav.lernen": "Suggestions",
     "nav.person": "Body images",
+    "nav.koerpernamen": "Named persons",
     "nav.vision": "Vision detect",
     "nav.live": "Live watchers",
     "nav.live_alerts": "Live alerts",
@@ -3917,7 +3918,6 @@ between.</p>""",
     "koerperbilder.auto.taeglich": "once a day with the maintenance",
     "koerperbilder.auto.sofort": "right after each suitable video",
     "koerperbilder.auto.uebernehmen": "Accept new images automatically",
-    "koerperbilder.auto.speichern": "Save + restart",
     "koerperbilder.auto.fuss": "Learning run:",
     "koerperbilder.auto.von_auto": "automatic",
     "koerperbilder.auto.von_taeglich": "daily",
@@ -3943,4 +3943,20 @@ between.</p>""",
     "koerperbilder.grund.speicher": "not enough memory",
     "koerperbilder.grund.technik": "processing failed",
     "koerperbilder.grund.ablage": "image could not be saved",
+    # Bauplan analysen/bauplan_feldnachzug_0110.md, Stufe FN3: page "Named persons" (routes/koerpernamen.py)
+    "koerpernamen.satz": "Who body recognition gave a name to, with the image it compared.",
+    "koerpernamen.leer_aus": "Body recognition is off or has no valid body images yet, so there is no name here.",
+    "koerpernamen.leer_keine": "In the last {tage} days body recognition gave no one a name.",
+    "koerpernamen.ohne_bild.eins": "{n} name without an image (from before this version).",
+    "koerpernamen.ohne_bild.viele": "{n} names without an image (from before this version).",
+    "koerpernamen.frigate": "to Frigate",
+    "koerpernamen.titel": "{kamera} · score {wert} · threshold {schwelle} · votes {stimmen}",
+    # Stufe FN4: correction on the page (x below the tile, row "Correct would be")
+    "koerpernamen.falsch": "Name is wrong",
+    "koerpernamen.richtig": "Correct would be:",
+    "koerpernamen.weiss_nicht": "don't know",
+    "koerpernamen.fremd": "stranger",
+    "koerpernamen.speichern": "Save",
+    "koerpernamen.js.nicht": "Not done: {grund}",
+    "koerpernamen.js.fehler": "No answer from the service. Reload the page.",
 }

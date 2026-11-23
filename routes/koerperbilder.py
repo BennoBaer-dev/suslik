@@ -1,4 +1,5 @@
-"""routes/koerperbilder — die Seite „Body images“ unter /koerperbilder, die einzige Seite im Menuebereich Person.
+"""routes/koerperbilder — die Seite „Body images“ unter /koerperbilder, die erste Seite im Menuebereich Person (daneben
+seit Stufe FN3 „Named persons“, routes/koerpernamen).
 
 HERKUNFT: Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW4 Punkte 1 bis 4 (die Wege der Seite) und Stufe KW8
 (Seite neu geordnet, Auftrag des Eigentuemers 21.11.2026 10:26:23 gegen den „Bandwurm“ aus Zeilen ohne Daten; Konzept
@@ -17,18 +18,18 @@ Fortschritt); ein Lauf, der nicht durchlief, steht rot mit Grund. Gesperrt ist d
 Pose-Modell fehlt (core.livewache.pose_verfuegbar, Dateipruefung ohne Laden) oder kein Video wartet. Unter dem Stand
 der Balken kb-balken (role progressbar, Geruest fs-bar und fs-fill aus webui/style.css), nur waehrend eines Laufs
 sichtbar; den Anteil rechnet allein lauf_anteil (gepruefte Videos durch die Gesamtzahl videos_offen), GET
-/koerperbilder/cutter liefert ihn als anteil, und das Skript setzt ihn alle 3 s ohne Neuladen und ohne eigene Rechnung. Am
-Ende der Karte die Automatik (_auto, Stufe KW13 Punkt 3): die Auswahl cfg-koerper_lauf (von Hand, taeglich, sofort), der
-Schalter „Neue Bilder automatisch uebernehmen“ (setzt per Skript das versteckte Feld cfg-koerper_sichtpruefung auf den
-umgekehrten Wert) und Speichern ueber konfigSpeichern (webui/app.js) mit cfg-status, gesperrt waehrend eines Laufs, den
-die Seite beim Laden kennt; ein automatischer oder taeglicher Lauf nennt seinen Ausloeser in der Zeile des Stands, die
-ihn als data-von traegt; meldet der Abruf einen anderen Ausloeser, laedt das Skript die Seite neu (Nachzug B2). Karte
+/koerperbilder/cutter liefert ihn als anteil, und das Skript setzt ihn alle 3 s ohne Neuladen und ohne eigene Rechnung. Ein
+automatischer oder taeglicher Lauf nennt seinen Ausloeser in der Zeile des Stands, die ihn als data-von traegt; meldet der
+Abruf einen anderen Ausloeser, laedt das Skript die Seite neu (Nachzug B2). Die Einstellungen des Lernlaufs (koerper_lauf,
+koerper_sichtpruefung) stehen seit Stufe FN2 (Bauplan analysen/bauplan_feldnachzug_0110.md) nur in der Karte
+Koerpererkennung der Seite Erkennung; diese Seite hat keinen eigenen Speicherknopf. Karte
 Neue Bilder (_neu) nur mit offenen Bildern: je Person die offenen Bilder mit Annehmen und Verwerfen, auch bei
 Sichtpruefung aus (dann mit der Zeile Pruefung aus darueber), sonst eine Zeile. Karte Bestand (_bestand) nur mit Personen, die gueltige Bilder haben: je Person eine Zeile (Zahl, an wie vielen
 der letzten koerper_max_tage Kalendertage der Ortszeit, heute mitgezaehlt, also nie mehr als koerper_max_tage, neuestes
 Bild) als Aufklapper ueber ihre Bilder, jedes einzeln entfernbar (ins Archiv, core.refquelle.body_remove); die uebrigen
 bekannten Personen nur als Zahl. Fuss (_fuss): der Zustand (Koerperweg nach
-person_pfad, Sichtpruefung koerper_sichtpruefung, Lernlauf koerper_lauf) und die zwei Orte der Schalter. Aufklapper sind Knoepfe mit
+person_pfad, Sichtpruefung koerper_sichtpruefung, Lernlauf koerper_lauf) und der Verweis auf /erkennung, wo die Schalter
+stehen. Aufklapper sind Knoepfe mit
 aria-expanded und aria-controls (Muster der WAI-ARIA Authoring Practices, Konzept Abschnitt 3), beim Laden alle zu.
 
 WOHER DIE ZAHLEN KOMMEN: die Bilder aus core.refquelle.body_read, die bearbeiteten Ereignisse aus body_events, die Personen
@@ -127,9 +128,6 @@ _STIL = ('<style>'
          '.kb-stand{font-size:13px;color:var(--dim);margin:10px 0 4px;padding-top:8px;border-top:1px solid var(--border)}'
          '.kb-stand:empty{display:none}.kb-stand.hk-aeh-fehler{color:var(--crit)}'
          '.fs-bar.kb-balken{margin:0 0 6px}'
-         '.kb-auto{display:flex;flex-direction:column;align-items:flex-start;gap:10px;margin:10px 0 0;padding-top:10px;'
-         'border-top:1px solid var(--border)}.kb-auto .kb-videos{flex-wrap:wrap}.kb-auto select{max-width:100%}'
-         '.kb-auto p{margin:0}'
          '.kb-person{display:flex;align-items:center;gap:12px;width:100%;margin:0;padding:10px 2px;border:0;'
          'border-top:1px solid var(--border);background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}'
          '.lvs-zweck+.kb-person{border-top:0}.kb-person:hover .lvs-name{color:var(--accent)}'
@@ -222,7 +220,7 @@ def _kopf():
 
 def _fuss(cfg, d, pose_ok):
     """Fuss der Seite: Zustand des Koerperwegs (Warnfarbe, wenn er ohne Pose-Modell oder ohne gueltiges Bild nicht
-    wirkt) und der Sichtpruefung, dazu die zwei Orte der Schalter. -> HTML"""
+    wirkt) und der Sichtpruefung, dazu der Verweis auf die Seite Erkennung mit den Schaltern. -> HTML"""
     # Statische Schluessel je Stufe von person_pfad (Sprachregel: nie dynamische t()-Schluessel); der assert haelt sie
     # deckungsgleich mit core.kette.KETTE_STUFEN.
     stufen = {"immer": ("koerperbilder.zustand.an", "ok"),
@@ -243,8 +241,8 @@ def _fuss(cfg, d, pose_ok):
             f'<span class="badge {weg_kl}">{_e(weg)}</span></span>'
             f'<span>{_e(t("koerperbilder.zustand.pruefung"))} <span class="badge {pruef_kl}">{_e(t(pruef))}</span></span>'
             f'<span>{_e(t("koerperbilder.auto.fuss"))} <span class="badge ok">{_e(t(lauf))}</span></span>'
-            f'<span>{_e(t("koerperbilder.fuss.einstellungen"))} <a href="/erkennung">{_e(t("nav.erkennung"))}</a>, '
-            f'<a href="/konfiguration#cfg-koerper_sichtpruefung">{_e(t("nav.konfiguration"))}</a></span></p>')
+            f'<span>{_e(t("koerperbilder.fuss.einstellungen"))} <a href="/erkennung">{_e(t("nav.erkennung"))}</a>'
+            '</span></p>')
 
 
 def _bild_kachel(b, wahl):
@@ -396,7 +394,7 @@ def _auswahl(d):
 
 def _lauf(d, stand, cfg, pose_ok):
     """Karte Personen-Lernlauf: Satz oder Leerzustand, Hinweise (Weg aus, Pose-Modell fehlt), Knopf mit der Zahl der
-    verfuegbaren Videos, Feld und Auswahl (_auswahl), Stand und Balken des Laufs, die Automatik (_auto). -> HTML"""
+    verfuegbaren Videos, Feld und Auswahl (_auswahl), Stand und Balken des Laufs. -> HTML"""
     w = d["wartend"]
     n = None if w is None else sum(w.values())
     if n == 0:
@@ -417,25 +415,7 @@ def _lauf(d, stand, cfg, pose_ok):
              f'{" disabled" if gesperrt else ""}>{_e(text)}</button>')
     return (f'<div id="kb-lauf" class="card lvs-abschnitt"><h3>{_e(t("koerperbilder.cutter.titel"))}</h3>{satz}{knopf}'
             + ("" if n == 0 else _auswahl(d)) + '<p class="kb-msg" id="kb-msg"></p>' + _stand(stand) + _balken(stand)
-            + _auto(cfg, stand) + '</div>')
-
-
-def _auto(cfg, stand):
-    """Die Automatik des Lernlaufs (Stufe KW13 Punkt 3): Auswahl koerper_lauf, Schalter „Neue Bilder automatisch
-    uebernehmen“ (koerper_sichtpruefung umgekehrt im versteckten Feld, das Skript setzt es) und Speichern ueber
-    konfigSpeichern mit cfg-status; waehrend eines Laufs ist Speichern gesperrt (der Neustart braeche ihn ab). -> HTML"""
-    wahl, pruef = cfg.get("koerper_lauf"), bool(cfg.get("koerper_sichtpruefung"))
-    opts = "".join(f'<option value="{w}"{" selected" if w == wahl else ""}>{_e(t(k))}</option>' for w, k in _LAUF)
-    zu = " disabled" if (stand or {}).get("laeuft") else ""
-    return ('<div class="kb-auto">'
-            f'<label class="kb-videos">{_e(t("koerperbilder.auto.lauf"))}<select id="cfg-koerper_lauf">{opts}</select>'
-            '</label><label class="kb-videos">'
-            f'{_e(t("koerperbilder.auto.uebernehmen"))}<input type="checkbox" class="ek-kipp lvs-kipp" id="kb-auto-bilder"'
-            f'{"" if pruef else " checked"} onchange="kbAuto(this)"></label>'
-            f'<input type="hidden" id="cfg-koerper_sichtpruefung" value="{"true" if pruef else "false"}">'
-            f'<p><button type="button" class="gtb on" id="kb-speichern" onclick="konfigSpeichern()"{zu}>'
-            f'{_e(t("koerperbilder.auto.speichern"))}</button> <span id="cfg-status" style="color:var(--dim)"></span>'
-            '</p></div>')
+            + '</div>')
 
 
 def _neu(d, cfg):
@@ -520,8 +500,8 @@ def entfernen(cfg, anfrage):
 def _js():
     """Das Skript der Seite: Aufklapper (kbAuf), Bild entfernen (danach neu laden und die Zeile wieder aufklappen),
     annehmen, verwerfen (Zahl im Titel nachfuehren, ohne offenes Bild neu laden), Personen waehlen (Zahl des Knopfs), Lauf
-    starten und seinen Stand nachlesen, bis er endet (Zeile des Stands und Balken aus dem Feld anteil, dann neu laden),
-    Schalter der Automatik (kbAuto: das versteckte Feld der Sichtpruefung umgekehrt). -> HTML <script>"""
+    starten und seinen Stand nachlesen, bis er endet (Zeile des Stands und Balken aus dem Feld anteil, dann neu laden).
+    -> HTML <script>"""
     txt = {k: json.dumps(t(s), ensure_ascii=False) for k, s in (("fertig", "koerperbilder.js.fertig"),
                                                               ("nicht", "koerperbilder.js.nicht"),
                                                               ("fehler", "koerperbilder.js.fehler"),
@@ -552,8 +532,6 @@ def _js():
             'var z=document.getElementById("kb-neu-zahl");if(z)z.textContent="("+r+")";'
             f'kbMsg("kb-neu-msg",{txt["fertig"]});}})'
             f'.catch(function(){{b.disabled=false;kbMsg("kb-neu-msg",{txt["fehler"]},true);}});}}'
-            'function kbAuto(k){var f=document.getElementById("cfg-koerper_sichtpruefung");'
-            'if(f)f.value=k.checked?"false":"true";}'
             'function kbPick(b){b.setAttribute("aria-pressed",b.classList.toggle("an")?"true":"false");'
             'var k=document.getElementById("kb-start");if(!k)return;'
             'var a=document.querySelectorAll(".kb-pick.an");if(!a.length)a=document.querySelectorAll(".kb-pick");'

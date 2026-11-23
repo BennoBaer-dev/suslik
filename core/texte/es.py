@@ -85,7 +85,7 @@ T = {
         "eliges si funciona siempre o solo cuando no se ha reconocido ninguna cara.\n\n"
         "Aprende de vídeos en los que el reconocimiento facial identificó a la persona con seguridad. A partir de "
         "esta versión, suslik anota en cada vídeo nuevo si sirve para ello. Los vídeos anteriores no cuentan. En la "
-        "página Imágenes de cuerpo entero eliges si el aprendizaje se inicia a mano, una vez al día o enseguida.\n\n"
+        "página Reconocimiento eliges si el aprendizaje se inicia a mano, una vez al día o enseguida.\n\n"
         "De fábrica, un nombre vale cuando tres imágenes de los vídeos de un mismo paso encajan con la misma "
         "persona. Aparece en "
         "Hoy y en Apariciones y, si quieres, también en Frigate, en la página Presencia y como aviso propio por "
@@ -1616,6 +1616,7 @@ T = {
     "nav.anker": "Anclas",
     "nav.lernen": "Sugerencias",
     "nav.person": "Imágenes de cuerpo entero",
+    "nav.koerpernamen": "Personas nombradas",
     "nav.vision": "Detección de visión",
     "nav.live": "Vigilancia en directo",
     "nav.live_alerts": "Avisos en directo",
@@ -3899,7 +3900,6 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "koerperbilder.auto.taeglich": "una vez al día con el mantenimiento",
     "koerperbilder.auto.sofort": "justo después de cada vídeo adecuado",
     "koerperbilder.auto.uebernehmen": "Aceptar imágenes nuevas automáticamente",
-    "koerperbilder.auto.speichern": "Guardar + reiniciar",
     "koerperbilder.auto.fuss": "Aprendizaje:",
     "koerperbilder.auto.von_auto": "automático",
     "koerperbilder.auto.von_taeglich": "diario",
@@ -3925,4 +3925,20 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "koerperbilder.grund.speicher": "memoria insuficiente",
     "koerperbilder.grund.technik": "el procesamiento falló",
     "koerperbilder.grund.ablage": "no se pudo guardar la imagen",
+    # Bauplan analysen/bauplan_feldnachzug_0110.md, Stufe FN3: página "Personas nombradas" (routes/koerpernamen.py)
+    "koerpernamen.satz": "A quién le ha dado un nombre el reconocimiento corporal, con la imagen que comparó.",
+    "koerpernamen.leer_aus": "El reconocimiento corporal está desactivado o aún no tiene imágenes de cuerpo válidas, por eso aquí no hay ningún nombre.",
+    "koerpernamen.leer_keine": "En los últimos {tage} días el reconocimiento corporal no ha dado un nombre a nadie.",
+    "koerpernamen.ohne_bild.eins": "{n} nombre sin imagen (de antes de esta versión).",
+    "koerpernamen.ohne_bild.viele": "{n} nombres sin imagen (de antes de esta versión).",
+    "koerpernamen.frigate": "a Frigate",
+    "koerpernamen.titel": "{kamera} · valor {wert} · umbral {schwelle} · votos {stimmen}",
+    # Stufe FN4: corrección en la página (x bajo la miniatura, fila "Lo correcto sería")
+    "koerpernamen.falsch": "El nombre es incorrecto",
+    "koerpernamen.richtig": "Lo correcto sería:",
+    "koerpernamen.weiss_nicht": "no lo sé",
+    "koerpernamen.fremd": "persona extraña",
+    "koerpernamen.speichern": "Guardar",
+    "koerpernamen.js.nicht": "No realizado: {grund}",
+    "koerpernamen.js.fehler": "Sin respuesta del servicio. Recargue la página.",
 }

@@ -86,7 +86,7 @@ T = {
         "wählst, ob sie immer läuft oder nur, wenn kein Gesicht erkannt wurde.\n\n"
         "Sie lernt aus Videos, in denen das Gesicht die Person sicher erkannt hat. Ab dieser Version merkt sich "
         "suslik bei jedem neuen Video, ob es sich dafür eignet. Ältere Videos zählen nicht. Auf der Seite "
-        "Körperbilder wählst du, ob der Lernlauf von Hand, einmal am Tag oder sofort startet.\n\n"
+        "Erkennung wählst du, ob der Lernlauf von Hand, einmal am Tag oder sofort startet.\n\n"
         "Ab Werk gilt ein Name, wenn drei Bilder aus den Videos eines Durchgangs zu derselben Person passen. Er "
         "steht auf Heute und bei den Auftritten, auf Wunsch auch in Frigate, auf der Seite Anwesenheit und als "
         "eigene Meldung bei Pushover, Telegram und Home Assistant. Diese Wege schaltest du einzeln ein, ab Werk "
@@ -1628,6 +1628,7 @@ T = {
     "nav.anker": "Anker",
     "nav.lernen": "Vorschläge",
     "nav.person": "Körperbilder",
+    "nav.koerpernamen": "Benannte Personen",
     "nav.vision": "Vision-Erkennung",
     "nav.live": "Live-Wächter",
     "nav.live_alerts": "Live-Meldungen",
@@ -3900,7 +3901,6 @@ Personen zwischendurch auffüllen.</p>""",
     "koerperbilder.auto.taeglich": "einmal am Tag mit der Wartung",
     "koerperbilder.auto.sofort": "sofort nach jedem geeigneten Video",
     "koerperbilder.auto.uebernehmen": "Neue Bilder automatisch übernehmen",
-    "koerperbilder.auto.speichern": "Speichern + neu starten",
     "koerperbilder.auto.fuss": "Lernlauf:",
     "koerperbilder.auto.von_auto": "automatisch",
     "koerperbilder.auto.von_taeglich": "täglich",
@@ -3926,4 +3926,20 @@ Personen zwischendurch auffüllen.</p>""",
     "koerperbilder.grund.speicher": "zu wenig Speicher",
     "koerperbilder.grund.technik": "Verarbeitung fehlgeschlagen",
     "koerperbilder.grund.ablage": "Bild ließ sich nicht speichern",
+    # Bauplan analysen/bauplan_feldnachzug_0110.md, Stufe FN3: Seite „Benannte Personen“ (routes/koerpernamen.py)
+    "koerpernamen.satz": "Wem die Körpererkennung einen Namen gegeben hat, mit dem Bild, das sie verglichen hat.",
+    "koerpernamen.leer_aus": "Die Körpererkennung ist aus oder hat noch keine gültigen Körperbilder, deshalb steht hier kein Name.",
+    "koerpernamen.leer_keine": "In den letzten {tage} Tagen hat die Körpererkennung niemandem einen Namen gegeben.",
+    "koerpernamen.ohne_bild.eins": "{n} Name ohne Bild (vor dieser Version).",
+    "koerpernamen.ohne_bild.viele": "{n} Namen ohne Bild (vor dieser Version).",
+    "koerpernamen.frigate": "an Frigate",
+    "koerpernamen.titel": "{kamera} · Wert {wert} · Schwelle {schwelle} · Stimmen {stimmen}",
+    # Stufe FN4: Korrektur auf der Seite (x unter der Kachel, Zeile „Richtig wäre“)
+    "koerpernamen.falsch": "Name ist falsch",
+    "koerpernamen.richtig": "Richtig wäre:",
+    "koerpernamen.weiss_nicht": "weiß nicht",
+    "koerpernamen.fremd": "fremde Person",
+    "koerpernamen.speichern": "Speichern",
+    "koerpernamen.js.nicht": "Nicht ausgeführt: {grund}",
+    "koerpernamen.js.fehler": "Keine Antwort vom Dienst. Seite neu laden.",
 }

@@ -2794,6 +2794,27 @@ def plaetze_uebernehmen(cfg, *, store_pfad, store_laden, store_schreiben, log):
     return vergabe
 
 
+def abgeschaffte_raeumen(cfg, *, store_pfad, store_laden, store_schreiben, log):
+    """Raeumung beim Start des Dienstes (Bauplan feldnachzug_0110, Stufe FN1): nimmt die Felder aus
+    GUARD_FELDER_ABGESCHAFFT aus jedem Waechter-Block des Stores und schreibt nur, wenn etwas wegfiel.
+    -> (Waechter, Felder), (0, 0), wenn nichts zu tun war. Keine Marke: ein zweiter Start findet nichts mehr."""
+    store = store_laden(cfg)
+    live = store.get("live")
+    roh = live.get("guards") if isinstance(live, dict) else None
+    waechter = felder = 0
+    for g in (roh.values() if isinstance(roh, dict) else ()):
+        weg = [f for f in GUARD_FELDER_ABGESCHAFFT if isinstance(g, dict) and f in g]
+        for f in weg:
+            del g[f]
+        waechter, felder = waechter + bool(weg), felder + len(weg)
+    if not felder:
+        return 0, 0
+    store_schreiben(store_pfad(cfg), store)
+    cfg["live"] = store["live"]                  # Prozess-Sicht sofort aktuell
+    log.info(f"LIVE fields of an earlier version removed once: {felder} field(s) on {waechter} watcher(s)")
+    return waechter, felder
+
+
 def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
                    log):
     """Detailseite 'Save' -> Guard-Block in den Config-Store. Muster
@@ -3720,8 +3741,8 @@ def guards_lesen(cfg, log=_log):
                 # Bekannt-abgeschaffte Felder (Log-Sichtung 24.08.): Altlast aus
                 # einer frueheren Version, folgenlos — als solche benennen und den
                 # Ausweg nennen, statt sie bei jedem Start wie einen Tippfehler
-                # zu bewarnen. Keine Store-Bereinigung von hier: dieser Leser ist
-                # bewusst KEIN achter Schreibweg (Store-Governance verifyd.py:96).
+                # zu bewarnen. Dieser Leser schreibt weiter nicht: geraeumt wird einmal beim
+                # Start (abgeschaffte_raeumen, FN1); warnen tut er nur noch bei Hand-Eintrag.
                 log.warning(f"live.guards.{name}: field {fremd!r} was removed in an "
                     f"earlier version — ignored; delete it from config.json to "
                     f"silence this line")

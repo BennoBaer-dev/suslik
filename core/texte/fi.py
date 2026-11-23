@@ -94,7 +94,7 @@ T = {
         "on valinnainen. Tunnistus-sivulla (Kehontunnistus-kortti) kytket sen päälle ja valitset, toimiiko se aina "
         "vai vain silloin, kun kasvoja ei tunnistettu.\n\n"
         "Se oppii videoista, joissa kasvontunnistus tunnisti henkilön varmasti. Tästä versiosta alkaen suslik "
-        "merkitsee jokaisesta uudesta videosta, sopiiko se tähän. Vanhempia videoita ei lasketa. Kehokuvat-sivulla "
+        "merkitsee jokaisesta uudesta videosta, sopiiko se tähän. Vanhempia videoita ei lasketa. Tunnistus-sivulla "
         "valitset, käynnistyykö oppimisajo käsin, kerran päivässä vai heti.\n\n"
         "Oletuksena nimi pätee, kun kolme kuvaa saman käynnin videoista sopii samaan henkilöön. Se näkyy "
         "Tänään-sivulla ja "
@@ -1741,6 +1741,7 @@ T = {
     "nav.anker": "Ankkurit",
     "nav.lernen": "Ehdotukset",
     "nav.person": "Kehokuvat",
+    "nav.koerpernamen": "Nimetyt henkilöt",
     "nav.vision": "Vision-tunnistus",
     "nav.live": "Live-vahdit",
     "nav.live_alerts": "Live-ilmoitukset",
@@ -3915,7 +3916,6 @@ T = {
     "koerperbilder.auto.taeglich": "kerran päivässä huollon yhteydessä",
     "koerperbilder.auto.sofort": "heti jokaisen sopivan videon jälkeen",
     "koerperbilder.auto.uebernehmen": "Hyväksy uudet kuvat automaattisesti",
-    "koerperbilder.auto.speichern": "Tallenna + käynnistä uudelleen",
     "koerperbilder.auto.fuss": "Oppimisajo:",
     "koerperbilder.auto.von_auto": "automaattinen",
     "koerperbilder.auto.von_taeglich": "päivittäinen",
@@ -3941,4 +3941,20 @@ T = {
     "koerperbilder.grund.speicher": "muisti ei riitä",
     "koerperbilder.grund.technik": "käsittely epäonnistui",
     "koerperbilder.grund.ablage": "kuvaa ei voitu tallentaa",
+    # Bauplan analysen/bauplan_feldnachzug_0110.md, Stufe FN3: sivu "Nimetyt henkilöt" (routes/koerpernamen.py)
+    "koerpernamen.satz": "Kenelle kehontunnistus antoi nimen, ja kuva, jota se vertasi.",
+    "koerpernamen.leer_aus": "Kehontunnistus on pois päältä tai sillä ei ole vielä kelvollisia kehokuvia, joten tässä ei ole nimeä.",
+    "koerpernamen.leer_keine": "Viimeisten {tage} päivän aikana kehontunnistus ei antanut kenellekään nimeä.",
+    "koerpernamen.ohne_bild.eins": "{n} nimi ilman kuvaa (ennen tätä versiota).",
+    "koerpernamen.ohne_bild.viele": "{n} nimeä ilman kuvaa (ennen tätä versiota).",
+    "koerpernamen.frigate": "Frigateen",
+    "koerpernamen.titel": "{kamera} · arvo {wert} · kynnys {schwelle} · äänet {stimmen}",
+    # Stufe FN4: korjaus sivulla (x pikkukuvan alla, rivi "Oikea olisi")
+    "koerpernamen.falsch": "Nimi on väärä",
+    "koerpernamen.richtig": "Oikea olisi:",
+    "koerpernamen.weiss_nicht": "en tiedä",
+    "koerpernamen.fremd": "tuntematon henkilö",
+    "koerpernamen.speichern": "Tallenna",
+    "koerpernamen.js.nicht": "Ei tehty: {grund}",
+    "koerpernamen.js.fehler": "Palvelu ei vastaa. Lataa sivu uudelleen.",
 }

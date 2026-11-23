@@ -459,6 +459,16 @@ BENENNEN_WERK = {
 }
 
 
+# ---------------------------------------------------------------- Seite „Benannte Personen“
+# Bauplan analysen/bauplan_feldnachzug_0110.md, Stufe FN3 Punkt 4; gelesen je Aufruf von routes/koerpernamen. Werkswerte,
+# kein Config-Schluessel. BENANNT_TAGE: so viele Kalendertage, heute mitgezaehlt, rechnet die Seite (wie die
+# Durchgangsliste, verifyd Service.vision_test_lage, Entscheid 1 des Bauplans). BENANNT_JE_PERSON: so viele Bilder je Person
+# hoechstens, das neueste zuerst; der Eigentuemer 23.11.2026 09:28:11 „nur 10 oder 20 Treffer … in einer Zeile“, die
+# Fotos der Abnahme zeigen sie bei 1280 px in einer Zeile.
+BENANNT_TAGE = 3
+BENANNT_JE_PERSON = 12
+
+
 # ---------------------------------------------------------------- MQTT-Stummwache
 # MQTT-STUMMWACHE (Bauplan analysen/bauplan_mqtt_stummwache.md, Entscheide 2 bis 4, Eigentuemer 14.10.2026 18:11:03
 # „Ok zu Fassung 1"; Anlass Vorfall O632: nach einem Wirt-Neustart sprach Frigate nicht mehr ueber MQTT, suslik merkte
@@ -1030,7 +1040,9 @@ WEB_ROUTES = (
     "/gesichter", "/gpu", "/gpu_speichern", "/gt", "/health", "/heute", "/kalibrierung",
     "/kalibrierung_fuellen", "/kalibrierung_fuellstand", "/kameras", "/kameras/steckbriefe_neu",
     "/kameras_speichern", "/kette", "/koerperbilder", "/koerperbilder/bestaetigen", "/koerperbilder/cutter",
-    "/koerperbilder/entfernen", "/koerperbilder/verwerfen", "/konfig", "/konfiguration", LEBENSZEICHEN_WEG, "/lernen",
+    "/koerperbilder/entfernen", "/koerperbilder/verwerfen", "/koerpernamen", "/koerpernamen/falsch", "/konfig",
+    "/konfiguration",
+    LEBENSZEICHEN_WEG, "/lernen",
     "/lernlauf",
     "/lernlauf/alte_loeschen", "/lernlauf/anker", "/lernlauf/benenn_pruefung", "/lernlauf/benennen",
     "/lernlauf/lauf_loeschen", "/lernlauf/sichtung", "/lernlauf/uebernehmen", "/lernlauf/verwerfen",

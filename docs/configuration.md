@@ -227,14 +227,14 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   watcher. They are on the
   **Recognition** page (body card) and also on the **Advanced** settings page. The
   ten settings of the path, all on the **Advanced** settings page (`koerper_lauf` and `koerper_sichtpruefung`
-  also on the **Body images** page); none of the defaults is measured on more than one system:
+  also on the body card of the **Recognition** page); none of the defaults is measured on more than one system:
 
   | Key | Default | Allowed | What it does |
   |---|---|---|---|
   | `koerper_auswahl_stimmen` | 6 | 1 to 20 | votes the recognized person needs before the video of an event counts as suitable for body images |
   | `koerper_bilder_je_video` | 3 | 1 to 10 | body images the cutter keeps from one video at most, spread over the time the person was seen |
   | `koerper_anker_min` | 0.5 | 0 to 1 | how close at least one cut picture must be to the person picture of the recognized face in the same event; below that, all pictures of the video are dropped |
-  | `koerper_sichtpruefung` | on | on / off | new body images wait for your check on the Body images page; off: they count at once (on that page the switch **Accept new images automatically**, the other way round; images already waiting stay until you decide) |
+  | `koerper_sichtpruefung` | on | on / off | new body images wait for your check on the Body images page; off: they count at once (on the body card of the **Recognition** page the switch **Accept new images automatically**, the other way round; images already waiting stay until you decide) |
   | `koerper_lauf` | `hand` | `hand` / `taeglich` / `sofort` | when the person learning run starts: `hand` = only by the button on the Body images page; `taeglich` = once a day with the daily maintenance at 06:00 (not at service start), over all suitable videos still waiting; `sofort` = right after each suitable event, one cut per event at the same time as the analysis of the next events, in the separate body process (on a CPU installation it shares the cores with the analysis) |
   | `koerper_max_tage` | 10 | 1 to 30 | days a body image is kept; older ones go to the trash in the daily data cleanup |
   | `koerper_max_je_person` | 50 | 5 to 200 | body images one person may have at most; the oldest go to the trash first |

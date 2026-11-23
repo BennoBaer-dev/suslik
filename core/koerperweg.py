@@ -63,6 +63,9 @@ LESARTEN (wo der Plan offen ist, die engste; im Zweifel kein Name):
      mit Namen weiter. Ausfaelle ohne Vergleich (kein Abfragebild, keine Antwort) schreiben keine Zeile. Beim
      Umbenennen einer Person haengt `treffer_umbenennen` (gerufen von core.umbenennen, Stufe KW2 Punkt 8) je Ereignis,
      dessen letzte Zeile den alten Namen traegt, dieselbe Zeile mit dem neuen Namen an; nichts wird umgeschrieben.
+     Markiert der Nutzer einen Namen als falsch (Seite Benannte Personen, Stufe FN4), haengt `treffer_korrigieren`
+     dieselbe Zeile mit person null und `falsch` = bisheriger Name an; danach uebergeht `treffer_karte` jede spaetere
+     Zeile dieses Ereignisses, so dass kein neuer Vergleich und kein Umbenennen den Namen zurueckbringt.
   5. Ausloeser: Kategorie weder erkannt noch fehler und Frigate-Personenzahl genau 1; eine unbekannte Personenzahl
      (None) ist nicht 1.
 
@@ -97,6 +100,8 @@ _log = _logbuch.logger(__name__)
 TAG_S = 86400
 TREFFER_DATEI = os.path.join("state", "koerper_treffer.jsonl")    # unter dem Datenordner, eigener Zustand des Koerperwegs
 _TREFFER_SPERRE = threading.Lock()
+TREFFER_BILD = "koerper_treffer.png"     # Bild eines Treffers mit Namen im Ereignisordner (treffer_bild_ablegen)
+NUTZER_WERT = 1.0     # Wert eines Namens, den der Nutzer bei der Korrektur in Frigate setzt (Stufe FN4 Punkt 6)
 MELDE_DATEI = os.path.join("state", "koerper_meldungen.jsonl")    # Merker der Meldungen je Durchgang und Person
 _MELDE_SPERRE = threading.Lock()
 # Die Melde-Schalter der Koerper-Erkennung (Stufe KW12 Punkt 1), eine Stelle: jeder Leser fragt ueber cfg.get. Der
@@ -273,10 +278,22 @@ def treffer_buchen(data_dir, eid, ergebnis):
     return zeile
 
 
+def treffer_bild_ablegen(data_dir, eid, png):
+    """Das Abfragebild eines Treffers mit Namen atomar als TREFFER_BILD in events/<eid>/ ablegen, eine vorhandene Datei
+    ersetzen (Stufe FN3, Bauplan analysen/bauplan_feldnachzug_0110.md; Leser routes/koerpernamen). Die Endung ist nicht
+    .jpg: die Leser der Gesichtsbilder (routes/event.py, core/visionurteil.py, verifyd) nehmen jede .jpg des Ordners. Kein
+    Personenname im Dateinamen; aufgeraeumt wird mit dem Ereignisordner (Service.crops_retention). -> Pfad der Datei"""
+    from core import atomar as _at
+    pfad = os.path.join(data_dir, "events", eid, TREFFER_BILD)
+    _at.bytes_schreiben(pfad, png)
+    return pfad
+
+
 def treffer_karte(data_dir):
     """Je Ereignis die letzte Zeile der Treffer-Datei, nur wenn sie einen Namen traegt (Form der alten Karte: person,
-    score; die Leser kennen nur Treffer). -> {eid: Zeile}; ohne Datei leer"""
-    karte, kaputt = {}, 0
+    score; die Leser kennen nur Treffer). Nach einer Zeile mit `falsch` zaehlt keine spaetere Zeile des Ereignisses
+    (Kopf, Lesart 4). -> {eid: Zeile}; ohne Datei leer"""
+    karte, kaputt, korrigiert = {}, 0, set()
     try:
         with open(os.path.join(data_dir, TREFFER_DATEI), encoding="utf-8") as f:
             for z in f:
@@ -285,8 +302,10 @@ def treffer_karte(data_dir):
                 except ValueError:
                     kaputt += 1
                     continue
-                if isinstance(d, dict) and d.get("eid"):
+                if isinstance(d, dict) and d.get("eid") and d["eid"] not in korrigiert:
                     karte[d["eid"]] = d
+                    if d.get("falsch"):
+                        korrigiert.add(d["eid"])
     except FileNotFoundError:
         return {}
     except OSError as e:
@@ -325,6 +344,37 @@ def treffer_umbenennen(data_dir, alt, neu):
                 f.flush()
                 os.fsync(f.fileno())
     return len(neu_zeilen)
+
+
+def treffer_korrigieren(data_dir, eid, nicht=None):
+    """Einen Koerper-Namen als falsch markieren (Stufe FN4 Punkt 1, Kopf Lesart 4): traegt die letzte Zeile des
+    Ereignisses einen Namen ungleich `nicht`, dieselbe Zeile mit ts jetzt, person null und falsch = Name anhaengen.
+    -> die neue Zeile; None ohne Datei, ohne Zeile, ohne Namen oder mit dem Namen `nicht`"""
+    pfad = os.path.join(data_dir, TREFFER_DATEI)
+    with _TREFFER_SPERRE:
+        letzte, kaputt = None, 0
+        try:
+            with open(pfad, encoding="utf-8") as f:
+                for z in f:
+                    try:
+                        d = json.loads(z)
+                    except ValueError:
+                        kaputt += 1
+                        continue
+                    if isinstance(d, dict) and d.get("eid") == eid:
+                        letzte = d
+        except FileNotFoundError:
+            return None
+        if kaputt:
+            _log.warning(f"body hits: {kaputt} unreadable line(s) skipped while correcting")
+        if not letzte or not letzte.get("person") or letzte["person"] == nicht:
+            return None
+        zeile = dict(letzte, ts=round(time.time(), 1), person=None, falsch=letzte["person"])
+        with open(pfad, "a", encoding="utf-8") as f:
+            f.write(json.dumps(zeile, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+    return zeile
 
 
 # ------------------------------------------------------------------ Stufe KW12: Regel und Meldung

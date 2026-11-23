@@ -22,7 +22,11 @@ ECHTE Schalter, nichts Vorgetaeuschtes:
              Ein Kanal ohne Einrichtung (core.melden.konfigurierte_kanaele,
              Frigate: sub_label_schreiben) traegt "nicht eingerichtet" mit
              Link. Darunter seit EK1 die Wahl "Lernlauf starten"
-             (cfg-koerper_lauf, Stellungen aus routes.koerperbilder._LAUF).
+             (cfg-koerper_lauf, Stellungen aus routes.koerperbilder._LAUF),
+             seit FN2 (Bauplan analysen/bauplan_feldnachzug_0110.md) darunter
+             der Kipp "Neue Bilder automatisch uebernehmen" mit dem
+             versteckten Feld cfg-koerper_sichtpruefung (umgekehrt); die
+             Seite Koerperbilder traegt beide nicht mehr.
   Speichern -> seit EK1 die Leiste ek-savebar, die unten am Bildschirmrand
              klebt: ohne Aenderung ruhig mit aria-disabled, nach jeder
              Aenderung (ekMarkieren) hervorgehoben; der Klick speichert ueber
@@ -200,6 +204,11 @@ def render(cfg, whitelist, lage, waechter, gesicht, n_areas=None):
             + "".join(f'<option value="{w}"{" selected" if w == lauf_wahl else ""}>{html.escape(t(k))}</option>'
                       for w, k in _LAUF)
             + '</select></div>')
+    # Bauplan analysen/bauplan_feldnachzug_0110.md, Stufe FN2 Punkt 2: „Neue Bilder automatisch uebernehmen“ unter dem
+    # Lernlauf; an heisst koerper_sichtpruefung aus, das versteckte Feld traegt den Wert der Config (Muster _melden)
+    pruef = bool(cfg.get("koerper_sichtpruefung"))
+    lauf += (_kipp(not pruef, onclick="ekUebernehmen(this)", label=html.escape(t("koerperbilder.auto.uebernehmen")))
+             + f'<input type="hidden" id="cfg-koerper_sichtpruefung" value="{"true" if pruef else "false"}">')
     p_status = ("" if lg_p.get("wirksam") else
                 '<div class="ek-beweis nur-expert">'
                 + html.escape(t("erkennung.status.kein_vorrat") if not lg_p.get("vorrat") else
@@ -332,6 +341,15 @@ function ekMelden(k, key){
   if (namen.length) { var b = document.createElement('b'); b.textContent = namen.join(', '); w.appendChild(b); }
   else { w.textContent = w.getAttribute('data-leer'); }
   document.querySelector('.ek-melden-leer').hidden = namen.length > 0;
+  ekMarkieren();
+}
+/* Stufe FN2: Kipp "Neue Bilder automatisch uebernehmen"; an heisst Sichtpruefung aus, das Feld traegt den umgekehrten
+   Wert, gespeichert wird mit der Leiste. */
+function ekUebernehmen(k){
+  var an = !k.classList.contains('an');
+  k.classList.toggle('an', an);
+  k.setAttribute('aria-checked', an ? 'true' : 'false');
+  ekFeld('cfg-koerper_sichtpruefung').value = an ? 'false' : 'true';
   ekMarkieren();
 }
 function ekUnter(b, wert){

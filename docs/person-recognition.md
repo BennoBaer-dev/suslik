@@ -35,7 +35,8 @@ path already recognized the person.
    other name and no unknown face showed up, and no picture had two real
    faces in it.
 2. **The person learning run starts.** The choice **Start learning run**
-   on the card (setting `koerper_lauf`) has three positions:
+   on the body card of the **Recognition** page (setting `koerper_lauf`)
+   has three positions:
    - **by hand** (the default): open **Person → Body images**, set how
      many videos per person, optionally choose single people, and press
      **Start learning run**. The run takes the newest suitable videos of
@@ -67,9 +68,10 @@ path already recognized the person.
 4. **You check the new images.** With `koerper_sichtpruefung` on (the
    default), new images wait under **New images** until you accept or
    discard them. Only accepted images count. With the switch **Accept new
-   images automatically** on the card (the check off) new images count at
-   once; images that were already waiting stay under **New images** until
-   you accept or discard them, nothing becomes valid by itself.
+   images automatically** on the body card of the **Recognition** page
+   (the check off) new images count at once; images that were already
+   waiting stay under **New images** until you accept or discard them,
+   nothing becomes valid by itself.
 
 The person learning run needs the field `snapshot_frame_time` in
 Frigate's event data; without it suslik cannot match the clip to the
@@ -79,9 +81,9 @@ is missing, the start button is disabled and the page says why.
 
 ## The Body images page
 
-**Person → Body images** (`/koerperbilder`) is the only page of the
-Person menu. It is one short page and shows only what has data, from top
-to bottom:
+**Person → Body images** (`/koerperbilder`) is the first page of the
+Person menu, next to **Named persons** (below). It is one short page and
+shows only what has data, from top to bottom:
 
 - **Person learning run**: the button **Start learning run (N videos
   available)**, where N is the number of suitable videos waiting, next to
@@ -95,12 +97,9 @@ to bottom:
   while a run is going, when the pose model is missing, or when no video
   waits; then the card explains when a video is suitable. With
   `person_pfad` off a note says so, and you can still collect images.
-  At the end of the card the choice **Start learning run** (by hand, once
-  a day with the maintenance, right after each suitable video), the switch
-  **Accept new images automatically** and **Save + restart**; saving a
-  change restarts the service, so the button is disabled while a run is
-  going. A run started automatically or by the daily maintenance says so
-  in its line.
+  When the run starts and whether new images count at once are set on the
+  body card of the **Recognition** page. A run started automatically or
+  by the daily maintenance says so in its line.
 - **New images (N)**, whenever images wait: accept or discard each image,
   or accept all images of one person; with the check off a line above
   says that new images count at once. Without waiting images a single
@@ -113,8 +112,8 @@ to bottom:
   a count.
 - At the bottom, the state of the path (`person_pfad`, marked as a
   warning while there are no images yet or the pose model is missing), of
-  the image check and of the learning run start, with links to the
-  **Recognition** and **Advanced** pages.
+  the image check and of the learning run start, with a link to the
+  **Recognition** page.
 
 Images older than `koerper_max_tage` days, and the oldest images of a
 person above `koerper_max_je_person`, go to the trash in the daily data
@@ -167,6 +166,24 @@ counts as one vote.
 The defaults are cautious. In a test with 232 events, the path gave 5
 body names, all of them right and none wrong. If the floor is too high for
 your system, you get no name rather than a wrong one.
+
+## The Named persons page
+
+**Person → Named persons** (`/koerpernamen`) shows only the people who
+got a body name in the last three days, by the same rule as above, plus
+names suslik wrote to Frigate. Each person gets one row of the newest
+pictures, at most twelve, newest on the left; the row scrolls sideways.
+Each picture is the one the comparison used, saved with the event, and
+opens the event; below it date and time, on hover the camera, score,
+threshold and votes, and a small mark when the name went to Frigate.
+Names from before this version have no picture and are only counted. The
+pictures go with the event folder after `aufbewahrung_tage` days.
+
+A wrong name is fixed with the small ✕ below its picture: you may pick
+the correct person or "stranger", or leave "don't know", then Save. The
+body name of that event is gone for good, and the log notes it without
+names; if suslik wrote it to Frigate, Frigate loses it or gets the
+person you picked, and a picked person is saved as your verdict.
 
 ## Notifications of person recognition
 
