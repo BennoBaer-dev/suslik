@@ -104,6 +104,16 @@ T = {
     "readme.persoenlich.titel": 'Personal',
     "readme.persoenlich.text": 'Esto es puro hobby. Como arquitecto de TI sénior, me divierte desarrollar algo con IA. Está desarrollado por completo con Claude Code, sobre todo con Fable 5, y con Opus 5 para los agentes.\n\nLo que me gustaría son comentarios, y me alegra que alguien use el sistema. Ese es mi pago.',
     "kameras.titel": "Cámaras",
+    "kameras.sub":
+        "Se lee en vivo de tu configuración de Frigate, nada está fijado "
+        "en el código. Si <b>apagas</b> una cámara, suslik no descarga ni "
+        "revisa nada de ella, ni siquiera los nombres que haya puesto "
+        "Frigate. Marca una o más <b>zonas</b> para revisar solo los "
+        "eventos que hayan entrado en ellas (ninguna marcada = todos los "
+        "eventos); si Frigate ya puso un nombre, suslik lo revisa igualmente. "
+        "Una cámara apagada en Frigate no envía eventos; tu elección vale "
+        "en cuanto vuelva a estar encendida allí. "
+        '<a href="/kameras?refresh=1">Actualizar</a>.',
     "kameras.banner.config_fehler":
         "No se pudo leer la configuración de Frigate: {fehler}",
     "kameras.karte.verwenden": "usar esta cámara",
@@ -1999,7 +2009,9 @@ T = {
         "Marca las cámaras que quieres observar; marca una o más zonas "
         "para analizar solo los eventos que hayan entrado en ellas "
         "(p. ej. una persona en el jardín). Ninguna marcada = todos los "
-        "eventos.",
+        "eventos. Una cámara sin marcar queda apagada del todo: suslik no "
+        "descarga ni revisa nada de ella, ni siquiera los nombres que "
+        "haya puesto Frigate.",
     "setupwiz.kameras.satz_ohne":
         "Conecta primero con Frigate — tus cámaras aparecerán aquí.",
     "setupwiz.backend.titel": "Aceleración",
@@ -3866,6 +3878,7 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "koerperbilder.vorrat.bilder.viele": "{n} imágenes",
     "koerperbilder.vorrat.tage": "en {tage} de los últimos {max_tage} días",
     "koerperbilder.vorrat.neuest": "la más reciente {datum}",
+    "koerperbilder.vorrat.aus": "No se reconoce: demasiado parecida a {person} ({wert}, umbral {schwelle}). Las imágenes se siguen aprendiendo. Un umbral por encima de {wert} vuelve a activar el reconocimiento, más estricto para todos.",
     "koerperbilder.vorrat.weitere.eins": "{n} persona más aún no tiene imágenes en la reserva.",
     "koerperbilder.vorrat.weitere.viele": "{n} personas más aún no tienen imágenes en la reserva.",
     "koerperbilder.vorrat.keine_bilder": "Aún no hay imágenes de cuerpo entero en la reserva. El aprendizaje de personas las recorta de vídeos adecuados.",

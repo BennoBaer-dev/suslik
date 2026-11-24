@@ -110,6 +110,16 @@ T = {
     "readme.persoenlich.titel": 'Personale',
     "readme.persoenlich.text": "Questo è puro hobby. Da architetto IT senior, mi diverte sviluppare qualcosa con l'IA. È sviluppato interamente con Claude Code, soprattutto con Fable 5, e con Opus 5 per gli agenti.\n\nQuello che desidero sono i riscontri, e mi fa piacere se qualcuno usa il sistema. Questa è la mia paga.",
     "kameras.titel": "Telecamere",
+    "kameras.sub":
+        "Letto dal vivo dalla config di Frigate, niente è scritto fisso "
+        "nel codice. Se <b>spegni</b> una telecamera, suslik non scarica né "
+        "controlla nulla da essa, nemmeno i nomi assegnati da Frigate. "
+        "Spunta una o più <b>zone</b> per controllare solo gli eventi che "
+        "vi sono entrati (nessuna spuntata = tutti gli eventi); se Frigate "
+        "ha già assegnato un nome, suslik lo controlla comunque. Una "
+        "telecamera spenta in Frigate non invia eventi; la tua scelta vale "
+        "non appena è di nuovo accesa lì. "
+        '<a href="/kameras?refresh=1">Aggiorna</a>.',
     "kameras.banner.config_fehler":
         "Impossibile leggere la config di Frigate: {fehler}",
     "kameras.karte.verwenden": "usa questa telecamera",
@@ -2127,7 +2137,9 @@ T = {
     "setupwiz.kameras.satz":
         "Spunta le telecamere da sorvegliare; spunta una o più zone per "
         "analizzare solo gli eventi che vi sono entrati (ad es. persona "
-        "in giardino). Nessuna spunta = tutti gli eventi.",
+        "in giardino). Nessuna spunta = tutti gli eventi. Una telecamera "
+        "senza spunta è spenta del tutto: suslik non scarica né controlla "
+        "nulla da essa, nemmeno i nomi assegnati da Frigate.",
     "setupwiz.kameras.satz_ohne":
         "Collegati prima a Frigate — le tue telecamere compariranno qui.",
     "setupwiz.backend.titel": "Accelerazione",
@@ -4035,6 +4047,7 @@ vista del giorno integri le persone conosciute.</p>""",
     "koerperbilder.vorrat.bilder.viele": "{n} immagini",
     "koerperbilder.vorrat.tage": "in {tage} degli ultimi {max_tage} giorni",
     "koerperbilder.vorrat.neuest": "la più recente {datum}",
+    "koerperbilder.vorrat.aus": "Non riconosciuta: troppo simile a {person} ({wert}, soglia {schwelle}). Le immagini vengono ancora apprese. Una soglia sopra {wert} riattiva il riconoscimento, più severo per tutti.",
     "koerperbilder.vorrat.weitere.eins": "{n} altra persona non ha ancora immagini nella scorta.",
     "koerperbilder.vorrat.weitere.viele": "{n} altre persone non hanno ancora immagini nella scorta.",
     "koerperbilder.vorrat.keine_bilder": "Ancora nessuna immagine del corpo nella scorta. L'apprendimento delle persone le ritaglia dai video adatti.",

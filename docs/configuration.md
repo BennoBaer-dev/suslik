@@ -19,7 +19,9 @@ restore* below) to restore all settings and skip the wizard entirely. Otherwise,
    same host / Docker network as Frigate, or expose 5000 on your LAN). suslik reads cameras and
    configuration from Frigate's API. Nothing is hardcoded.
 2. **Cameras & zones** — choose which cameras to watch and, optionally, which zones must be
-   entered for an event to be considered (see *Zone filter* below).
+   entered for an event to be considered (see *Zone filter* below). A camera you turn off is fully
+   off: suslik fetches and checks nothing from it, not even events where Frigate already assigned
+   a face label.
 3. **Backend** — pick the accelerator to use (only backends actually available in your image
    variant are offered). See [hardware-acceleration.md](hardware-acceleration.md).
 4. **Import references** — optionally import your existing Frigate face references into suslik's
@@ -239,9 +241,8 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   | `koerper_lauf` | `hand` | `hand` / `taeglich` / `sofort` | when the person learning run starts: `hand` = only by the button on the Body images page; `taeglich` = once a day with the daily maintenance at 06:00 (not at service start), over all suitable videos still waiting; `sofort` = right after each suitable event, one cut per event at the same time as the analysis of the next events, in the separate body process (on a CPU installation it shares the cores with the analysis) |
   | `koerper_max_tage` | 10 | 1 to 30 | days a body image is kept; older ones go to the trash in the daily data cleanup |
   | `koerper_max_je_person` | 50 | 5 to 200 | body images one person may have at most; the oldest go to the trash first |
-  | `koerper_schwelle` | 0.65 | 0 to 0.99 | the floor of the threshold for a body name; 0 = only the threshold calibrated from your images, which needs valid images of two persons |
-  | `koerper_marge` | 0.02 | 0 to 0.5 | margin of the calibration: the strongest match between valid images of two different persons plus this margin; it can only raise the floor |
-  | `koerper_stimmen` | 3 | 1 to 10 | body votes one walk-through must give the same person before the name counts; a vote is one query picture of an event over the threshold, the votes of all events add up |
+  | `koerper_schwelle` | 0.65 | 0 to 0.99 | the threshold for a body name, the same for every person; a person whose valid images reach it against the valid images of another person is switched off for recognition (no body name, its images are still learned); a higher value switches it back on and is stricter for everyone; 0 switches off almost every person |
+  | `koerper_stimmen` | 3 | 1 to 10 | body votes one walk-through must give the same person before the name counts; a vote is one query picture of an event over the threshold, only events whose tracked person got no face name give votes, the votes of all events add up; the name also counts when a face on the walk-through names another person |
 
   Two more settings belong to the body process: **`personwork_rss_max_mb`** (default 3072) is its memory
   limit, large events are thinned out instead of running out of memory; **`person_backend`** (default `cpu`)

@@ -604,6 +604,10 @@ footer a { color: var(--dim); }
 .kamhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .kamhead .sw { margin-left: auto; font-weight: 600; font-size: 14px; display: inline-flex;
                align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+/* Bauplan analysen/bauplan_kamerawahl.md, Stufe KA2 Punkt 6: nur der erste Schalter schiebt nach rechts, die Prioritaet
+   folgt ihm mit deutlichem Abstand (Eigentuemer 24.11.2026 10:53:56); so steht „verwenden“ in jeder Karte an derselben
+   Stelle und liest sich nicht mit der Prioritaet zusammen. */
+.kamhead .sw ~ .sw { margin-left: 24px; }
 .zbar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-top: 8px;
         padding-top: 8px; border-top: 1px solid var(--border); font-size: 14px; }
 .zbox { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }

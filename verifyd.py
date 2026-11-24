@@ -2088,13 +2088,15 @@ def load_config(path):
         ("koerper_bilder_je_video", 3),
         ("koerper_anker_min", 0.5),
         ("koerper_sichtpruefung", True),
-                         # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW5 Punkt 6 (Entscheide K und S, Eigentuemer
-                         # 20.11.2026 17:08:34 und 16:34:20, Freigabe ED004 17:36:12): Marge der Eichung (wie EICH_MARGE
-                         # des alten Personenmodells) und Boden der Schwelle (0 = nur geeicht). Stufe KW12 R2 (Entscheid
-                         # 1, Eigentuemer 21.11.2026 19:25:06 „Ja, 3 nehmen", Freigabe ED004 21:46:18): Zahl der Stimmen
+                         # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW5 Punkt 6 (Entscheid S, Eigentuemer
+                         # 20.11.2026 16:34:20, Freigabe ED004 17:36:12); seit Stufe KF1 des Bauplans
+                         # analysen/bauplan_koerper_schwelle.md (Eigentuemer 24.11.2026 09:41:38 „Nein, stopp wir bleiben
+                         # bei 0,65", Freigabe ED004 09:44:24) die feste Schwelle fuer alle Personen, ohne Eichung;
+                         # koerper_marge entfaellt, ein gespeicherter Wert bleibt wirkungslos im Store (core.koerperweg).
+                         # Stufe KW12 R2 (Entscheid 1, Eigentuemer 21.11.2026 19:25:06 „Ja, 3 nehmen", Freigabe ED004
+                         # 21:46:18): Zahl der Stimmen
                          # je Durchgang fuer einen Koerper-Namen (szenarien.py), statt koerper_ab (zaehlte Ereignisse).
                          # PAAR-Bauart: Default hier, Whitelist dort.
-        ("koerper_marge", 0.02),
         ("koerper_schwelle", 0.65),
         ("koerper_stimmen", 3),
                          # Stufe KW12 Punkt 1 (Freigabe ED004 21:46:18): die Melde-Schalter der Koerper-Erkennung, ab
@@ -3138,10 +3140,10 @@ def fixed_filters(cfg, ev, own_write):
     camera = ev.get("camera", "?")
     kc = (cfg.get("kameras") or {}).get(camera)     # Kamera-Blatt (Phase 2b) hat Vorrang
     if isinstance(kc, dict):                         # malformierte Config -> sicherer Fallback
-        # verwenden=False unterdrueckt nur die Entdeckung neuer Gesichter; Frigates EIGENE
-        # Behauptung (sub_label) wird IMMER geprueft (Fremder->Bekannt-Fehlmatch, wie beim Zonen-
-        # Filter). Review 21.07.: ohne "and not f_label" verlor "aus" dieses Sicherheitsnetz.
-        if not kc.get("verwenden", True) and not sub_label:
+        # verwenden=False heisst ganz aus: kein Abruf, keine Pruefung, auch nicht mit Frigates
+        # sub_label (GitHub #44, Wort des Eigentuemers 24.11.2026, Bauplan Kamerawahl KA2). Die
+        # Ausnahme fuer ein fremdes sub_label behaelt nur der Zonen-Filter darunter.
+        if not kc.get("verwenden", True):
             return "camera_off", sub_label
         z = kc.get("zonen")                          # gegen handeditierte String-Zonen haerten
         zonen = z if isinstance(z, list) else ([z] if isinstance(z, str) and z else [])
@@ -3175,7 +3177,7 @@ def live_only_skip(cfg, camera, eid, f_label, marke, live_health, log):
     #      stillen Loch werden, in dem gar nichts mehr schaut;
     #   3. Frigates EIGENE Behauptung ueber die Person
     #      wird IMMER geprueft, dieselbe Sicherheitslogik wie beim
-    #      Zonen-Filter und beim Kamera-Aus darueber (Review 21.07.:
+    #      Zonen-Filter (Review 21.07.:
     #      ohne dieses Netz wird ein Fremder->Bekannt-Fehlmatch nie
     #      widerlegt); eigene Waechter-Ereignisse nur mit eigene_pruefen.
     from core import livewache as _lw_wa
@@ -12910,11 +12912,12 @@ class Service:
         "koerper_bilder_je_video": (int, 1, 10, "body images: how many body images the cutter keeps from one video at most, spread evenly over the time the person was seen. FACTORY VALUE 3, not measured"),
         "koerper_anker_min": (float, 0.0, 1.0, "body images: how close at least one cut picture must be to the person picture of the recognised face in the same event (body fingerprint, 0 to 1). If no picture gets there, the cutter drops all pictures of that video, because it might not show the recognised person. FACTORY VALUE 0.5, not measured"),
         "koerper_sichtpruefung": (bool, None, None, "body images: new body images wait for your check before they count (on, the default). Off: new pictures count right away"),
-        # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW5 Punkt 6: Werkswerte 0.02 und 0.65 in load_config; Stufe KW12
-        # R2 und Punkt 1: koerper_stimmen (Werk 3) statt koerper_ab und die vier Melde-Schalter (Werk aus)
-        "koerper_marge": (float, 0.0, 0.5, "body recognition: the margin of the calibration. The strongest match between valid body images of two different persons plus this margin is the calibrated threshold. It can only raise the floor (koerper_schwelle), never lower it. FACTORY VALUE 0.02, taken from the old person model, not measured on body images"),
-        "koerper_schwelle": (float, 0.0, 0.99, "body recognition: the floor of the threshold. An event without a recognised face gets a body name only when a body picture cut from its video is at least this close to a valid body image of that person (body fingerprint, 0 to 1). The calibration from your images can only raise it. FACTORY VALUE 0.65, measured on one installation without a wrong name, not measured elsewhere. 0 = only the calibrated threshold, which needs valid images of at least two persons"),
-        "koerper_stimmen": (int, 1, 10, "body recognition: how many body votes one walk-through must give the same person before the name counts. A vote is one query picture of an event that reaches the threshold for that person; one video gives at most koerper_bilder_je_video votes, and the votes of all events of the walk-through add up. The name counts on a walk-through without a recognised face, and next to a face only when the face names the same person. FACTORY VALUE 3"),
+        # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW5 Punkt 6: Werkswert 0.65 in load_config; Stufe KW12
+        # R2 und Punkt 1: koerper_stimmen (Werk 3) statt koerper_ab und die vier Melde-Schalter (Werk aus). Stufe KF1 des
+        # Bauplans analysen/bauplan_koerper_schwelle.md (Freigabe ED004 24.11.2026 09:44:24): koerper_marge entfaellt, die
+        # Texte von koerper_schwelle (feste Schwelle, Abschaltung je Person) und koerper_stimmen (Regel seit KS2) neu.
+        "koerper_schwelle": (float, 0.0, 0.99, "body recognition: the threshold for a body name, the same for every person. An event without a recognised face gets a body name only when a body picture cut from its video is at least this close to a valid body image of that person (body fingerprint, 0 to 1). A person whose valid body images reach this threshold against the valid images of another person is too similar to that person: recognition is switched off for this person, so it gets no body name, but its body images are still learned. A higher threshold switches it back on and makes recognition stricter for everyone. FACTORY VALUE 0.65, measured on one installation without a wrong name, not measured elsewhere. 0 switches off almost every person"),
+        "koerper_stimmen": (int, 1, 10, "body recognition: how many body votes one walk-through must give the same person before the name counts. A vote is one query picture of an event that reaches the threshold for that person; one video gives at most koerper_bilder_je_video votes, and the votes of all events of the walk-through add up. Only events whose tracked person got no face name give votes. The name also counts when a face on the walk-through names another person. FACTORY VALUE 3"),
         "koerper_meldet_frigate": (bool, None, None, "body recognition: write the body name to Frigate as sub label of the events it counts for (off by default). Works only with sub_label_schreiben on; a name already in Frigate is never overwritten, and a face name found later replaces the body name. Also on the Recognition page"),
         "koerper_meldet_pushover": (bool, None, None, "body recognition: send a Pushover notification once per walk-through and person when the body name counts (off by default). Works only with Pushover set up; quiet within anwesenheit_cooldown of the last sighting. Also on the Recognition page"),
         "koerper_meldet_telegram": (bool, None, None, "body recognition: send a Telegram message once per walk-through and person when the body name counts (off by default). Works only with telegram_modus not aus; quiet within anwesenheit_cooldown of the last sighting. Also on the Recognition page"),
@@ -25091,7 +25094,7 @@ class Service:
             if _filter_reason is not None:
                 with self.lock: self.processed.add(eid)      # nur in-memory, kein deckung-Eintrag; nach Neustart
                 if _filter_reason == "camera_off":           # prueft der Sweep das billig erneut (nur API-Call)
-                    self.log.warning(f"{eid} ({camera}): skipped (camera off, no sub_label)")
+                    self.log.warning(f"{eid} ({camera}): skipped (camera off)")
                 elif _filter_reason == "zone":
                     self.log.warning(f"{eid} ({camera}): skipped (not in a selected zone, no sub_label)")
                 else:
@@ -31297,8 +31300,6 @@ def make_handler(svc):
                                 continue
                             zonen = [z for z in (k.get("zonen") or []) if z in kams[name]["zones"]]
                             verw = bool(k.get("verwenden", True))
-                            if not kams[name]["enabled"]:
-                                verw = True
                             # Bauplan Disponent D1 Punkt 2: der Assistent schickt kein
                             # `prio` — dann bleibt der gespeicherte Wert, neu heisst Mid.
                             prio, falsch = kamera_prio(k.get("prio"), (_alt_blatt.get(name) or {}).get("prio"))
@@ -31342,9 +31343,9 @@ def make_handler(svc):
                         if name not in kams:                   # nur echte Frigate-Kameras
                             continue
                         zonen = [z for z in (k.get("zonen") or []) if z in kams[name]["zones"]]
+                        # Bauplan Kamerawahl KA1: eine in Frigate aus geschaltete Kamera friert nicht still ein,
+                        # weil beide Seiten sie ohne Store-Eintrag angehakt vorbelegen (Speichern ohne Klick: „an“).
                         verw = bool(k.get("verwenden", True))
-                        if not kams[name]["enabled"]:          # Review 21.07.: eine in Frigate gerade
-                            verw = True                        # deaktivierte Kamera NICHT als verifyd-off
                         # Bauplan Disponent D1 Punkt 2: `prio` gegen die Registry; fehlt
                         # es, bleibt der gespeicherte Wert, eine neue Kamera bekommt Mid.
                         prio, falsch = kamera_prio(k.get("prio"), (_alt_blatt.get(name) or {}).get("prio"))
@@ -31352,7 +31353,7 @@ def make_handler(svc):
                             return self._send(400, json.dumps({"ok": False,
                                 "msg": _sprache.t("antwort.prio_ungueltig", kamera=name, wert=falsch, erlaubt=", ".join(_reg.PRIO_STUFEN))},
                                 ensure_ascii=False), "application/json")
-                        neu[name] = {"verwenden": verw, "zonen": zonen,   # einfrieren (Re-Enable laeuft)
+                        neu[name] = {"verwenden": verw, "zonen": zonen,
                                      "prio": prio}
                     store["kameras"] = neu
                     p = _config_store_pfad(cfg)

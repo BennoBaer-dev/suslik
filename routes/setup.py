@@ -56,7 +56,7 @@ def render(qs, cfg, pruefe_url, frigate_cameras, frigate_read_only):
             if name in kam_store:
                 verw = bool(kam_store[name].get("verwenden", True)); zonen_akt = list(kam_store[name].get("zonen") or [])
             else:
-                verw = bool(cc["enabled"]); zonen_akt = list(rz_cfg.get(name) or [])
+                verw = True; zonen_akt = list(rz_cfg.get(name) or [])   # Bauplan Kamerawahl KA1: ohne Eintrag „an“
             nid = html.escape(name, quote=True)
             # Karten-Texte: EINE Quelle mit routes/kameras.py (identische
             # Karten-UI) — kameras.karte.*-Schluessel wiederverwendet,

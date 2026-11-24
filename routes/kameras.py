@@ -5,16 +5,16 @@ cams/err + die zwei Config-Bloecke (Store-Kamerablatt, required_zones) herein;
 hier wird NUR gerendert (layout/banner bleiben beim Handler).
 Sprach-Stufe 0 (konzept_sprache.md v2): sichtbare Texte kommen aus
 core/sprache.t() gegen die en-Referenz — BYTE-TREU (Harnisch
-tools/harnisch_sprache.py). Der Einleitungs-Absatz (sub) traegt Inline-Markup
-mitten im Satz und bleibt deshalb bewusst literal (Stufe-0-Grenze: Plaintext-
-Schluessel ohne HTML; Aufloesung kommt mit dem t_html-Weg spaeterer Stufen)."""
+tools/harnisch_sprache.py). Der Einleitungs-Absatz traegt Inline-Markup mitten
+im Satz und kommt deshalb ueber t_html (Schluessel kameras.sub, Bauplan
+analysen/bauplan_kamerawahl.md, Stufe KA2)."""
 import html
 import json
 
 import webui
 
 from core import registry as _reg
-from core.sprache import t
+from core.sprache import t, t_html
 
 # Schluessel-Praefix der Stufennamen (kameras.prio.<stufe>); auch die Systemseite liest ihn von hier.
 PRIO_TEXT = "kameras.prio."
@@ -34,7 +34,7 @@ def render(cams, err, kam_store, rz_cfg, steckbriefe=None):
         if name in kam_store:
             k = kam_store[name]
             return bool(k.get("verwenden", True)), list(k.get("zonen") or [])
-        return bool(cc["enabled"]), list(rz_cfg.get(name) or [])
+        return True, list(rz_cfg.get(name) or [])   # Bauplan Kamerawahl KA1: ohne Eintrag „an“
 
     karten = []
     for name in sorted(cams):
@@ -72,12 +72,7 @@ def render(cams, err, kam_store, rz_cfg, steckbriefe=None):
             f'<div class="card"><div class="kamhead"><b>{html.escape(name)}</b>{fen}'
             f'<span class="dim num">{res} · {rec}</span>{verwenden}</div>{zonen_ui}</div>')
     inhalt = (f'<h2>{t("kameras.titel")}</h2>'
-              '<p class="sub">Read live from your Frigate config, nothing is hard-coded. '
-              'Turn a camera <b>off</b> to stop looking for new faces on it; tick one or '
-              'more <b>zones</b> to only analyze events that entered them (none ticked = '
-              'all person events). Either way, if Frigate itself already claims a face, '
-              'suslik still checks it, so Frigate\'s own mislabels never slip through. '
-              '<a href="/kameras?refresh=1">Refresh</a>.</p>'
+              f'<p class="sub">{t_html("kameras.sub")}</p>'
               + ("".join(karten) if cams else
                  webui.leer(t("kameras.leer.titel"),
                             t("kameras.leer.hinweis")))

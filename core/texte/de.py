@@ -105,6 +105,16 @@ T = {
     "readme.persoenlich.titel": 'Persönliches',
     "readme.persoenlich.text": 'Das hier ist reines Hobby. Es macht mir Spaß, als Senior IT-Architekt mit KI etwas zu entwickeln. Entwickelt wird komplett mit Claude Code, überwiegend mit Fable 5, für die Agenten mit Opus 5.\n\nWas ich mir wünsche, ist Rückmeldung, und es freut mich, wenn jemand das System einsetzt. Das ist mein Lohn.',
     "kameras.titel": "Kameras",
+    "kameras.sub":
+        "Live aus deiner Frigate-Config gelesen, nichts ist fest "
+        "eingetragen. Schaltest du eine Kamera <b>aus</b>, holt und prüft "
+        "suslik dort nichts, auch keine Namen, die Frigate vergeben hat. "
+        "Hakst du eine oder mehrere <b>Zonen</b> an, prüft suslik nur "
+        "Events, die in diese Zonen kamen (nichts angehakt = alle Events); "
+        "hat Frigate schon einen Namen vergeben, prüft suslik ihn trotzdem. "
+        "Eine Kamera, die in Frigate aus ist, liefert keine Events; deine "
+        "Wahl gilt, sobald sie dort wieder an ist. "
+        '<a href="/kameras?refresh=1">Neu laden</a>.',
     "kameras.banner.config_fehler":
         "Die Frigate-Config ließ sich nicht lesen: {fehler}",
     "kameras.karte.verwenden": "diese Kamera verwenden",
@@ -2003,7 +2013,8 @@ T = {
         "Hake an, welche Kameras beobachtet werden sollen; hake eine oder "
         "mehrere Zonen an, um nur Events zu analysieren, die diese Zonen "
         "betreten haben (z. B. Person im Garten). Nichts angehakt = alle "
-        "Events.",
+        "Events. Eine Kamera ohne Haken ist ganz aus: suslik holt und "
+        "prüft dort nichts, auch keine Namen, die Frigate vergeben hat.",
     "setupwiz.kameras.satz_ohne":
         "Verbinde dich zuerst mit Frigate — deine Kameras erscheinen hier.",
     "setupwiz.backend.titel": "Beschleunigung",
@@ -3866,6 +3877,7 @@ Personen zwischendurch auffüllen.</p>""",
     "koerperbilder.vorrat.bilder.viele": "{n} Bilder",
     "koerperbilder.vorrat.tage": "an {tage} der letzten {max_tage} Tage",
     "koerperbilder.vorrat.neuest": "neuestes {datum}",
+    "koerperbilder.vorrat.aus": "Wird nicht erkannt: sieht {person} zu ähnlich ({wert}, Schwelle {schwelle}). Die Bilder werden weiter gelernt. Eine Schwelle über {wert} schaltet die Erkennung wieder ein, dann aber strenger für alle.",
     "koerperbilder.vorrat.weitere.eins": "{n} weitere Person hat noch keine Bilder im Bestand.",
     "koerperbilder.vorrat.weitere.viele": "{n} weitere Personen haben noch keine Bilder im Bestand.",
     "koerperbilder.vorrat.keine_bilder": "Noch keine Körperbilder im Bestand. Der Personen-Lernlauf schneidet sie aus geeigneten Videos.",

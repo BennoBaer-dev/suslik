@@ -47,14 +47,18 @@ DIE REGEL DER KOERPER-ERKENNUNG (Stufe KW12, R1 bis R3; Eigentuemer 21.11.2026 �
 Gemeldet wird nur auf Wunsch, je Weg ein Schalter aus `MELDE_SCHALTER` (ab Werk alle aus, dann nur Anzeige); die
 Entscheidung je Durchgang und Person steht in `meldung_faellig`, der Merker in `MELDE_DATEI` (`meldung_merken`).
 
-DIE SCHWELLE (`schwelle_bestimmen`, Entscheid S, Eigentuemer 20.11.2026 16:34:20 „Untergrenze 0,65"): das Groessere aus
-dem Boden `koerper_schwelle` und der geeichten Schwelle (staerkster Kosinus zwischen gueltigen Bildern verschiedener
-Personen plus `koerper_marge`; Regel core/personmodell._eichung auf den Abstand uebertragen, Konzept
-analysen/konzept_abstandsprinzip.md). Die Eichung hebt nur an, nie senkt sie; mit nur einer Person gilt der Boden.
+DIE SCHWELLE (Bauplan analysen/bauplan_koerper_schwelle.md, Stufe KF1; Eigentuemer 24.11.2026 08:13:21 „Das automatische
+Anheben der Schwelle finde ich unglücklich." und 09:41:38 „wir bleiben bei 0,65"): die Schwelle ist `koerper_schwelle`
+aus der Config (Werk 0,65), fuer alle Personen gleich, ohne Eichung. `abschaltung` rechnet je Person den hoechsten
+Kosinus gegen ein gueltiges Bild einer anderen Person und diese andere Person; erreicht der Wert die Schwelle (Grenze
+eingeschlossen), ist die Person fuer das Erkennen aus (Eigentuemer 08:23:29), der Lernlauf sammelt fuer sie weiter. Mit
+gueltigen Bildern nur einer Person ist sie an. Leser: `vergleichen`; die Seite Body images liest sie ab Stufe KF2.
 
 LESARTEN (wo der Plan offen ist, die engste; im Zweifel kein Name):
-  1. Boden 0 heisst nur geeicht. Gibt es dann keinen geeichten Wert (gueltige Bilder nur einer Person), gibt es keine
-     Schwelle und keinen Namen.
+  1. Ein Abfragebild ueber der Schwelle, dessen hoechster Wert (allein oder geteilt) einer ausgeschalteten Person
+     gehoert, zaehlt wie ein Name und gibt keine Stimme: mit einem zweiten Namen gibt das Ereignis keinen Namen
+     (lieber kein Name als ein falscher, Eigentuemer 12.11.2026). Gibt kein Bild einen Namen und war ein solches Bild
+     dabei, lautet der Grund „the best match is switched off: too similar to another person".
   2. Je Abfragebild nennt jede Person einen Namen, deren aehnlichstes gueltiges Bild den hoechsten Wert des Bilds traegt
      und die Schwelle erreicht (Grenze eingeschlossen). Tragen zwei Personen denselben hoechsten Wert, nennt das Bild
      beide, und es gibt keinen Namen (wie zwei Bilder mit verschiedenen Namen).
@@ -79,8 +83,12 @@ EHRLICHE GRENZEN:
   - Ein zweiter Mensch, dessen Gesicht nie zu sehen war und den Frigate nicht zaehlt, bleibt unsichtbar (Bauplan,
     Abschnitt „Was zugesagt wird und was nicht").
   - Die Latte `koerper_auswahl_stimmen` (Werk 6) ist nicht gemessen (Konzept Abschnitt 8).
-  - Der Boden 0,65 ist an einer Anlage gemessen (Entscheid S), anderswo nicht; liegt er dort zu hoch, gibt es keinen Namen
-    statt eines falschen.
+  - Die Schwelle 0,65 ist an einer Anlage gemessen (Entscheid S, 20.11.2026), anderswo nicht; liegt sie dort zu hoch,
+    gibt es keinen Namen statt eines falschen.
+  - Die Abschaltung kennt nur die eigenen Personen; eine unbekannte Person, die einer bekannten aehnlich ist, schaltet
+    nichts aus. Schwelle 0 schaltet fast jede Person aus. Eine einzige falsch abgelegte gueltige Zeile kann eine Person
+    ausschalten; der Nutzer kann das Bild auf der Seite Body images entfernen. Ein Wechsel an/aus steht nicht im Log.
+  - Alte Treffer-Zeilen mit Namen bleiben gueltig, bis ein neuer Vergleich desselben Ereignisses sie abloest (Lesart 4).
   - Die Treffer-Datei waechst ohne Kuerzung (eine Zeile je verglichenem Ereignis); jeder Leser liest sie ganz.
   - Die Merk-Datei der Meldungen (`MELDE_DATEI`, eine Zeile je Meldung: ts, start, person, eids, wege) kuerzt die
     taegliche Datenpflege nach `aufbewahrung_tage` (`meldungen_kuerzen`); die Regel braucht nur Zeilen des Tags. Eine
@@ -231,27 +239,32 @@ def _einheiten(abdruecke):
     return m / np.maximum(np.linalg.norm(m, axis=1, keepdims=True), 1e-12)
 
 
-def schwelle_bestimmen(gueltig, cfg):
-    """Die Schwelle aus dem Boden koerper_schwelle und der Eichung ueber die gueltigen Bilder (Kopf, DIE SCHWELLE).
-    -> (Schwelle oder None, geeichter Wert oder None)"""
-    boden, marge = float(cfg["koerper_schwelle"]), float(cfg["koerper_marge"])
-    geeicht = None
-    personen = [b["person"] for b in gueltig]
-    if len(set(personen)) >= 2:
-        m = _einheiten([b["fingerabdruck"] for b in gueltig])
-        fremd = np.asarray(personen)[:, None] != np.asarray(personen)[None, :]
-        geeicht = float((m @ m.T)[fremd].max()) + marge
-    werte = [w for w in ((boden if boden > 0 else None), geeicht) if w is not None]
-    return (max(werte) if werte else None), geeicht
+def abschaltung(gueltig, cfg):
+    """Je Person der hoechste Kosinus gegen ein gueltiges Bild einer anderen Person, diese Person und ob sie damit fuer
+    das Erkennen aus ist (Kopf, DIE SCHWELLE). -> {Person: {"wert", "nachbar", "aus"}}; gueltige Bilder nur einer
+    Person: wert und nachbar None, aus falsch"""
+    schwelle = float(cfg["koerper_schwelle"])
+    namen = [b["person"] for b in gueltig]
+    out = {p: {"wert": None, "nachbar": None, "aus": False} for p in sorted(set(namen))}
+    if len(out) < 2:
+        return out
+    zeilen = np.asarray(namen)
+    m = _einheiten([b["fingerabdruck"] for b in gueltig])
+    werte = np.where(zeilen[:, None] != zeilen[None, :], m @ m.T, -np.inf)    # nur verschiedene Personen
+    for p in out:
+        eigene = np.flatnonzero(zeilen == p)
+        i, j = np.unravel_index(np.argmax(werte[eigene]), (len(eigene), len(namen)))
+        wert = float(werte[eigene[i], j])
+        out[p] = {"wert": wert, "nachbar": namen[j], "aus": wert >= schwelle}
+    return out
 
 
 def vergleichen(abdruecke, gueltig, cfg):
-    """Die Abfragebilder eines Ereignisses gegen die gueltigen Bilder der Schublade (Kopf, Lesarten 1 bis 3).
-    -> dict person (None = kein Name), score, schwelle, geeicht, grund (englisch), stimmen (Bilder ueber der Schwelle,
-    ohne Namen 0) und bild (Nummer des Abfragebilds mit dem Wert der Zeile, ohne Namen None)"""
-    schwelle, geeicht = schwelle_bestimmen(gueltig, cfg)
-    erg = {"person": None, "score": None, "schwelle": None if schwelle is None else round(schwelle, 4),
-           "geeicht": None if geeicht is None else round(geeicht, 4), "stimmen": 0, "bild": None}
+    """Die Abfragebilder eines Ereignisses gegen die gueltigen Bilder der Schublade (Kopf, DIE SCHWELLE, Lesarten 1 bis 3).
+    -> dict person (None = kein Name), score, schwelle, grund (englisch), stimmen (Bilder ueber der Schwelle, ohne Namen
+    0) und bild (Nummer des Abfragebilds mit dem Wert der Zeile, ohne Namen None)"""
+    schwelle = float(cfg["koerper_schwelle"])
+    erg = {"person": None, "score": None, "schwelle": round(schwelle, 4), "stimmen": 0, "bild": None}
     if not gueltig or not abdruecke:
         return dict(erg, grund="no valid body image" if not gueltig else "no query image")
     personen = sorted({b["person"] for b in gueltig})
@@ -260,8 +273,6 @@ def vergleichen(abdruecke, gueltig, cfg):
     je_person = np.stack([werte[:, zeilen == p].max(axis=1) for p in personen], axis=1)   # (Bilder, Personen)
     bester = je_person.max(axis=1)
     erg["score"] = round(float(bester.max()), 4)
-    if schwelle is None:
-        return dict(erg, grund="no threshold: floor 0 and valid images of fewer than two persons")
     namen, stimmen = {}, 0                       # namen: Person -> (bester Wert, Nummer seines Bilds)
     for i, wert in enumerate(bester):
         if wert >= schwelle:
@@ -269,6 +280,9 @@ def vergleichen(abdruecke, gueltig, cfg):
             for j in np.flatnonzero(je_person[i] == wert):
                 if float(wert) > namen.get(personen[j], (0.0, None))[0]:
                     namen[personen[j]] = (float(wert), i)
+    aus = {p for p, a in abschaltung(gueltig, cfg).items() if a["aus"]}
+    if namen and set(namen) <= aus:              # Lesart 1: kein Bild gibt einen Namen, ein ausgeschaltetes war dabei
+        return dict(erg, grund="the best match is switched off: too similar to another person")
     if len(namen) > 1:
         return dict(erg, grund="the query images name different persons")
     if not namen:

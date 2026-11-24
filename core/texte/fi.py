@@ -120,6 +120,16 @@ T = {
     "readme.persoenlich.titel": "Henkilökohtaista",
     "readme.persoenlich.text": "Tämä on puhdasta harrastusta. Senior IT-arkkitehtina minulla on hauskaa rakentaa jotain tekoälyn kanssa. Se on tehty kokonaan Claude Codella, pääosin Fable 5:llä, agentteihin Opus 5:llä.\n\nToivoisin palautetta, ja minua ilahduttaa, kun joku ottaa järjestelmän käyttöön. Se on minun palkkani.",
     "kameras.titel": "Kamerat",
+    "kameras.sub":
+        "Luetaan suoraan Frigaten configista, mitään ei ole kiinteästi "
+        "koodattu. Kun kytket kameran <b>pois</b>, suslik ei hae eikä "
+        "tarkista siitä mitään, ei edes Frigaten antamia nimiä. Merkitse "
+        "yksi tai useampi <b>vyöhyke</b>, jos haluat tarkistaa vain "
+        "tapahtumat, jotka ovat menneet niihin (ei mitään merkittynä = "
+        "kaikki tapahtumat); jos Frigate on jo antanut nimen, suslik "
+        "tarkistaa sen silti. Kamera, joka on pois Frigatessa, ei lähetä "
+        "tapahtumia; valintasi pätee heti, kun se on siellä taas päällä. "
+        '<a href="/kameras?refresh=1">Päivitä</a>.',
     "kameras.banner.config_fehler":
         "Frigaten configia ei voitu lukea: {fehler}",
     "kameras.karte.verwenden": "käytä tätä kameraa",
@@ -2170,7 +2180,9 @@ T = {
         "Merkitse, mitä kameroita tarkkaillaan; merkitse yksi tai useampi "
         "vyöhyke, jos haluat analysoida vain tapahtumat, jotka ovat "
         "menneet niihin (esim. henkilö puutarhassa). Ei mitään merkittynä "
-        "= kaikki tapahtumat.",
+        "= kaikki tapahtumat. Merkitsemätön kamera on kokonaan pois: "
+        "suslik ei hae eikä tarkista siitä mitään, ei edes Frigaten "
+        "antamia nimiä.",
     "setupwiz.kameras.satz_ohne":
         "Yhdistä ensin Frigateen — kamerasi ilmestyvät tähän.",
     "setupwiz.backend.titel": "Kiihdytys",
@@ -3882,6 +3894,7 @@ T = {
     "koerperbilder.vorrat.bilder.viele": "{n} kuvaa",
     "koerperbilder.vorrat.tage": "{tage} päivänä viime {max_tage} päivästä",
     "koerperbilder.vorrat.neuest": "uusin {datum}",
+    "koerperbilder.vorrat.aus": "Ei tunnisteta: liian samannäköinen kuin {person} ({wert}, kynnys {schwelle}). Kuvia opitaan edelleen. Kynnys yli {wert} kytkee tunnistuksen takaisin päälle, tiukempana kaikille.",
     "koerperbilder.vorrat.weitere.eins": "{n} muulla henkilöllä ei ole vielä kuvia varastossa.",
     "koerperbilder.vorrat.weitere.viele": "{n} muulla henkilöllä ei ole vielä kuvia varastossa.",
     "koerperbilder.vorrat.keine_bilder": "Varastossa ei ole vielä kehokuvia. Henkilöiden oppimisajo leikkaa ne sopivista videoista.",

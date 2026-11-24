@@ -217,6 +217,7 @@ HTML_SCHLUESSEL = frozenset({
     "visiontest.kopf.wege_satz", "visiontest.vision.einrichten_satz",
     "visionwizard.groesse.satz", "visionwizard.vorschlag.vergessen_satz",
     "visionwizard.vorschlag.satz",
+    "kameras.sub",  # Einleitung der Kameraseite (Bauplan analysen/bauplan_kamerawahl.md, Stufe KA2)
     # (die zehn personwizard.*-Schluessel sind mit der Seite in Stufe KW6 des Bauplans
     # analysen/bauplan_koerperweg_neu.md entfallen)
 })

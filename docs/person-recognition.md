@@ -109,7 +109,12 @@ shows only what has data, from top to bottom:
   images, and the newest one. Tap a row to see the images; the × removes a
   single image (it goes to the archive, nothing is deleted), and the page
   reloads with that row open. People without valid images appear only as
-  a count.
+  a count. A person whose images are too similar to another person's has
+  a red ring around the initial and a short red line under the name: it is
+  not recognised by body, which person it is too similar to, with the
+  value (rounded down to two places) and the threshold
+  `koerper_schwelle`. Its images are still learned; a threshold above the
+  value switches recognition back on, stricter for everyone.
 - At the bottom, the state of the path (`person_pfad`, marked as a
   warning while there are no images yet or the pose model is missing), of
   the image check and of the learning run start, with a link to the
@@ -131,11 +136,15 @@ checked only when no face in the clip was confirmed. A body name that a
 face in the same clip already confirmed is not used.
 
 - Each picture is compared with the closest valid image of each person.
-- The threshold is the higher of two values: the floor `koerper_schwelle`
-  (default 0.65) and a value calibrated from your images (the strongest
-  match between images of two different people plus `koerper_marge`).
-  The calibration can only raise the threshold, never lower it. With
-  images of only one person, the floor applies.
+- The threshold is `koerper_schwelle` (default 0.65), the same for every
+  person. It does not change with your images.
+- A person whose valid images reach the threshold against the valid
+  images of another person is too similar to that person: recognition is
+  switched off for this person, so it gets no body name. Its images are
+  still learned. A picture whose best match is such a person gives no
+  name, and next to a name from another picture it blocks the name of the
+  event. A higher threshold switches the person back on and makes
+  recognition stricter for everyone.
 - If two pictures of the event point to different people, there is no
   name.
 - With `person_pfad` on `nur_wenn_gesicht_leer`, this runs only when the

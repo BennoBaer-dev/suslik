@@ -38,6 +38,13 @@ core.akte.sicht(...).heute(von, bis) mit dem Fenster core.koerperweg.cutter_fens
 derselben Auswahl wie der Cutter (core.koerperweg.cutter_auswahl, ohne Personenliste, ohne Deckel je Person). Die Seite
 fragt nichts bei Frigate ab.
 
+AUSGESCHALTETE PERSONEN (Bauplan analysen/bauplan_koerper_schwelle.md, Stufe KF2; Eigentuemer 24.11.2026 08:27:51 „Der
+User muss ja erkennen, dass für diese Person keine Personenerkennung da ist"): _bestand ruft
+core.koerperweg.abschaltung einmal mit den gueltigen Bildern aus daten und cfg; Wert, Nachbar und aus kommen nur von
+dort. Die Zeile einer Person, die aus ist, traegt data-aus="1" und die Klasse kb-aus (roter Ring um die Initiale), unter
+dem Namen steht rot der Text koerperbilder.vorrat.aus mit der aehnlichen Person, dem Wert auf zwei Stellen abgerundet und
+der Schwelle koerper_schwelle (_aus_satz). Personen, die an sind, bekommen nichts Neues.
+
 EHRLICHKEIT (ED008): laesst sich ein Teil nicht lesen, zeigt die Seite einen roten Hinweis und schreibt den Grund als
 ERROR-Zeile, einmal je Prozess und Grund (Muster routes/unbekannte._melden); die wartenden Videos fehlen dann (der Knopf
 heisst dann ohne Zahl), und Zeilen, deren Aussage die fehlenden Daten braucht (keine neuen Bilder, keine Bilder im
@@ -49,7 +56,8 @@ Gruende, die fuer den Nutzer dasselbe bedeuten, teilen sich einen Schluessel, ih
 Grund ohne Zuordnung erscheint im Rohtext. Log und Stand des Dienstes behalten die Kurztexte. Die Zahlen der Zeile stehen
 fett wie im Bild.
 
-EHRLICHE GRENZEN: die Schublade wird je Aufruf zweimal gelesen (body_read und body_events oeffnen je die eine Datei). Das
+EHRLICHE GRENZEN: die Schublade wird je Aufruf zweimal gelesen (body_read und body_events oeffnen je die eine Datei); die
+Abschaltung rechnet je Aufruf eine Matrix der gueltigen Bilder (Bauplan KF2, Last). Das
 Datumsformat ist fuer alle Sprachen gleich (Stufe-2-Grenze B19 wie routes/unbekannte._zeit). Die Farbe der Initiale
 folgt der Regel von verifyd (_av_farbe in do_GET: Bytesumme des Namens) ueber die sechs Farb-Tokens --av-1 bis --av-6 aus
 webui/style.css. Nach einer Auswahl setzt das Skript die Zahl des Knopfs neu und waehlt die Form nach n gleich 1 (die
@@ -60,6 +68,7 @@ import collections
 import datetime
 import html
 import json
+import math
 import threading
 import time
 
@@ -151,6 +160,8 @@ _STIL = ('<style>'
          '.kb-fuss{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;font-size:13px;color:var(--dim);'
          'margin:4px 4px 16px}'
          '.kb-rot{color:var(--crit)}'
+         '.kb-aus .avs{box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--crit)}'
+         '.kb-aus-satz{display:block;font-size:13px;color:var(--crit);margin:2px 0 0}'
          '@media (max-width:560px){.kb-gruppe-kopf .gtb{margin-left:0}.kb-offen{padding-left:0}}'
          '</style>')
 
@@ -263,9 +274,21 @@ def _bild_kachel(b, wahl):
             f'<small>{_e(_zeit(b["zeit"]))}</small></div>')
 
 
+def _aus_satz(a, cfg):
+    """Die rote Zeile einer Person, die fuer das Erkennen aus ist (Kopf, AUSGESCHALTETE PERSONEN): wem sie zu aehnlich
+    ist, Wert und Schwelle. -> HTML; fuer eine Person, die an ist, leer"""
+    if not a["aus"]:
+        return ""
+    wert = math.floor(a["wert"] * 100) / 100           # abgerundet: eine gezeigte Zahl unter der Schwelle heisst nie aus
+    text = t("koerperbilder.vorrat.aus", person=a["nachbar"], wert=f"{wert:.2f}",
+             schwelle=f'{float(cfg["koerper_schwelle"]):g}')
+    return f'<span class="kb-aus-satz">{_e(text)}</span>'
+
+
 def _bestand(d, cfg, jetzt):
     """Karte Bestand: je Person mit gueltigen Bildern eine Zeile als Aufklapper ueber ihre Bilder (meiste Bilder zuerst,
-    alle zu), die uebrigen Personen als Zahl; ohne gueltiges Bild nur eine Zeile, ohne Person der Leerzustand. -> HTML"""
+    alle zu), eine ausgeschaltete Person rot markiert, die uebrigen Personen als Zahl; ohne gueltiges Bild nur eine
+    Zeile, ohne Person der Leerzustand. -> HTML"""
     tage = int(cfg["koerper_max_tage"])
     je = {}
     for b in d["bilder"]:
@@ -277,15 +300,19 @@ def _bestand(d, cfg, jetzt):
         return "" if d["gruende"] else f'<p class="kb-zeile">{_e(t("koerperbilder.vorrat.keine_bilder"))}</p>'
     heute = datetime.date.fromtimestamp(jetzt)          # Kalendertage der Ortszeit, heute und die tage - 1 davor
     erster = heute - datetime.timedelta(days=tage - 1)
+    # Stufe KF2 Punkt 1: Wert, Nachbar und aus nur aus core.koerperweg.abschaltung, die Seite vergleicht selbst nichts
+    abschaltung = _kw.abschaltung([b for b in d["bilder"] if b["zustand"] == GUELTIG], cfg)
     zeilen = []
     for nr, p in enumerate(sorted(je, key=lambda p: (-len(je[p]), p)), start=1):
         gl = sorted(je[p], key=lambda b: -b["zeit"])
         abgedeckt = len({k for k in (datetime.date.fromtimestamp(b["zeit"]) for b in gl) if erster <= k <= heute})
         hn = " · ".join((t("koerperbilder.vorrat.tage", tage=abgedeckt, max_tage=tage),
                          t("koerperbilder.vorrat.neuest", datum=_datum(gl[0]["zeit"]))))
-        zeilen.append(f'<button type="button" class="kb-person" aria-expanded="false" aria-controls="kb-p-{nr}" '
-                      f'data-person="{_e(p)}" onclick="kbAuf(this)">{_avatar(p)}<span class="lvs-lbl">'
-                      f'<span class="lvs-name">{_e(p)}</span><span class="lvs-hn">{_e(hn)}</span></span>'
+        kl, merk = (" kb-aus", ' data-aus="1"') if abschaltung[p]["aus"] else ("", "")    # Stufe KF2 Punkt 2
+        zeilen.append(f'<button type="button" class="kb-person{kl}" aria-expanded="false" aria-controls="kb-p-{nr}" '
+                      f'data-person="{_e(p)}"{merk} onclick="kbAuf(this)">{_avatar(p)}<span class="lvs-lbl">'
+                      f'<span class="lvs-name">{_e(p)}</span><span class="lvs-hn">{_e(hn)}</span>'
+                      f'{_aus_satz(abschaltung[p], cfg)}</span>'
                       f'<span class="kb-zahl">{_e(t_n("koerperbilder.vorrat.bilder", len(gl)))}</span>'
                       '<span class="kb-pfeil" aria-hidden="true">&#8250;</span></button>'
                       f'<div id="kb-p-{nr}" class="kb-offen" hidden>'

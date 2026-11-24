@@ -110,6 +110,16 @@ T = {
     "readme.persoenlich.titel": 'Personnel',
     "readme.persoenlich.text": "C'est purement un loisir. En tant qu'architecte informatique senior, j'ai plaisir à développer quelque chose avec l'IA. Le tout est développé avec Claude Code, principalement avec Fable 5, et avec Opus 5 pour les agents.\n\nCe que je souhaite, ce sont des retours, et cela me fait plaisir quand quelqu'un utilise le système. C'est ma paie.",
     "kameras.titel": "Caméras",
+    "kameras.sub":
+        "Lu en direct depuis votre config Frigate, rien n'est codé en dur. "
+        "Si vous <b>désactivez</b> une caméra, suslik n'en récupère et n'en "
+        "vérifie rien, pas même les noms donnés par Frigate. Cochez une ou "
+        "plusieurs <b>zones</b> pour ne vérifier que les événements qui y "
+        "sont entrés (aucune cochée = tous les événements) ; si Frigate a "
+        "déjà donné un nom, suslik le vérifie quand même. Une caméra "
+        "désactivée dans Frigate n'envoie aucun événement ; votre choix "
+        "s'applique dès qu'elle y est réactivée. "
+        '<a href="/kameras?refresh=1">Actualiser</a>.',
     "kameras.banner.config_fehler":
         "Impossible de lire la config Frigate&nbsp;: {fehler}",
     "kameras.karte.verwenden": "utiliser cette caméra",
@@ -2035,7 +2045,9 @@ T = {
         "Cochez les caméras à surveiller ; cochez une ou plusieurs zones "
         "pour n'analyser que les événements qui y sont entrés (p. ex. "
         "une personne dans le jardin). Aucune case cochée = tous les "
-        "événements.",
+        "événements. Une caméra non cochée est entièrement désactivée : "
+        "suslik n'en récupère et n'en vérifie rien, pas même les noms "
+        "donnés par Frigate.",
     "setupwiz.kameras.satz_ohne":
         "Connectez-vous d'abord à Frigate — les caméras apparaîtront ici.",
     "setupwiz.backend.titel": "Accélération",
@@ -3948,6 +3960,7 @@ connues.</p>""",
     "koerperbilder.vorrat.bilder.viele": "{n} images",
     "koerperbilder.vorrat.tage": "sur {tage} des {max_tage} derniers jours",
     "koerperbilder.vorrat.neuest": "la plus récente {datum}",
+    "koerperbilder.vorrat.aus": "Non reconnue : trop semblable à {person} ({wert}, seuil {schwelle}). Les images sont toujours apprises. Un seuil au-dessus de {wert} réactive la reconnaissance, plus stricte pour tout le monde.",
     "koerperbilder.vorrat.weitere.eins": "{n} autre personne n'a pas encore d'images dans la réserve.",
     "koerperbilder.vorrat.weitere.viele": "{n} autres personnes n'ont pas encore d'images dans la réserve.",
     "koerperbilder.vorrat.keine_bilder": "Pas encore d'images de corps dans la réserve. L'apprentissage des personnes les découpe dans des vidéos adaptées.",

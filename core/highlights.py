@@ -16,13 +16,22 @@ seiner ersten Fundstelle im Text als Verweis auf den Pfad, wie `readme` den Knop
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.112"   # 0.1.1.112: Eigentuemer 23.11.2026 19:39:13 "Können wir den Lauf starten ? Whats new würde ich
-                      # nicht änder" und 19:40:58 "Heute" (auf die Vorlage des CHANGELOG-Textes durch die Hauptsession,
-                      # Text in .suslik_tmp/release_0.1.1.112/text_changelog.md). Die Box bleibt unveraendert: kein
-                      # neuer Eintrag, der Eintrag zuoberst steht weiter unter 0.1.1.111 (veroeffentlicht), nur STAND
-                      # geht hoch, die Box erscheint nicht neu. Im Produkt neu: die Koerpererkennung an der Spur,
-                      # unabhaengig von der Zahl der Personen im Video (Bauplan analysen/bauplan_koerper_spur.md, Stufen
-                      # KS1 und KS2, Commits cdcc8d10 und 6ea0a15b).
+STAND = "0.1.1.113"   # 0.1.1.113: Eigentuemer 24.11.2026 12:06:07 "Nimm mal als What's New Text Small Fixes mit drauf.
+                      # Und zwar Small Fixes für das Speichern, also das Auswählen der Kamera, die Config und
+                      # Personenerkennung.", 12:07:41 "Aber das mit Testversion davor lassen wir noch bestehen.",
+                      # Box-Satz DE abgenommen 12:08:14 "Passt so", CHANGELOG-Text 12:13:07 "Passt so" (Texte in
+                      # .suslik_tmp/release_0.1.1.113/text_changelog.md). Neuer Box-Eintrag 0.1.1.113 zuoberst. Im
+                      # Produkt neu: die Kamerawahl (Bauplan analysen/bauplan_kamerawahl.md, Stufen KA1 und KA2, Commits
+                      # 8605c2bb und 4edd302e, GitHub #45 und #44) und die feste Koerper-Schwelle mit Abschaltung zu
+                      # aehnlicher Personen (Bauplan analysen/bauplan_koerper_schwelle.md, Stufen KF1 und KF2, Commits
+                      # dab72317 und de92e36c).
+                      # Davor 0.1.1.112: Eigentuemer 23.11.2026 19:39:13 "Können wir den Lauf starten ? Whats new würde
+                      # ich nicht änder" und 19:40:58 "Heute" (auf die Vorlage des CHANGELOG-Textes durch die
+                      # Hauptsession, Text in .suslik_tmp/release_0.1.1.112/text_changelog.md). Die Box bleibt
+                      # unveraendert: kein neuer Eintrag, der Eintrag zuoberst steht weiter unter 0.1.1.111
+                      # (veroeffentlicht), nur STAND geht hoch, die Box erscheint nicht neu. Im Produkt neu: die
+                      # Koerpererkennung an der Spur, unabhaengig von der Zahl der Personen im Video (Bauplan
+                      # analysen/bauplan_koerper_spur.md, Stufen KS1 und KS2, Commits cdcc8d10 und 6ea0a15b).
                       # Davor 0.1.1.111: Eigentuemer 23.11.2026 14:20:59 "Ja, mit Veröffentlichung" und 14:43:58 "Texte
                       # abnehmen" (Box-Satz, Satz im Kapitel Personenerkennung und CHANGELOG-Abschnitt, Ablage
                       # analysen/pruefungen/2026-11-23_1422_changelog_0111_entwurf/). Im Produkt neu: die Seite Benannte
@@ -961,6 +970,20 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.1.113 — EIN Eintrag, MIT DEM EIGENTUEMER ABGESTIMMT 24.11.2026 (sein Wunsch 12:06:07: Small Fixes fuer das
+    # Speichern, die Kamerawahl, die Config und die Personenerkennung, und 12:07:41: „Testversion“ davor bleibt;
+    # Wortlaut DE abgenommen 12:08:14 „Passt so“, .suslik_tmp/release_0.1.1.113/text_changelog.md). EN von der
+    # Hauptsession, ES, IT, FR und FI nach EN.
+    ("0.1.1.113", (
+        {"de": "Testversion — Kleine Korrekturen bei der Kamerawahl und bei der Personenerkennung.",
+         "en": "Test release — Small fixes to camera selection and person recognition.",
+         "es": "Versión de prueba — Pequeñas correcciones en la selección de cámaras y en el reconocimiento de "
+               "personas.",
+         "it": "Versione di prova — Piccole correzioni alla scelta delle telecamere e al riconoscimento della persona.",
+         "fr": "Version de test — Petites corrections du choix des caméras et de la reconnaissance de personne.",
+         "fi": "Testiversio — Pieniä korjauksia kameroiden valintaan ja henkilöntunnistukseen.",
+         "betont": True},
+    )),
     # 0.1.1.111 — EIN Eintrag, MIT DEM EIGENTUEMER ABGESTIMMT 23.11.2026 (sein Vorschlag 14:21:46 und 14:22:13:
     # „Testversion“ bleibt, dahinter ein Satz zur neuen Seite, der Seitenname als Verweis; Wortlaut DE abgenommen
     # 14:43:58, text_zur_abnahme.md der Ablage analysen/pruefungen/2026-11-23_1422_changelog_0111_entwurf/). EN von der

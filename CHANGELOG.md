@@ -5,6 +5,16 @@ never pushed to GHCR; they ship bundled with the next release (each release entr
 says which steps it bundles). This file keeps the last five releases; the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git history.
 
+## 0.1.1.113 (2026-11-24)
+
+Test release. Person recognition stays a preview.
+
+- **Cameras** and the setup wizard: **use this camera** is now saved the way you set it, also for a camera that is off in Frigate. Until now such a camera was always saved as used, and the page still said "saved". A camera without a saved choice starts ticked.
+- A camera you untick is now off completely: suslik fetches and checks nothing from it, not even events that Frigate gave a name (until now those were checked, with notifications and presence). So a wrong name from Frigate on such a camera is no longer checked. The **Cameras** page says this in its intro, and the tick box sits at the same place on every card.
+- Person recognition: the body threshold is now fixed at `koerper_schwelle` (default 0.65), the same for everyone. Until now suslik raised it on its own above the most similar pair of two people, so a single pair made it stricter for all. `koerper_marge` is gone; the help texts of `koerper_schwelle` and `koerper_stimmen` are new.
+- A person whose images reach the threshold against another person's images is switched off: they get no body name, and neither does an event with an image that matches them above the threshold. Their images are still learned.
+- **Body images**: a switched-off person has a red ring and a red line naming the similar person, the value and the threshold. A threshold above that value switches them back on, but stricter for everyone.
+
 ## 0.1.1.112 (2026-11-23)
 
 Test release. Person recognition stays a preview.
@@ -46,9 +56,3 @@ Test release. 0.1.1.104 to 0.1.1.109 were never published; their changes are par
 - cuda: the startup log now names the exact case and lists what arrives in the container.
 - Docs: the Compose example for NVIDIA now names only `capabilities: [gpu]`. With `video` added, `nvidia-smi` was missing in the container; if you copied the old example, remove `video`.
 - System page: the Analysis tile turns red when the last analysis has failed.
-
-## 0.1.1.102 (2026-11-16)
-
-- Event clips: suslik now waits until Frigate has stored the recording up to the end of an event before it fetches the clip, so the end is no longer cut off by fetching too early. Thanks for the report in #40.
-- The setting `clip_delay` was removed.
-- New setting `clip_aufnahme_deckel_s` (factory value 20 s, 5 to 120 s): the longest time suslik waits for the recording.

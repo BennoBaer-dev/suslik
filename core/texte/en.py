@@ -102,6 +102,17 @@ T = {
     "readme.persoenlich.titel": 'Personal',
     "readme.persoenlich.text": 'This is purely a hobby. As a senior IT architect, I enjoy building something with AI. It is built entirely with Claude Code, mostly on Fable 5, with Opus 5 for the agents.\n\nWhat I would like is feedback, and it makes me happy when someone puts the system to use. That is my reward.',
     "kameras.titel": "Cameras",
+    # routes/kameras.py Einleitung (t_html, Bauplan Kamerawahl KA2): aus = ganz aus,
+    # die Ausnahme fuer Frigate-Namen gilt nur beim Zonenfilter.
+    "kameras.sub":
+        "Read live from your Frigate config, nothing is hard-coded. "
+        "Turn a camera <b>off</b> and suslik fetches and checks nothing "
+        "from it, not even names that Frigate gave. Tick one or more "
+        "<b>zones</b> to only check events that entered them (none "
+        "ticked = all events); if Frigate already gave a name, suslik "
+        "still checks it. A camera that is off in Frigate sends no "
+        "events; your choice applies as soon as it is on there again. "
+        '<a href="/kameras?refresh=1">Refresh</a>.',
     "kameras.banner.config_fehler":
         "Could not read the Frigate config: {fehler}",
     "kameras.karte.verwenden": "use this camera",
@@ -2067,7 +2078,9 @@ T = {
     "setupwiz.kameras.satz":
         "Tick which cameras to watch; tick one or more zones to only "
         "analyze events that entered them (e.g. person in the garden). "
-        "None ticked = all events.",
+        "None ticked = all events. A camera that is not ticked is fully "
+        "off: suslik fetches and checks nothing from it, not even names "
+        "that Frigate gave.",
     "setupwiz.kameras.satz_ohne":
         "Connect to Frigate first — your cameras appear here.",
     "setupwiz.backend.titel": "Acceleration",
@@ -3884,6 +3897,7 @@ between.</p>""",
     "koerperbilder.vorrat.bilder.viele": "{n} images",
     "koerperbilder.vorrat.tage": "on {tage} of the last {max_tage} days",
     "koerperbilder.vorrat.neuest": "newest {datum}",
+    "koerperbilder.vorrat.aus": "Not recognised: too similar to {person} ({wert}, threshold {schwelle}). Images are still learned. A threshold above {wert} switches recognition back on, stricter for everyone.",
     "koerperbilder.vorrat.weitere.eins": "{n} more person has no images in stock yet.",
     "koerperbilder.vorrat.weitere.viele": "{n} more people have no images in stock yet.",
     "koerperbilder.vorrat.keine_bilder": "No body images in stock yet. The person learning run cuts them from suitable videos.",
