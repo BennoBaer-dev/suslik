@@ -65,9 +65,14 @@ the update to the first version with the reference source, also save `clips/refc
 
 Two settings belong to the reference source: `profil_faktor` (default 2.2, must be above 1.5) sets the
 side of a stored profile picture as this factor times the longer side of the face box, and
-`aufbewahrung_tage` (default 60, `verifyd.yaml` only) is how long everything tied to events is kept: old
+`aufbewahrung_tage` (default 60, not on the settings pages) is how long everything tied to events is kept: old
 event folders, the monthly archive files of the event record (`state/archiv/deckung_YYYY-MM.jsonl`), the pieces
-of the unknown queue and the log of names written to Frigate (`state/sublabel_writes.jsonl`).
+of the unknown queue and the log of names written to Frigate (`state/sublabel_writes.jsonl`). The period is a
+fixed number of days counted by suslik itself; it does not follow Frigate's own retention, so an event folder
+outlives its Frigate event unless you lower it. In the Docker images `verifyd.yaml` is baked in, so set the key
+there as a top-level entry in `config/config.json` (for example `"aufbewahrung_tage": 14`) and restart the
+container; the next start logs `crops retention: N event folders older than 14 days (no GT) deleted`. Saving a
+settings page keeps the entry.
 
 Candidate sets that were never chosen and discarded sets do not follow `aufbewahrung_tage`: after an offer
 period of 7 days they move, together with their catalog lines, into the trash folder `<data>/papierkorb/<date>/`.
