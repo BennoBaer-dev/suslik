@@ -1137,7 +1137,13 @@ def leser_mit_rueckfall(url, context, log=_log, probe_s=None):
             break
         r, _, _ = select.select([p.stdout], [], [], 0.25)
         if r:
-            return p, b, h, wahl
+            # „Lesbar" heisst auch ENDE: stirbt der HW-ffmpeg ohne ein Bild (NVDEC nicht nutzbar, etwa
+            # wenn der Container die Karte verloren hat), schliesst er stdout, und select meldet die Pipe
+            # lesbar. Ohne diesen Blick galt der tote Prozess als laufender HW-Decoder: kein SW-Rueckfall,
+            # der Quelltest endete mit „only 0/20 frames in 0.0s". peek() verbraucht nichts.
+            if p.stdout.peek(1):
+                return p, b, h, wahl
+            break
     try:
         p.kill()
         p.wait()
