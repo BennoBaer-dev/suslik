@@ -6,14 +6,16 @@ their camera streams and react while the person is still in the picture, and the
 analysis runs as Frigate produces person events.
 
 ## The web UI
-The UI has **eleven sections** (top bar): **Activity** (Today / Passes / Events / Unknown),
-**People** (your reference library), **Person** (the Body images and Named persons pages of the
-body-recognition path — see [person-recognition.md](person-recognition.md)), **Vision** (vision detect, parked in this
-version: the page says why), **Live**
-(live watchers — see [live-watchers.md](live-watchers.md)), **Areas** (camera groups),
-**Learn** (face learning runs and anchors), **Frigate sync** (the
-class-by-class comparison with Frigate's own face library), **Settings**,
-**Recognition test** and **System**.
+The UI has **ten sections** (top bar): **Activity** (Today, Passes, Events, Unknown),
+**Faces** (Known, Unknown, Quality), **Learn** (Face learning run, Anchors, Suggestions),
+**Person** (Body images and Named persons, the pages of the body-recognition path; see
+[person-recognition.md](person-recognition.md)), **Vision** (vision detect, parked in this
+version: the page says why), **Live** (Live watchers, Live alerts; see
+[live-watchers.md](live-watchers.md)), **Frigate** (Frigate and Frigate sync, the
+class-by-class comparison with Frigate's own face library), **Configuration** (Recognition,
+Cameras, Notifications, Areas, Recognition chain, Advanced), **Recognition test** and
+**System** (System, System stats). Easy mode hides some sub-pages; the tiles on each section's
+start page lead there.
 
 Two buttons sit in the top bar next to the sections: **Calibration** (per-camera bars; shown
 in Expert mode only, in Easy mode the page stays reachable at `/kalibrierung` and through each
@@ -253,10 +255,14 @@ and matches it against your references over time. It reports one of:
 - **unknown** — a face was seen but didn't match any reference confidently.
 - **disagreement** — suslik confirms a *different* person than Frigate's label (the case suslik
   exists to catch).
+- **possible stranger** — a usable face at least 100 pixels wide that passes the recognition
+  checks, while no known person was confirmed.
 - (plus bookkeeping categories for "Frigate labeled but no usable face", "both unknown", etc.)
 
-Alerts fire only for the categories you enable (disagreement by default), with a global cooldown
-so continuous presence doesn't spam you.
+Alerts fire only for the categories you enable (by default disagreement and possible stranger),
+with a global cooldown so continuous presence doesn't spam you. A recognized person is reported
+through the presence notification instead (`anwesenheit_push`, on by default, with its own
+cooldown).
 
 Live watchers alert on a separate path these categories do not govern. MQTT reports every
 person at the first face. Pushover and Telegram report a known person as soon as the name

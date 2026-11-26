@@ -6,22 +6,22 @@ ships the runtime for one accelerator family plus a CPU fallback.
 
 ## Choosing a backend
 
-Set it in the setup wizard, or via `VERIFY_BACKEND` (or `backend:` in the stored config):
+Set it in the setup wizard or as `backend` in the stored config:
 
 | Value | Runs on | Image variant |
 |---|---|---|
 | `auto` *(default in `-gpu`)* | picks NPU/GPU/CPU once, sticks | `-gpu`, `-gpu-legacy` |
 | `cpu` | CPU only | any (always available) |
 | `openvino:GPU` | Intel iGPU | `-gpu`, `-gpu-legacy` |
-| `openvino:NPU` | Intel NPU | `-gpu` |
-| `openvino:MIXED` | Intel iGPU (detector) + NPU (recognition) | `-gpu` |
+| `openvino:NPU` | Intel NPU for the service and live watchers; event analysis runs on the iGPU | `-gpu` |
+| `openvino:MIXED` | Intel iGPU (detector) + NPU (recognition) for the service and live watchers; event analysis runs on the iGPU | `-gpu` |
 | `cuda` / `cuda:0` | NVIDIA GPU | `-cuda` |
 | `migraphx` | AMD GPU (MIGraphX EP, testing — field-confirmed on RDNA3) | `-rocm` |
 
 **`auto` placement**: at first start a short real benchmark builds sessions on the NPU and
-GPU, measures them, and picks `openvino:MIXED` (recognition on the NPU — on a Core Ultra
-that cuts recognition CPU cost from ~24 ms to well under 1 ms per inference), `openvino:GPU`,
-or `cpu`. The decision is stored in `state/placement.json` and reused until hardware,
+GPU, measures them, and picks `openvino:MIXED` (recognition in the service and the live
+watchers on the NPU, which on a Core Ultra cuts recognition CPU cost from ~24 ms to well under
+1 ms per inference; the event analysis uses the iGPU), `openvino:GPU`, or `cpu`. The decision is stored in `state/placement.json` and reused until hardware,
 runtime or version change; systems without an NPU simply end up on GPU, identical to the
 previous default. Per-model fallback chain NPU → GPU → CPU with a loud `PLACEMENT-FALLBACK`
 log marker if a device stops binding.
@@ -211,11 +211,13 @@ docker exec suslik python verifyd.py --benchmark
 
 For every backend the image can actually use it builds a real ONNX Runtime session with the real
 recognition model, runs one warm-up inference, then times up to 50 inferences or 5 seconds per
-device (the startup step is deliberately shorter, to keep the boot bounded). The input is
-synthetic, so no faces and no events are involved. You get one line per device — `CPU (baseline)`,
+device (the startup step is deliberately shorter, to keep the boot bounded). The timing runs on
+synthetic input. You get one line per device — `CPU (baseline)`,
 `iGPU (OpenVINO)`, `NPU (OpenVINO)`, `CUDA (Nvidia)`, `MIGraphX (AMD)`, depending on the variant —
 with ms per inference and inferences/s, plus the machine it measured on and a reference line to
-compare against (Intel Core Ultra 9 285H: CPU 840 ms, iGPU 26 ms, NPU 18 ms).
+compare against (Intel Core Ultra 9 285H: CPU 840 ms, iGPU 26 ms, NPU 18 ms). After the
+timings, a second section compares hardware and software video decode byte for byte on clips
+from the clip cache; if the cache is empty, it fetches one clip from Frigate.
 
 A device whose execution provider does **not** really bind is reported as `skipped`, not measured:
 you never get a CPU fallback presented as a GPU result.

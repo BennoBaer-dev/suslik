@@ -17,9 +17,9 @@ hardware:
 > each other. This is the same approach Frigate takes (`stable` vs `stable-tensorrt`). See
 > [architecture.md](architecture.md).
 
-Every variant still contains the CPU provider, so it will fall back to CPU (with an honest
-warning in the startup log) if the accelerator isn't available. Match the image to your hardware
-for real performance.
+If the accelerator is not available, the gpu, gpu-legacy and rocm images run on the CPU, and the
+cuda image cannot analyse at all. Either way, every page shows a red notice, with the cause and the
+fix on the System page. Match the image to your hardware.
 
 ## Prerequisites
 
@@ -28,8 +28,9 @@ for real performance.
   clips). You configure the Frigate URL later in the setup wizard — nothing is hardcoded. The
   simplest setup is to run suslik **right alongside Frigate on the same host** — a second Docker
   container (or the same compose stack) — then it reaches Frigate's internal **port 5000** out of
-  the box. suslik uses that unauthenticated port 5000; it has **no support for Frigate's
-  authenticated port 8971** (JWT/login) yet. Reading from Frigate is all suslik needs to
+  the box. Frigate's authenticated port 8971 works too: enter Frigate's user and password on
+  the **Advanced** page (`frigate_user`, `frigate_password`); `frigate_tls_verify` can be
+  switched off for Frigate's self-signed certificate. Reading from Frigate is all suslik needs to
   work. Only if you want to write reference faces *back* into Frigate (the optional
   **Frigate sync** page) two more things must be true: write-back has to be enabled in
   suslik (read-only is the default), and Frigate's own face recognition has to be turned
@@ -393,9 +394,12 @@ To update:
 docker compose pull && docker compose up -d
 ```
 
-Your data is not in the image. Everything suslik learns — reference faces, the unknown pool,
-settings, event history — lives in the `/data` volume from your compose file and survives the
-update. One exception is announced in the release notes: the first version with the *reference
+Your data is not in the image. Reference faces, the unknown pool and settings live in the `/data`
+volume from your compose file and survive the update. Event data is kept for 14 days by default
+(`aufbewahrung_tage` on the **Advanced** page): event folders, the monthly archive of the event
+record, the pieces of the unknown queue and the log of names written to Frigate. If you update
+from a version before 0.1.1.115 and have not set your own value, the first start deletes event
+folders without ground truth that are older than 14 days for good. One exception is announced in the release notes: the first version with the *reference
 source* moves your learned faces once into a new storage layout on its first start (see
 [Data layout and the one-time migration](#data-layout-and-the-one-time-migration) below). Read the
 release notes before a major jump, then check the footer of any page in the web UI: it shows the

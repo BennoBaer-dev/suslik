@@ -170,8 +170,7 @@ time, that event gets no body name; it is not queued for later.
 
 A body name counts for a whole walk-through, not for a single event. It
 counts votes: every query picture of an event that reaches the threshold
-for a person is one vote, one video gives at most
-`koerper_bilder_je_video` votes, and the votes of all events of the
+for a person is one vote, and the votes of all events of the
 walk-through add up.
 
 - The name counts when the person has at least `koerper_stimmen` votes
@@ -246,7 +245,7 @@ does not change marks already written.
 
 All settings of the path are listed in
 [configuration.md](configuration.md) under "Body images and person
-recognition": `person_pfad`, the ten `koerper_*` settings, the five
+recognition": `person_pfad`, the nine `koerper_*` settings, the five
 `koerper_meldet_*` switches,
 `personwork_rss_max_mb` (memory limit of the background process) and
 `person_backend` (device for the fingerprint, default `cpu`).
@@ -256,8 +255,7 @@ recognition": `person_pfad`, the ten `koerper_*` settings, the five
 - A second person in the video whose face is never seen and whom Frigate
   does not count can end up under the name. The face check of the person
   learning run and your review of new images are the protection.
-- Videos with two people give no body images, and events with two people
-  get no body name.
+- Body images are only learned from videos with exactly one person.
 - The defaults are measured on one system only.
 - The result of the last person learning run is gone after a restart; the images
   and the record of handled videos stay.

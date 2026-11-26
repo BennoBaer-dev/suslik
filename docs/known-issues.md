@@ -4,7 +4,7 @@ An honest list of what we know is rough, wrong or missing right now. If you hit
 something that is not on this list, please open an issue — that is exactly the kind
 of feedback this project needs.
 
-_Last updated: 2026-10-11 (reference source: backup before the update, restore on different hardware; earlier entries 2026-08-13, 0.1.0.199)._
+_Last updated: 2026-11-26 (0.1.1.116)._
 
 ## Known bugs
 
@@ -22,7 +22,8 @@ _Last updated: 2026-10-11 (reference source: backup before the update, restore o
   can still collide on the same device.
 - **AMD GPU support is experimental.** There is a dedicated `-rocm` image (analysis via
   ROCm/MIGraphX — pass `/dev/kfd` and `/dev/dri` into the container); it is in the testing
-  phase and has not been confirmed on real AMD hardware yet, so it may fall back to CPU.
+  phase; one user report confirms it on a Radeon 760M from 0.1.0.511 on, other cards may still
+  fall back to CPU.
   The universal CPU image always works on AMD. Willing testers welcome, see
   [supported-hardware.md](supported-hardware.md).
 - **A failed accelerator can fall back to CPU too quietly.** If the compute backend
@@ -47,8 +48,8 @@ _Last updated: 2026-10-11 (reference source: backup before the update, restore o
   rate — rerun the source test)"; run the test again to get the real number.
 - **Detection resolution follows the clip's aspect ratio** (long edge
   1280, multiple-of-32 grid — bit-identical detections, about a quarter less GPU work
-  on 16:9). Live watchers have a selectable per-camera processing resolution since
-  0.1.0.199 (360p–2160p, default 1080p); making the clip-analysis base size
+  on 16:9). Live watchers have a selectable per-camera processing resolution (360p, 720p
+  or 1080p, default 1080p); making the clip-analysis base size
   configurable as well is still on the list.
 - **Person recognition (preview): the threshold is measured on one system only.**
   The fixed threshold `koerper_schwelle` (0.65) is the same for every person
@@ -57,7 +58,9 @@ _Last updated: 2026-10-11 (reference source: backup before the update, restore o
   name rather than a wrong one. A person whose images reach the threshold
   against the images of another of your people is switched off for recognition
   (its images are still learned); this compares only your own people with each
-  other, there is no stranger material. Body names are only shown, never sent.
+  other, there is no stranger material. By default a body name is only shown; Frigate,
+  Pushover, Telegram, Home Assistant and the Presence page get it only if you switch
+  that on (`koerper_meldet_*`).
   Scenario-driven decisions themselves are live: the scene window gates stranger alerts, passes with no
   serious face get a quiet class, and body recognition attributes face-less
   passes.

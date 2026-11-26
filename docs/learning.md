@@ -9,13 +9,13 @@ There are two ways in, and they complement each other:
 - The **learning run** described here works through your event history in one go. Use it
   when you set suslik up, or whenever you want to catch up on people it has been unsure
   about. This is the guided path.
-- The **day-to-day path** picks up the same work automatically after every walk-through:
-  suggestions for people it already knows, and clusters for faces it doesn't. That one is
-  described in [usage.md](usage.md#enrollment-teaching-suslik-a-person).
+- The **day-to-day path**: faces suslik doesn't know are grouped automatically after every
+  walk-through, and suggestions for people it already knows are searched when you ask for
+  them. That one is described in [usage.md](usage.md#enrollment-teaching-suslik-a-person).
 
 ## What a learning run does
 
-Open **Known people → Learn people**. The wizard walks through five phases, and the page
+Open **Learn → Face learning run**. The wizard walks through five phases, and the page
 keeps updating while it works — you can close the browser, a run survives restarts and
 resumes where it stopped.
 
@@ -35,7 +35,8 @@ sensible. Widen it afterwards.
 recurring person, gathered across cameras and days. This is the step that turns "hundreds
 of face crops" into "seven people who keep showing up".
 
-**4. Naming.** Your step, and the only one that needs you. The anchor overview helps you
+**4. Naming.** Groups that clearly belong to someone you already named are named by the run
+itself; the rest is your step. The anchor overview helps you
 triage: unnamed clusters carry a **"looks like: X"** badge when their face matches someone
 you already named, and clusters that a newer run re-harvested identically are dimmed with a
 *"same cluster as …"* note so you only name the newest one. Open an anchor cluster: suslik
@@ -61,13 +62,12 @@ quality. Faces recorded at night under infrared illumination are the known weak 
 recognition models are trained on colour images, so a purely infrared reference is worth
 less than a daylight one.
 
-Two phases are listed in the wizard but not active yet: side views and a full-body stock.
-They are being built.
+Two phases are listed in the wizard but not active: side views and a full-body stock. Body
+images for person recognition are learned separately, see [person-recognition.md](person-recognition.md).
 
 ## Settings worth knowing
 
-These live under **Settings → Advanced** (the Settings menu holds Cameras,
-Notifications, Recognition chain and Advanced). The defaults are deliberate starting
+These are on the **Advanced** page in the **Configuration** menu. The defaults are deliberate starting
 values; if a run does not feel right, this is where you tune it, one value at a time.
 
 | Key | What it does |

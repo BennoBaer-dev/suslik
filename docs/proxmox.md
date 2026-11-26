@@ -378,7 +378,7 @@ still waiting, and `pct reboot <ctid>` applies it.
 
 ## Chain 1: Intel iGPU and NPU (gpu image)
 
-This is the only chain that was run on my own hardware (Core Ultra 9 285H, iGPU plus NPU).
+I run this chain on my own hardware (Core Ultra 9 285H, iGPU plus NPU).
 
 Before step 1: the [Common ground](#common-ground) part is done, that is the feature flags plus the
 `pct reboot`, Docker answering inside the container, and enough room on the container volume.
@@ -552,11 +552,12 @@ Then the single line that decides it:
 
 ```bash
 # inside the LXC container
-docker logs suslik 2>&1 | grep -m1 -E "device engaged|running on CPU"
+docker logs suslik 2>&1 | grep -E "device engaged|running on CPU|\[FAIL \]"
 ```
 
 `openvino:GPU — device engaged` means your iGPU is doing the work. With an NPU as well the line
-reads `openvino:MIXED — device engaged (detector=GPU, recognition=NPU)`.
+reads `openvino:MIXED — device engaged (detector=GPU, recognition=NPU)`. A `[FAIL ]` line or
+`running on CPU` means the device is not doing the work; go to step 8.
 
 That is the Proxmox part done. The rest is the ordinary first start: open
 `http://<container-ip>:8199/` in a browser (`hostname -I` inside the container prints the address)
@@ -705,12 +706,13 @@ my own release test machines, so pin a version tag if that matters to you.
 # inside the LXC container
 docker compose up -d
 docker logs -f suslik      # watch the self-check, Ctrl-C once it says ready
-docker logs suslik 2>&1 | grep -m1 -E "device engaged|running on CPU"
+docker logs suslik 2>&1 | grep -E "device engaged|running on CPU|\[FAIL \]"
 ```
 
 `openvino:GPU — device engaged` means the legacy runtime bound your iGPU. Give it time on the
 first start: the runtime compiles kernels before that line appears, so a grep three seconds after
-`up -d` finds nothing and tells you nothing.
+`up -d` finds nothing and tells you nothing. A `[FAIL ]` line or `running on CPU` means the iGPU
+is not doing the work; go to step 7.
 
 Then the Proxmox part is done: open `http://<container-ip>:8199/` in a browser (`hostname -I`
 inside the container prints the address) and the setup wizard takes over
@@ -1229,11 +1231,11 @@ alongside `deploy:`.
 # inside the LXC container
 docker compose up -d
 docker logs -f suslik      # watch the self-check, Ctrl-C once it says ready
-docker logs suslik 2>&1 | grep -m1 -E "device engaged|running on CPU"
+docker logs suslik 2>&1 | grep -E "device engaged|running on CPU|\[FAIL \]"
 ```
 
 `cuda:0 — device engaged` is the answer you want, and unlike `nvidia-smi` it means a real session
-was built on the device.
+was built on the device. Anything else, a `[FAIL ]` line included, is step 10.
 
 Then the Proxmox part is done: open `http://<container-ip>:8199/` in a browser (`hostname -I`
 inside the container prints the address) and the setup wizard takes over
@@ -1283,11 +1285,10 @@ inside the container prints the address) and the setup wizard takes over
 
 ## Chain 4: AMD (rocm image, testing)
 
-The `-rocm` variant is in its testing phase and has no field confirmation on real AMD hardware
-yet, so a CPU fallback is a real possibility here regardless of how well the passthrough goes.
-Reports are genuinely welcome ([supported-hardware.md](supported-hardware.md)). I have no AMD
-hardware here, so this chain is assembled from AMD's documentation plus the Proxmox
-mechanics that the Intel chains proved.
+The `-rocm` variant is still in testing. One user confirmed it on a Radeon 760M (RDNA3); other
+cards have no report yet, so a CPU fallback is possible even when the passthrough is right. I
+have no AMD hardware myself, so this chain follows AMD's documentation and the Proxmox steps from
+the Intel chains. Reports are welcome ([supported-hardware.md](supported-hardware.md)).
 
 Before step 1: the [Common ground](#common-ground) part is done, that is the feature flags plus the
 `pct reboot`, Docker answering inside the container, and enough room on the container volume.
@@ -1429,10 +1430,11 @@ instead, put that group's numeric GID (read **inside the container**) into a `gr
 # inside the LXC container
 docker compose up -d
 docker logs -f suslik      # watch the self-check, Ctrl-C once it says ready
-docker logs suslik 2>&1 | grep -m1 -E "device engaged|running on CPU"
+docker logs suslik 2>&1 | grep -E "device engaged|running on CPU|\[FAIL \]"
 ```
 
-`migraphx:0 — device engaged` means ROCm bound your card.
+`migraphx:0 — device engaged` means ROCm bound your card. A `[FAIL ]` line or `running on CPU`
+means it did not; go to step 7.
 
 Then the Proxmox part is done: open `http://<container-ip>:8199/` in a browser (`hostname -I`
 inside the container prints the address) and the setup wizard takes over
@@ -1449,8 +1451,7 @@ than just reporting a fallback (form of the line, with your own date and time; t
 ```
 
 That line means hurdle one or two is open, so go back to step 3 and 4. If `/dev/kfd` is present
-and it still falls back, you are in the part of the variant that has not been confirmed on real
-hardware yet, and an issue with your GPU model genuinely helps.
+and it still falls back, please open an issue with your GPU model.
 
 ---
 

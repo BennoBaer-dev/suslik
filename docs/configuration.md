@@ -12,12 +12,11 @@ Already migrating from another instance? The wizard also offers **"Already have 
 configuration?"** at the top — upload a previous config backup (see *Configuration backup &
 restore* below) to restore all settings and skip the wizard entirely. Otherwise, the steps are:
 
-1. **Connect Frigate** — enter your Frigate base URL (e.g. `http://<frigate-host>:5000`). Use
-   Frigate's **port 5000** (the internal, *unauthenticated* API) — **not** the authenticated port
-   8971. Frigate authentication (the JWT/login on port 8971) is **not supported yet**, so suslik
-   talks to the unauthenticated port 5000. suslik must be able to reach port 5000 (run it on the
-   same host / Docker network as Frigate, or expose 5000 on your LAN). suslik reads cameras and
-   configuration from Frigate's API. Nothing is hardcoded.
+1. **Connect Frigate** — enter your Frigate base URL, usually the internal, unauthenticated API on
+   port 5000 (e.g. `http://<frigate-host>:5000`; run suslik on the same host or Docker network as
+   Frigate, or expose 5000 on your LAN). If Frigate only answers on its authenticated port 8971,
+   set `frigate_user` and `frigate_password` on the **Advanced** settings page (see *Key
+   settings*). suslik reads cameras and configuration from Frigate's API. Nothing is hardcoded.
 2. **Cameras & zones** — choose which cameras to watch and, optionally, which zones must be
    entered for an event to be considered (see *Zone filter* below). A camera you turn off is fully
    off: suslik fetches and checks nothing from it, not even events where Frigate already assigned
@@ -104,7 +103,6 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   or explicit: `openvino:GPU` \| `openvino:NPU` \| `openvino:MIXED` (Intel), `cuda` \| `cuda:0`
   (NVIDIA), `cpu` (computes on the CPU, available in every image).
   Explicit values are never overridden.
-  Equivalent environment variable: `VERIFY_BACKEND`.
   `cpu` set explicitly is a deliberate choice, not a fallback, also on a GPU image: the log says
   `cpu requested — computing on CPU` instead of warning that the accelerator did not bind, and live
   watchers start in the limited CPU mode (one watcher recommended, they share the CPU cores) instead
@@ -234,7 +232,7 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   hour bar on **Today** as their own state *via person recognition*; red stays confirmed by face or live
   watcher. They are on the
   **Recognition** page (body card) and also on the **Advanced** settings page. The
-  ten settings of the path, all on the **Advanced** settings page (`koerper_lauf` and `koerper_sichtpruefung`
+  nine settings of the path, all on the **Advanced** settings page (`koerper_lauf` and `koerper_sichtpruefung`
   also on the body card of the **Recognition** page); none of the defaults is measured on more than one system:
 
   | Key | Default | Allowed | What it does |
@@ -254,8 +252,8 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   places the body fingerprint on another device (`openvino:GPU`, `openvino:NPU`, `cuda`, `migraphx`, each
   only in the matching image), with a loud fallback to the CPU.
 - **Live watchers** — configured per camera on the **Live** tab, not in the wizard:
-  source (`proxy` / `direct` / `url`), processing resolution (360p–2160p, default
-  1080p), the two times (appearance end, re-arm), and the notification channels per
+  source (`proxy` / `direct` / `url`), processing resolution (360p, 720p or 1080p,
+  default 1080p), the two times (appearance end, re-arm), and the notification channels per
   watcher. See [live-watchers.md](live-watchers.md).
 - **Service log on disk** (`log_datei`, `log_behalten_tage`, `log_max_mb`) — the service, the
   analysis worker and the live-watcher engine all log through one module, and suslik writes the
@@ -295,12 +293,11 @@ Set these on the container (compose `environment:` / `env_file:`, or `docker run
 | Variable | Purpose |
 |---|---|
 | `TZ` | container timezone (e.g. `Europe/Berlin`). **Set this** — otherwise timestamps are UTC. |
-| `VERIFY_BACKEND` | force the backend (overrides `backend` in the store if you prefer env config) |
 | `FRIGATE_URL` | pre-fill the Frigate URL in the wizard (optional) |
 | `SUSLIK_HWDEC` | hardware video decode for analysis frames: `auto` (default — uses the Intel iGPU via VAAPI or an NVIDIA GPU via NVDEC when the image ships a validated driver and the device is passed through; 8-bit 4:2:0 material only), `vaapi` / `nvdec` (force one source), `aus` (always software). Decoded pixels are bit-identical either way; if the hardware path fails, the software decoder takes over and the event is flagged. |
-| Secrets | credentials for Pushover / Telegram / MQTT are provided via environment variables (e.g. an `env_file`), never baked into the image. |
+| `HA_URL`, `HA_TOKEN` | only for Telegram through Home Assistant (`telegram_modus` `ha` or `beide`): the address of your Home Assistant and a long-lived access token. All other channel secrets are entered on the **Notifications** page and stored in `/data`, never baked into the image. |
 
-The service sets `VERIFY_BACKEND` process-wide, and all sub-processes inherit it — so one setting
+The service passes the chosen backend to all its sub-processes, so the one `backend` setting
 controls the whole pipeline.
 
 ## Configuration backup & restore

@@ -42,9 +42,10 @@ banner pointing to the right variant. Field reports welcome.
 **Live watchers and your hardware.** A live watcher decodes its camera stream
 continuously, so it is the most hardware-hungry part of suslik — and built for a GPU
 (on the cpu image watchers run in CPU mode, with slower reactions). There is no capacity verdict:
-enabled means running, limited only by a hard cap of **5 watchers** and a RAM floor
+enabled means running, limited by a cap of **5 watchers** by default (`live_max_slots`, up to
+20) and a RAM floor
 read from the container's memory limit; under load the engine thins its own sampling
 and shows the throttle level. Each watcher has its own **processing resolution**
-(360p–2160p, default **1080p**) — that is the main lever between "runs comfortably"
+(360p, 720p or 1080p, default **1080p**) — that is the main lever between "runs comfortably"
 and "the throttle kicks in". The **Measure load** button tells you what one watcher
 really costs on *your* hardware.

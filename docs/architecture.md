@@ -72,7 +72,7 @@ into each; only the inference runtime and drivers differ:
 | `-gpu-legacy` | `onnxruntime-openvino` + Intel legacy runtime | older Intel iGPUs (Gen 8-11, testing) |
 | `-rocm` | `onnxruntime` + MIGraphX EP | AMD GPUs (testing phase) |
 
-The backend is chosen **at runtime** (via `VERIFY_BACKEND` / the setup wizard). The code is
+The backend is chosen **at runtime**, in the setup wizard or with the `backend` setting. The code is
 backend-agnostic; the same `.py` files run in every image.
 
 **Why not one universal image?** The Intel runtime (`onnxruntime-openvino`) and the NVIDIA
