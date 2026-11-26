@@ -15,7 +15,7 @@ T = {
         "depuis les visages inconnus via le bouton de chaque personne, ou "
         "téléverser une photo ci-dessous, y compris pour une personne "
         "entièrement nouvelle.",
-    "gesichter.galerie.bildzahl": "{n} images",
+    "gesichter.galerie.bildzahl": '{n} images',
     "gesichter.galerie.gemischt": "catalogue qui semble mélangé",
     "gesichter.galerie.vorschlag": "{n} suggestion(s) de retrait",
     "gesichter.galerie.knopf_entfernen": "retirer",
@@ -53,8 +53,8 @@ T = {
     "kameras.steckbrief.fertig": "sera relev\u00e9 au prochain red\u00e9marrage",
     "readme.einleitung": "J'ai écrit ceci parce que ces questions revenaient sans cesse.",
     "readme.kontakt": 'Vos retours sont les bienvenus :',
-    "readme.titel": "À lire d'abord",
-        "readme.knopf": "À lire d'abord",
+    "readme.titel": 'Aide et documentation',
+        "readme.knopf": 'Aide et documentation',
         "readme.schliessen": 'Fermer',
     "readme.zurueck": 'Retour',
         "readme.fuss": 'Ce texte apparaît une fois après chaque redémarrage.',
@@ -106,32 +106,48 @@ T = {
     "readme.lernen.titel": "Comment j'apprends de nouveaux visages ?",
     "readme.lernen.text": "Voici comment j'apprends avec mon système :\n\nApprentissage du visage. La première chose sur un nouveau système. Selon le matériel, les 500 derniers événements, 1000 avec de la marge. Le programme récupère les événements personne, les regroupe et réunit les images. Les connus, il les attribue lui-même. Les inconnus, il les rassemble en groupe, et je donne un nom au groupe. Cela donne la base. Ne s'applique qu'aux visages qui ont été correctement reconnus.\n\nAujourd'hui. Une fois la base en place, ce qui s'ajoute vient d'ici : cliquer sur un événement ou une personne, intégrer le visage.\n\nConnus. Choisir la personne, laisser le programme trouver les visages correspondants. C'est aussi là que je renomme une personne quand le nom contient une faute de frappe. Le programme reporte le nouveau nom dans les données enregistrées, y compris dans les anciens événements. Les journaux et les sauvegardes gardent l'ancien nom.\n\nApprentissage de la personne. Il existe en parallèle, pour les personnes dont le visage n'est pas lisible. J'écrirai plus tard à ce sujet.\n\nQualité. Cet onglet, je l'utilise régulièrement. Il montre à quel point les images d'une personne sont vraiment bonnes, lesquelles sont trop faibles et lesquelles se recoupent avec une autre personne. Celles qui se ressemblent trop, je les enlève.\n\nL'onglet Inconnus est encore là, il vient d'une version antérieure. Je ne l'utilise pas.",
     "readme.mqtt.titel": "Messages MQTT",
-    "readme.mqtt.text": "Depuis 0.1.1.058, chaque message de la surveillance en direct a le champ event. Les automatisations filtrent dessus. faces_recognized et appearance_ended sont nouveaux, les anciens champs restent.\n\nTopic [préfixe]/live/[caméra], QoS 0, sans retain. Ce que le broker manque n'est pas renvoyé.\n\nPar apparition, ils arrivent dans cet ordre :\n\nface_found : premier visage valide. Avec score et, s'il y en a déjà un, un nom provisoire dans schnell_urteil.\n\nface_recognized : un nom a assez de votes. Une fois par nom, avec stufe dans schnell_urteil.\n\nfaces_recognized : juste après. faces contient tous les noms de l'apparition jusqu'ici, chacun avec name et stufe.\n\nappearance_ended : l'apparition est terminée. reason vaut no_face quand le temps de « La visite finit après » est écoulé, ou stopped quand la surveillance ou le moteur s'arrête. En plus faces et duration_s du premier au dernier visage.\n\ndisturbance : surveillance perturbée avec state disturbed, retour à la normale avec state recovered. Au plus un par surveillance et par 10 minutes, le dernier état suit ensuite.\n\nstufe : clear nettement au-dessus de la barre, narrow juste au-dessus, below juste en dessous, none loin en dessous ou non mesurable.\n\n« Pause push » freine Pushover et Telegram, jamais MQTT.",
+    "readme.mqtt.text": (
+        'Depuis 0.1.1.058, chaque message de la surveillance en direct comporte le champ event ; le'
+        's automatisations filtrent dessus. faces_recognized et appearance_ended sont nouveaux ; le'
+        's anciens champs restent.\n\nTopic [prefix]/live/[camera], QoS 0, sans retain. Les messages '
+        'manqués ne sont pas rejoués.\n\nPar apparition, dans cet ordre :\n\nface_found : premier visag'
+        'e valide. Comporte score et, si disponible, un nom provisoire dans schnell_urteil (jugemen'
+        't rapide).\n\nface_recognized : un nom a réuni assez de votes. Une fois par nom, avec stufe '
+        '(niveau) dans schnell_urteil.\n\nfaces_recognized : juste après. faces liste tous les noms d'
+        "e l'apparition jusqu'ici, chacun avec name et stufe.\n\nappearance_ended : l'apparition est "
+        'terminée. reason vaut no_face quand le délai « La visite se termine après » est écoulé, ou'
+        " stopped quand la surveillance ou le moteur s'arrête. Plus faces et duration_s du premier "
+        'au dernier visage.\n\ndisturbance : surveillance perturbée avec state disturbed, retour à la'
+        ' normale avec state recovered. Au plus un par surveillance et par 10 minutes ; le dernier '
+        'état fait foi.\n\nstufe : clear = nettement au-dessus du seuil, narrow = juste au-dessus, be'
+        'low = juste en dessous, none = loin en dessous ou non mesurable.\n\n« Pause push » ralentit '
+        'Pushover et Telegram, jamais MQTT.'
+    ),
     "readme.persoenlich.titel": 'Personnel',
     "readme.persoenlich.text": "C'est purement un loisir. En tant qu'architecte informatique senior, j'ai plaisir à développer quelque chose avec l'IA. Le tout est développé avec Claude Code, principalement avec Fable 5, et avec Opus 5 pour les agents.\n\nCe que je souhaite, ce sont des retours, et cela me fait plaisir quand quelqu'un utilise le système. C'est ma paie.",
     "kameras.titel": "Caméras",
     "kameras.sub":
-        "Lu en direct depuis votre config Frigate, rien n'est codé en dur. "
-        "Si vous <b>désactivez</b> une caméra, suslik n'en récupère et n'en "
-        "vérifie rien, pas même les noms donnés par Frigate. Cochez une ou "
-        "plusieurs <b>zones</b> pour ne vérifier que les événements qui y "
-        "sont entrés (aucune cochée = tous les événements) ; si Frigate a "
-        "déjà donné un nom, suslik le vérifie quand même. Une caméra "
-        "désactivée dans Frigate n'envoie aucun événement ; votre choix "
-        "s'applique dès qu'elle y est réactivée. "
-        '<a href="/kameras?refresh=1">Actualiser</a>.',
+        (
+        'La case à cocher de cette page détermine si suslik utilise une caméra : si vous la décoche'
+        'z, suslik cesse de récupérer et de vérifier les événements de cette caméra, y compris les '
+        "noms déjà attribués par Frigate. Une caméra <b>désactivée</b> dans Frigate n'envoie aucun "
+        'événement. Les <b>zones</b> ne servent qu\'à filtrer les événements. <a href="/kameras?refr'
+        'esh=1">Actualiser</a>.'
+    ),
     "kameras.banner.config_fehler":
         "Impossible de lire la config Frigate&nbsp;: {fehler}",
     "kameras.karte.verwenden": "utiliser cette caméra",
     "kameras.karte.zonen_hinweis": "aucune cochée = tous les événements",
     "kameras.karte.zonen_keine":
         "aucune zone définie dans Frigate — tous les événements",
-    "kameras.karte.rec_an": "rec \u2713",
+    "kameras.karte.rec_an": 'rec ✓',
     "kameras.karte.rec_aus": "pas de rec",
     "kameras.karte.pill_aus": "désactivée dans Frigate",
     "kameras.karte.pill_keine_detektion_titel":
-        "Frigate n'exécute aucune détection de personne sur ce flux "
-        "&mdash; aucun événement ne peut arriver ici",
+        (
+        "Frigate n'effectue aucune détection de personne sur ce flux ; aucun événement de personne "
+        'ne peut donc arriver ici. Activez la détection dans Frigate ou utilisez un autre flux.'
+    ),
     "kameras.karte.pill_keine_detektion": "pas de détection dans Frigate",
     "kameras.karte.prio": "priorité",
     "kameras.prio.low": "basse",
@@ -143,7 +159,7 @@ T = {
     "kameras.fuss.knopf_speichern": "Enregistrer les caméras",
     # -------------------------------------------------- routes/lernen ---
     "lernen.titel": "Suggestions — personnes à apprendre",
-    "lernen.kopf.titel_offen": "Suggestions ({n})",
+    "lernen.kopf.titel_offen": 'Suggestions ({n})',
     "lernen.leer.titel": "Aucune suggestion en attente.",
     "lernen.leer.hinweis":
         "Les bons nouveaux visages (grands, nets, de face, reconnus avec "
@@ -152,7 +168,7 @@ T = {
     "lernen.karte.metrik_voll":
         "score {score} · nouveauté {novelty} · {bw}×{bh}px · frontal "
         "{front} · netteté {sharp}",
-    "lernen.karte.metrik_kurz": "score {score}",
+    "lernen.karte.metrik_kurz": 'score {score}',
     "lernen.karte.link_video": "Vidéo",
     "lernen.karte.knopf_add_person": "Ajouter comme {person}",
     "lernen.karte.knopf_ablehnen": "Écarter",
@@ -182,9 +198,10 @@ T = {
     "areas.verwaltung.knopf_anlegen": "Ajouter un secteur",
     "areas.verwaltung.titel_zuweisen": "Attribuer les caméras",
     "areas.verwaltung.satz_zuweisen":
-        "Une caméra appartient à exactement un secteur&nbsp;; tout ce qui "
-        "n'est pas attribué reste dans Default. L'enregistrement ne "
-        "nécessite aucun redémarrage du service.",
+        (
+        "Une caméra appartient à exactement un secteur ; tout ce qui n'est pas attribué reste dans "
+        "Default. L'enregistrement ne nécessite aucun redémarrage du service."
+    ),
     "areas.verwaltung.pill_nicht_gesehen": "non vue",
     "areas.verwaltung.attr_nicht_gesehen":
         "attribuée auparavant, absente de Frigate en ce moment",
@@ -195,16 +212,17 @@ T = {
     # .507 B3b — Kettungs-Modus je Area (Werte aus core/areas.KETTUNG_MODI).
     "areas.kettung.titel": "Jusqu'où va un passage",
     "areas.kettung.satz":
-        "Un passage est un trajet sur la propriété : les événements "
-        "s'enchaînent tant que l'écart entre eux reste sous votre écart de "
-        "scène. Choisissez par secteur jusqu'où cette chaîne peut aller. Cela "
-        "ne change que le regroupement — l'analyse examine toujours chaque "
-        "caméra séparément et l'affichage reste groupé par secteur.",
+        (
+        "Un passage est un trajet sur la propriété : les événements s'enchaînent tant que l'écart e"
+        "ntre eux reste sous votre écart de scène. Choisissez par secteur jusqu'où cette chaîne peu"
+        "t aller. Cela ne change que le regroupement — l'analyse examine toujours chaque caméra sép"
+        "arément et l'affichage reste groupé par secteur."
+    ),
     "areas.kettung.grundstueck": "un passage pour toute la propriété",
     "areas.kettung.area": "un passage par secteur",
     "areas.kettung.kamera": "chaque caméra séparément",
     # -------------------------------------- routes/benachrichtigungen ---
-    "benachrichtigungen.titel": "Notifications",
+    "benachrichtigungen.titel": 'Notifications',
     "benachrichtigungen.felder.secret_gesetzt":
         "•••• enregistré — laisser vide pour le conserver",
     "benachrichtigungen.felder.secret_leer": "non défini",
@@ -261,12 +279,13 @@ T = {
         "envoyez un test réussi pour reprendre.",
     "benachrichtigungen.telegram.label_modus": "Mode&nbsp;:",
     "benachrichtigungen.telegram.hinweis_modus":
-        "aus=désactivé · ha=via Home Assistant · direkt=bot direct · "
-        "beide=les deux",
+        'aus=désactivé · ha=via Home Assistant · direkt=bot direct · beide=les deux',
     "benachrichtigungen.telegram.label_inhalt": "Pièce jointe&nbsp;:",
     "benachrichtigungen.telegram.hinweis_inhalt":
-        "video=séquence courte, image si indisponible · bild=image seule "
-        "(pas de transcodage — plus léger sur le matériel modeste)",
+        (
+        'video=séquence courte, image si indisponible · bild=image seule (pas de transcodage — plus'
+        ' léger sur le matériel modeste)'
+    ),
     "benachrichtigungen.telegram.label_bot_token": "Token du bot&nbsp;:",
     "benachrichtigungen.telegram.label_chat_id": "Chat ID&nbsp;:",
     "benachrichtigungen.telegram.label_cooldown":
@@ -312,7 +331,7 @@ T = {
         "En attente d'un emplacement d'analyse libre ({belegt} sur "
         "{plaetze} occupés)&nbsp;; la page se recharge d'elle-même dès que "
         "le résultat est là.",
-    "aehnliche.vorschlaege.kachel_zeile": "{wann} · {kamera} · sim {sim}",
+    "aehnliche.vorschlaege.kachel_zeile": '{wann} · {kamera} · sim {sim}',
     "aehnliche.vorschlaege.titel_empfohlen": "Recommandés",
     "aehnliche.vorschlaege.titel_neutral":
         "Neutres — vérifiez l'image avant d'appliquer",
@@ -362,17 +381,19 @@ T = {
     "frigate.kameras.knopf": "Gérer les caméras",
     "frigate.sync.titel": "Synchronisation",
     "frigate.sync.satz":
-        "Maintient les deux bibliothèques de visages alignées&nbsp;: "
-        "envoyer à Frigate les visages examinés, importer ce que seul "
-        "Frigate possède &mdash; toujours votre décision, jamais "
-        "automatique.",
+        (
+        'Compare les deux bibliothèques de visages : envoyez à Frigate les visages vérifiés et impo'
+        "rtez ceux qui existent uniquement dans Frigate. Il s'agit de l'étape de vérification manue"
+        "lle ; la synchronisation automatique s'exécute séparément."
+    ),
     "frigate.sync.knopf": "Examiner &amp; synchroniser",
     "frigate.fr.titel": "La reconnaissance faciale propre à Frigate",
     "frigate.fr.satz":
-        "Frigate sait aussi reconnaître les visages. Ce programme "
-        "fonctionne avec ou sans &mdash; l'interrupteur se trouve dans la "
-        "config de Frigate, lue ici en direct pour que vous sachiez ce "
-        "qu'une synchronisation peut faire à l'instant.",
+        (
+        'Frigate dispose également de sa propre reconnaissance faciale. suslik fonctionne avec ou s'
+        'ans. Le commutateur se trouve dans la configuration de Frigate (lue ici en direct) et déte'
+        "rmine si les téléversements d'images de référence sont acceptés."
+    ),
     "frigate.fr.beweis_unbekannt": "état inconnu — {detail}",
     "frigate.js.url_fehlt": "saisissez l'URL de Frigate",
     "frigate.js.fehler": "erreur\u00a0:",
@@ -393,8 +414,8 @@ T = {
     "ereignisliste.tabelle.kopf_kategorie": "Catégorie",
     "ereignisliste.tabelle.kopf_crop": "Cadrage",
     "ereignisliste.tabelle.kopf_gt": "Confirmer ou corriger (GT)",
-    "ereignisliste.tabelle.frigate_zelle": "{label} {score} (cos {cos})",
-    "ereignisliste.tabelle.link_log": "log",
+    "ereignisliste.tabelle.frigate_zelle": '{label} {score} (cos {cos})',
+    "ereignisliste.tabelle.link_log": 'log',
     "ereignisliste.tabelle.link_video": "vidéo",
     "ereignisliste.tabelle.attr_unvollstaendig":
         "séquence incomplète — jugée sur la portion lisible",
@@ -411,7 +432,7 @@ T = {
         "matériel)",
     "konfiguration.kette.person_zeitpunkt":
         "par événement, décidé selon le verdict du passage",
-    "konfiguration.kette.vision_titel": "Vision",
+    "konfiguration.kette.vision_titel": 'Vision',
     "konfiguration.kette.vision_kosten":
         "une requête par passage vers l'endpoint vision configuré",
     "konfiguration.kette.vision_zeitpunkt": "à la fin du passage",
@@ -430,29 +451,38 @@ T = {
     "konfiguration.kette.zeile_kosten": "coût&nbsp;: {kosten}",
     "konfiguration.kette.titel": "Chaîne de reconnaissance",
     "konfiguration.kette.satz":
-        "Quels moteurs de reconnaissance tournent, et dans quel ordre. La "
-        "condition \"nur_wenn_gesicht_leer\" signifie&nbsp;: l'étape ne "
-        "s'exécute que si la voie du visage n'a PAS pu confirmer tout le "
-        "monde lors du passage — décidé sur l'ensemble du passage, jamais "
-        "sur un événement isolé. Modifier l'ordre lui-même viendra plus "
-        "tard&nbsp;; aujourd'hui la chaîne commence toujours par la voie "
-        "du visage.",
+        (
+        'Condition "nur_wenn_gesicht_leer" : l\'étape ne s\'exécute que lorsque la voie du visage n\'a'
+        " pas pu confirmer tout le monde sur l'ensemble du passage, jamais pour un seul événement."
+    ),
     "konfiguration.knopf_speichern": "Enregistrer + redémarrer",
     "konfiguration.kette_blatt.hinweis":
         "Les modifications sont journalisées (config_audit.jsonl)&nbsp;; "
         "après l'enregistrement, le service redémarre proprement.",
     "antwort.support_token_neu": "nouveau token de support cree — l'ancien n'est plus valable ; copiez-le maintenant, il n'est montre que cette fois",
-    "konfiguration.neustart.titel": "Redémarrer le service",
-    "konfiguration.neustart.satz": "Redémarre ce service sur place (le conteneur continue de tourner, toutes les données restent). À utiliser quand le traitement semble bloqué ; les événements en attente sont repris après le redémarrage.",
-    "konfiguration.neustart.knopf": "Redémarrer maintenant",
+    "konfiguration.neustart.titel": 'Redémarrer le service de traitement',
+    "konfiguration.neustart.satz": (
+        'Redémarre ce service sur place (le conteneur continue de fonctionner et les données sont c'
+        'onservées). Utilisez cette option si le traitement semble bloqué ; les événements en atten'
+        'te reprennent après le redémarrage.'
+    ),
+    "konfiguration.neustart.knopf": 'Redémarrer le traitement',
     "konfiguration.neustart.frage": "Redémarrer le service maintenant ? Le traitement s'interrompt quelques secondes.",
     "antwort.neustart": "Redémarrage en cours — cette page répond de nouveau dans quelques secondes.",
     "konfiguration.support.titel": "Acces support a distance",
-    "konfiguration.support.satz": "Telechargement en lecture seule de zones nommees (logs, config masquee, visages, passes d'apprentissage, materiel corporel, fichiers d'etat, liste des threads du service) pour le detenteur du token de support. L'interrupteur support_zugriff se trouve dans le tableau ci-dessous, desactive par defaut. Chaque requete est ecrite dans le log du service. Les zones visages et corps contiennent des images de personnes reelles — remettez le token avec prudence. Sans TLS devant ce service, le token circule en clair. Le jeton permet aussi six actions : redemarrer ce service a distance (POST /support/restart), renvoyer des evenements dans la reconnaissance (POST /support/einspielen), activer ou desactiver la mesure fine (POST /support/feinmessung), activer ou desactiver le log de debug sans redemarrage (POST /support/debug), mesurer de petites operations sur fichiers dans le service et dans un nouveau processus (POST /support/dateiprobe) et vider une fois le cache des clips (POST /support/cache_leeren).",
+    "konfiguration.support.satz": (
+        'Le jeton de support permet de télécharger tout le dossier de données (configuration masqué'
+        'e), ainsi que six actions à distance : redémarrage, rejeu, mesure fine, bascule du mode dé'
+        'bogage, inspection de fichiers et vidage du cache. suslik utilise HTTP en clair ; sans pro'
+        'xy inverse TLS, le jeton circule sans chiffrement. Traitez-le comme un mot de passe.'
+    ),
     "konfiguration.support.token_gesetzt": "Un token de support est defini.",
     "konfiguration.support.token_fehlt": "Pas encore de token de support.",
     "konfiguration.support.knopf_token": "Creer un nouveau token",
-    "konfiguration.support.einmal_hinweis": "Le token apparait ici exactement une fois apres sa creation — conservez-le ; ensuite seul ••• est affiche.",
+    "konfiguration.support.einmal_hinweis": (
+        'Le jeton est affiché exactement une fois après sa création. Copiez-le maintenant : il ne p'
+        'eut pas être récupéré ; par la suite, seul ••• est affiché.'
+    ),
     "konfiguration.titel": "Paramètres avancés",
     "konfiguration.kopf.satz1":
         "Les modifications sont journalisées (config_audit.jsonl)&nbsp;; "
@@ -469,13 +499,21 @@ T = {
     "konfiguration.frigate_auth.erkl_user":
         "nom d'utilisateur d'un compte Frigate. Vide = aucune connexion ; le vider "
         "efface aussi le mot de passe enregistr\u00e9",
+    "konfiguration.frigate_auth.label_user": "Nom d'utilisateur Frigate",
+    "konfiguration.frigate_auth.label_password": 'Mot de passe Frigate',
+    "konfiguration.param.sub_label_schreiben": 'Écrire les sous-étiquettes',
+    "konfiguration.param.support_zugriff": 'Accès pour le support',
+    "konfiguration.param.clip_aufnahme_deckel_s": "Délai maximal d'attente des clips (secondes)",
+    "konfiguration.param.live_verworfen_speichern": 'Enregistrer les images en direct rejetées',
     "konfiguration.frigate_auth.erkl_password":
         "mot de passe de ce compte. Il est enregistr\u00e9 avec vos autres r\u00e9glages dans "
         "/data et n'est jamais r\u00e9affich\u00e9 \u2014 laissez le champ vide pour le conserver",
     "konfiguration.frigate_auth.erkl_tls":
-        "v\u00e9rifier le certificat TLS de Frigate. Le port authentifi\u00e9 de Frigate est "
-        "livr\u00e9 avec un certificat auto-sign\u00e9 : d\u00e9sactivez ceci si vous l'atteignez en "
-        "https sans avoir remplac\u00e9 ce certificat",
+        (
+        'Vérifier le certificat TLS de Frigate. Le port authentifié de Frigate (8971) est fourni av'
+        'ec un certificat auto-signé. Désactivez la vérification uniquement pour ce port en HTTPS s'
+        "i vous n'avez pas remplacé le certificat."
+    ),
     "konfiguration.frigate_auth.pw_gesetzt": "enregistr\u00e9 \u2014 laissez vide pour le conserver",
     "konfiguration.frigate_auth.pw_leer": "aucun mot de passe enregistr\u00e9",
     "konfiguration.abschnitt_alle": "Tous les paramètres",
@@ -494,7 +532,7 @@ T = {
     "lernanker.bin.rechts": "Regard vers la droite",
     "lernanker.kachel.attr_clip":
         "{kamera} · det {det} · un clic ouvre la séquence",
-    "lernanker.kachel.attr_kurz": "{kamera} · det {det}",
+    "lernanker.kachel.attr_kurz": '{kamera} · det {det}',
     "lernanker.kachel.attr_klick": "ouvrir la séquence",
     "lernanker.kachel.grund_fehlt": "non évalué",
     "lernanker.detail.gruppe": "Groupe {pos} sur {gesamt}",
@@ -570,9 +608,7 @@ T = {
         "{n} groupe(s) supprimé(s) par vous (images effacées, conservés à titre d’enregistrement)",
     "lernanker.titel": "Groupes d'ancrage",
     "lernanker.liste.leer":
-        "Aucun point d'ancrage pour l'instant — une session "
-        "d'apprentissage les construit (Préparation → Collecte → "
-        "Regroupement).",
+        "Aucun groupe pour le moment. Lancez d'abord une passe d'apprentissage (Préparation → Collecte → Regroupement).",
     "lernanker.liste.leer_link": "Ouvrir la page de la session d'apprentissage",
     "lernanker.liste.kopf":
         "{n} groupes à partir de {ges} visages aptes à l'ancrage — {ok} "
@@ -597,10 +633,11 @@ T = {
     "syncauswahl.titel":
         "Examiner &amp; synchroniser — références vers Frigate",
     "syncauswahl.kopf.satz":
-        "Frigate passe chaque référence téléversée dans son propre "
-        "détecteur de visages et refuse les images où il n'en trouve "
-        "aucun. Cette page vérifie d'abord la même chose, vous montre "
-        "chaque candidat et n'envoie que ce que vous cochez.",
+        (
+        "Frigate refuse les références sans visage détectable. Cette page le vérifie à l'avance, li"
+        "ste les candidats et n'envoie que ceux qui sont cochés. La synchronisation automatique uti"
+        "lise la même liste d'exclusion."
+    ),
     "syncauswahl.fehler.titel": "Candidats indisponibles",
     "syncauswahl.fehler.satz":
         "La liste des candidats nécessite un Frigate joignable — sa "
@@ -651,7 +688,7 @@ T = {
         "(lue depuis Frigate au chargement de cette page) — il accepte "
         "les téléversements de références.",
     "syncauswahl.fr.titel_aus":
-        "Reconnaissance faciale de Frigate&nbsp;: désactivée",
+        'Reconnaissance faciale de Frigate : désactivée (téléversements rejetés)',
     "syncauswahl.bilanz.titel": "Bilan",
     "syncauswahl.bilanz.hauptzeile":
         "images de référence · {beide} déjà dans Frigate · {bereit} "
@@ -661,8 +698,8 @@ T = {
     "syncauswahl.bilanz.exportiert":
         "{n} envoyées auparavant (Frigate les a renommées)",
     "syncauswahl.bilanz.abgewaehlt": "{n} désélectionnées",
-    "syncauswahl.bilanz.vorrat": "{n} référence(s) du stock en local uniquement (basées sur l'embedding, non transférables)",
-    "syncauswahl.bilanz.nur_frigate": "{n} seulement dans Frigate",
+    "syncauswahl.bilanz.vorrat": "{n} référence(s) uniquement en local (basées sur l'embedding, non transférables)",
+    "syncauswahl.bilanz.nur_frigate": '{n} image(s) de référence existent uniquement dans Frigate',
     "syncauswahl.bilanz.je_person": "Dans Frigate, par personne&nbsp;:",
     "syncauswahl.bilanz.kandidaten.eins": "{n} candidat",
     "syncauswahl.bilanz.kandidaten.viele": "{n} candidats",
@@ -701,14 +738,12 @@ T = {
     "syncauswahl.gruppe.prueft": "{n} encore en vérification",
     "syncauswahl.geloescht.zusatz": "— votre décision",
     "syncauswahl.geloescht.satz":
-        "Celles-ci sont encore dans votre bibliothèque, mais Frigate ne "
-        "les a plus sous le nom avec lequel elles avaient été "
-        "enregistrées. suslik ne les renvoie jamais sans votre "
-        "décision&nbsp;: supprimer un visage dans Frigate peut être "
-        "volontaire. Proposez-la à nouveau pour en faire un candidat "
-        "normal — dès lors la prochaine synchronisation, y compris "
-        "l'automatique, la téléverse. Respectez la suppression pour la "
-        "garder définitivement à l'écart.",
+        (
+        'Toujours dans votre bibliothèque, mais disparue de Frigate sous ce nom. suslik ne la renvo'
+        "ie jamais sans votre choix, car la suppression peut être intentionnelle. 'Offer again' réa"
+        "ctive l'envoi, y compris la synchronisation automatique ; 'Respect deletion' le bloque déf"
+        'initivement.'
+    ),
     "syncauswahl.aufklapp": "— afficher",
     "syncauswahl.api.titel":
         "{n} exportées auparavant — Frigate les conserve sous ses "
@@ -732,16 +767,16 @@ T = {
         "les copie dans votre bibliothèque&nbsp;; rien ne change dans "
         "Frigate.",
     "syncauswahl.import.warnung":
-        "Cette liste peut inclure vos propres téléversements&nbsp;: "
-        "Frigate renomme chaque référence qu'il accepte, suslik ne peut "
-        "donc pas les distinguer des visages ajoutés directement dans "
-        "Frigate. Les réimporter dupliquerait du contenu.",
-    "syncauswahl.import.knopf": "Les importer dans suslik",
+        (
+        "Attention : l'importation peut dupliquer des visages que vous possédez déjà, car Frigate r"
+        "enomme les téléversements et suslik ne peut pas les distinguer. Vérifiez avant d'importer."
+    ),
+    "syncauswahl.import.knopf": 'Importer dans suslik les images présentes uniquement dans Frigate',
     "syncauswahl.raus.satz":
-        "Mémorisées volontairement&nbsp;: celles-ci restent dans votre "
-        "bibliothèque mais ne sont jamais envoyées à Frigate, pas même "
-        "par la synchronisation automatique. Rétablir en remet une sur "
-        "la liste des candidats.",
+        (
+        "Ignoré volontairement : reste dans votre bibliothèque et n'est jamais envoyé à Frigate, mê"
+        "me par la synchronisation automatique. 'Restore' le remet dans la liste des candidats."
+    ),
     "syncauswahl.alter.unbekannt": "âge inconnu",
     "syncauswahl.alter.sekunden": "il y a {s} s",
     "syncauswahl.alter.minuten": "il y a {m} min",
@@ -758,18 +793,17 @@ T = {
     "syncauswahl.ergebnis.dauer": "a duré {n} s",
     # ---------------------------------------------------- routes/live ---
     "live.hinweis_cpu":
-        "Mode CPU&nbsp;: les surveillances coûtent cher ici — la "
-        "vérification rapide prend typiquement 1–2 s (une version GPU "
-        "réagit en moins d'une seconde), et les surveillances "
-        "supplémentaires se ralentissent mutuellement. Leur nombre reste "
-        "votre choix&nbsp;; nous recommandons de commencer par une seule.",
+        (
+        'Sur CPU, chaque surveillance est coûteuse : un contrôle d’image prend environ 1–2 s (GPU :'
+        ' moins d’1 s), et les surveillances se disputent le CPU. Commencez par une seule.'
+    ),
     "live.zeile.alter": "(âgé de {tage} jour(s))",
     "live.test.zeile":
         "test de source {wann}&nbsp;: {aufloesung} → {skala}, "
         "{bilder_s} images/s",
     "live.test.durchsatz":
         "(débit, pas la cadence de livraison — relancez le test de source)",
-    "live.test.provider": "provider {provider}",
+    "live.test.provider": 'fournisseur {provider}',
     "live.test.sw": "(décodage logiciel)",
     "live.test.entwertet":
         "— INVALIDÉ&nbsp;: la source a changé depuis ce test",
@@ -780,8 +814,7 @@ T = {
         "dernier test de source ÉCHOUÉ ({wann})&nbsp;: {fehler}",
     "live.messung.zeile": "charge mesurée le {wann}&nbsp;: {text}",
     "live.messung.veraltet":
-        "— OBSOLÈTE&nbsp;: la source a changé depuis cette mesure, "
-        "mesurez à nouveau",
+        '— OBSOLÈTE : la source a changé depuis cette mesure ; mesurez à nouveau',
     "live.messung.fehlgeschlagen":
         "dernière mesure de charge ÉCHOUÉE ({wann})&nbsp;: {fehler}",
     "live.zaehler.auftritte": "{n} visites",
@@ -791,11 +824,12 @@ T = {
     "live.zaehler.letzter": "dernier {zeit}",
     "live.zaehler.kopf": "Depuis le démarrage\u00a0:",
     "live.engine.titel_aus": "Moteur de surveillance&nbsp;: à l'arrêt",
-    "live.engine.satz_aus": "Aucun signal de vie du processus moteur. Les emplacements montrent la configuration enregistrée&nbsp;; activer, tester sur une surveillance en cours et mesurer la charge nécessitent le moteur — le service le démarre automatiquement dès qu'au moins une surveillance est activée.",
+    "live.engine.satz_aus": (
+        'Le moteur live est arrêté : aucun signal de vie. Les paramètres ci-dessous sont enregistré'
+        's, mais inactifs. Activez au moins une surveillance pour démarrer le moteur.'
+    ),
     "live.engine.cpu_mit_limit":
-        "CPU suslik à l'instant&nbsp;: {kerne} sur {limit} cœurs "
-        "autorisés (conteneur entier&nbsp;: surveillances, analyse, "
-        "service)",
+        'CPU suslik actuellement : {kerne} sur {limit} cœurs autorisés (conteneur entier : surveillances, analyse, service)',
     "live.engine.cpu_ohne_limit":
         "CPU suslik à l'instant&nbsp;: {kerne} cœurs (conteneur "
         "entier&nbsp;: surveillances, analyse, service)",
@@ -843,11 +877,11 @@ T = {
     "live.intro": "Une surveillance regarde une caméra en direct et signale un visage pendant que la personne est encore dans l’image.",
     "live.intro_link": "Comment fonctionne la surveillance",
     "live.marke.aktiv": "{n} actives",
-    "live.platz.name": "Live {n}",
-    "live.platz.frei": "libre",
-    "live.frei.titel": "Live {n} est libre",
+    "live.platz.name": 'Live {n}',
+    "live.platz.frei": 'inutilisé',
+    "live.frei.titel": 'Live {n} n’est pas utilisé',
     "live.frei.satz": "Attribuez une caméra à cet emplacement. Ensuite, réglez ici ce qu’elle signale et activez-la.",
-    "live.frei.keine": "Chaque caméra a déjà un emplacement.",
+    "live.frei.keine": 'Tous les emplacements sont utilisés.',
     "live.knopf_zuweisen": "Attribuer la caméra",
     "live.knopf_leeren": "Vider l’emplacement",
     "live.kopf.kamera": "Caméra",
@@ -889,7 +923,7 @@ T = {
     "live.pause.kopf": "À partir du premier visage d’une visite signalée, c’est le calme pendant ce délai\u00a0:",
     "live.pause.besuche": "Les visites qui commencent pendant ce délai n’ont ni vidéo ni «\u00a0Personne inconnue\u00a0».",
     "live.pause.name": "Le même nom ne revient qu’après le même nombre de secondes.",
-    "live.detail.scharf_hinweis": "Home Assistant (MQTT) ne fait jamais de pause.",
+    "live.detail.scharf_hinweis": 'Home Assistant (MQTT) ignore la mise en pause des notifications push.',
     "live.abschnitt.test": "Test de source",
     "live.detail.gesperrt_hinweis":
         "tester et mesurer sont indisponibles tant que la surveillance "
@@ -945,8 +979,8 @@ T = {
     "live.eigenepruefen.schalter": "Revérifier ses événements Frigate",
     "live.eigenepruefen.erklaerung": "Analyser aussi les événements que cette surveillance crée dans Frigate.",
     "live.workeraus.erklaerung": "Tant que la surveillance tourne, l’analyse des événements ignore ceux de cette caméra, sauf quand Frigate nomme lui-même une personne.",
-    "live.frigate.schalter": "Créer un événement dans Frigate",
-    "live.frigate.erklaerung": "Pour un nom reconnu, un événement propre portant ce nom.",
+    "live.frigate.schalter": 'Créer un événement Frigate pour une personne reconnue',
+    "live.frigate.erklaerung": 'Crée son propre événement portant le nom reconnu. Facultatif.',
     "live.frigate.abstand_label": "Écart par personne",
     "live.frigate.abstand_hinweis": "Vide signifie la pause push.",
     # --- WS2 (Bauplan analysen/bauplan_waechterseite.md): die Einstellseite eines Waechters nach der
@@ -955,7 +989,7 @@ T = {
     "live.zustand.untested": "test requis",
     "live.zustand.checking": "vérification de la source",
     "live.zustand.tested": "prête à activer",
-    "live.zustand.active": "active",
+    "live.zustand.active": 'actif',
     "live.zustand.disturbed": "perturbée",
     "live.zustand.unsupported": "indisponible ici",
     "live.kopf.zustand_fps": "{zustand}, {fps} images/s",
@@ -967,10 +1001,10 @@ T = {
     "live.alter.heute": "aujourd’hui",
     "live.alter.tage.eins": "il y a {n} jour",
     "live.alter.tage.viele": "il y a {n} jours",
-    "live.einheit.s": "s",
-    "live.abschnitt.mqtt": "Home Assistant (MQTT)",
+    "live.einheit.s": 'secondes',
+    "live.abschnitt.mqtt": 'Home Assistant (MQTT)',
     "live.mqtt.zweck": "Pour les automatisations de la maison. Part avant tous les autres canaux, toujours en anglais, sans pause push.",
-    "live.mqtt.topic": "Topic",
+    "live.mqtt.topic": 'Sujet',
     "live.mqtt.nutzen": "Envoyer à Home Assistant",
     "live.mqtt.broker": "Broker et accès sont sur la page",
     "live.mqtt.meldungen": "Les {n} messages",
@@ -987,8 +1021,11 @@ T = {
     "live.push.video_hinweis": "Une vidéo par visite signalée, à partir du premier visage.",
     "live.push.nur_telegram": "Telegram seulement",
     "live.push.videolaenge": "Durée de la vidéo",
-    "live.push.neben": "Signaler aussi les inconnus à côté des personnes reconnues",
-    "live.push.neben_hinweis": "«\u00a0Personne inconnue\u00a0» arrive alors aussi quand quelqu’un a été reconnu dans la même visite, sans image.",
+    "live.push.neben": 'Signaler aussi les personnes inconnues lors de visites où une personne a été reconnue',
+    "live.push.neben_hinweis": (
+        'Un message « Personne inconnue » est alors aussi envoyé lorsqu’une personne a été reconnue'
+        ' au cours de la même visite, sans image.'
+    ),
     "live.abschnitt.besuch": "Visite",
     "live.besuch.zweck": "Une visite commence au premier visage et se termine quand aucun n’a été vu pendant ce délai. Ensuite, la même personne peut être reconnue de nouveau.",
     "live.besuch.global": "Identique pour toutes les caméras\u00a0: {fps} images par seconde, {stimmen} votes minimum.",
@@ -1177,10 +1214,12 @@ T = {
     "erkennung.knopf_register_face": "Enregistrer un visage …",
     "erkennung.gesicht.titel": "Reconnaissance faciale",
     "erkennung.gesicht.satz":
-        "La voie la plus précise&nbsp;: chaque passage est confronté aux "
-        "visages des personnes que vous avez apprises au système. C'est "
-        "l'épine dorsale — corps et vision dépendent de son verdict de "
-        "passage, elle n'a donc pas d'interrupteur aujourd'hui.",
+        (
+        'La méthode la plus précise : chaque passage est comparé aux visages des personnes que vous'
+        " avez enseignés au système. C'est la base : le corps et la vision dépendent de son verdict"
+        ' de passage, donc elle ne peut pas être désactivée dans cette version (le corps et la visi'
+        'on en dépendent).'
+    ),
     "erkennung.gesicht.beweis_personen": "{n} personnes",
     "erkennung.gesicht.beweis_bilder": "{n} images de référence",
     "erkennung.gesicht.knopf_verwalten": "Gérer les personnes …",
@@ -1195,7 +1234,7 @@ T = {
         "à l'arrêt (la détection vision est désactivée)",
     "erkennung.koerper.knopf_register": "Enregistrer un corps …",
     "erkennung.koerper.melden.titel": "Notifie :",
-    "erkennung.koerper.melden.nur_anzeige": "affichage seul",
+    "erkennung.koerper.melden.nur_anzeige": 'affichage seul',
     "erkennung.koerper.melden.leer": "Rien de sélectionné : le nom est seulement affiché.",
     "erkennung.koerper.melden.nicht_eingerichtet": "non configuré",
     "erkennung.koerper.melden.aria": "Canaux de notification de la reconnaissance de personne",
@@ -1203,10 +1242,12 @@ T = {
     "erkennung.koerper.schwelle": "Seuil pour un nom par le corps",
     "erkennung.koerper.schwelle_satz": "Plus haut est plus strict. Les personnes qui se ressemblent trop restent désactivées jusqu'à un seuil plus élevé (page Images de corps).",
     # Stufe KW12: Labels der Unteroptionen wie in en (die Hilfe zitiert sie englisch).
-    "erkennung.unter.immer": "Always",
-    "erkennung.unter.nur_ohne_gesicht": "Only if no face",
-    "erkennung.unter.wenn_noetig": "If needed",
+    "erkennung.unter.immer": 'Toujours',
+    "erkennung.unter.nur_ohne_gesicht": 'Seulement si aucun visage',
+    "erkennung.unter.wenn_noetig": 'Si nécessaire',
     "erkennung.vision.titel": "Vision IA",
+    "erkennung.vision.status_paused": 'En pause',
+
     "erkennung.vision.beta": "Bêta",
     "erkennung.vision.satz":
         "Une IA d'image comme arbitre pour les cas difficiles. Nécessite "
@@ -1293,7 +1334,7 @@ T = {
     "qualitaet.tabelle.kopf_front": "de face",
     "qualitaet.tabelle.kopf_rechts": "droite &rarr;",
     "qualitaet.tabelle.kopf_doppel": "similaires",
-    "qualitaet.tabelle.kopf_verwechslung": "confusion",
+    "qualitaet.tabelle.kopf_verwechslung": 'confusion',
     "qualitaet.person.funde": "{n} photo(s) à regarder de près",
     "qualitaet.person.verwechselt": "confusion possible",
     "qualitaet.person.alles_gut": "tout va bien",
@@ -1344,8 +1385,8 @@ T = {
     # ---------------------------------------------- routes/lernwizard ---
     "lernwizard.titel": "Session d'apprentissage",
     "lernwizard.link_how": "Comment ça marche &#8230;",
-    "lernwizard.dauer.lang": "{m} min {s} s",
-    "lernwizard.dauer.kurz": "{s} s",
+    "lernwizard.dauer.lang": '{m} min {s} s',
+    "lernwizard.dauer.kurz": '{s} s',
     "lernwizard.phase.vorbereitung": "Préparation",
     "lernwizard.phase.ernte": "Collecte (rassembler les visages)",
     "lernwizard.phase.anker": "Regroupement (points d'ancrage)",
@@ -1415,7 +1456,7 @@ T = {
     "lernwizard.wizard.dauer_zeile":
         "analyse ~{analyse} · téléchargements de séquences ~{download} · "
         "préchauffage unique {kalt}",
-    "lernwizard.wizard.dauer_gesamt": "total ~{gesamt}",
+    "lernwizard.wizard.dauer_gesamt": 'total ~{gesamt}',
     "lernwizard.wizard.schwellen_titel":
         "Seuils (modifiables dans Paramètres avancés)",
     "lernwizard.wizard.frage":
@@ -1434,8 +1475,8 @@ T = {
     "lernwizard.balken.pose": "Position de la tête",
     "lernwizard.balken.erkennen": "Reconnaissance des visages",
     "lernwizard.balken.z_frames": "image {f} sur {s}",
-    "lernwizard.balken.z_posen.eins": "{n} pose",
-    "lernwizard.balken.z_posen.viele": "{n} poses",
+    "lernwizard.balken.z_posen.eins": '{n} pose',
+    "lernwizard.balken.z_posen.viele": '{n} poses',
     "lernwizard.balken.z_erkannt.eins": "{n} reconnu",
     "lernwizard.balken.z_erkannt.viele": "{n} reconnus",
     "lernwizard.balken.wartet": "en attente",
@@ -1631,7 +1672,7 @@ T = {
         "{n} groupes de visages prêts&nbsp;:",
     "lernwizard.erfolg.knopf_anker": "Voir les groupes d'ancrage",
     "lernwizard.erfolg.hinweis": "ouvrez un groupe pour le nommer",
-    "lernwizard.expert.phasen_titel": "Phases",
+    "lernwizard.expert.phasen_titel": 'Phases',
     "lernwizard.expert.phasen_hinweis":
         "Préparation, Collecte, Regroupement, Nommage et intégration "
         "dans le Master s'exécutent réellement dans cette version — les "
@@ -1645,14 +1686,14 @@ T = {
     "lernwizard.expert.lauf_bleibt":
         "cette session reste — ses points d'ancrage demeurent disponibles",
     # --------------------------------- Stufe 1: Einhang/Skelett (webui) ---
-    "nav.bereich.activity": "Passages",
+    "nav.bereich.activity": 'Activité',
     "nav.bereich.faces": "Visages",
     "nav.bereich.learn": "Apprentissage",
-    "nav.bereich.person": "Personne",
-    "nav.bereich.vision": "Vision",
+    "nav.bereich.person": 'Reconnaissance corporelle',
+    "nav.bereich.vision": 'Vision',
     "nav.bereich.live": "En direct",
-    "nav.bereich.frigate": "Frigate",
-    "nav.bereich.configuration": "Configuration",
+    "nav.bereich.frigate": 'Frigate',
+    "nav.bereich.configuration": 'Configuration',
     "nav.bereich.erkennungstest": "Test de reconnaissance",
     "nav.bereich.system": "Système",
     "nav.heute": "Aujourd'hui",
@@ -1664,7 +1705,7 @@ T = {
     "nav.qualitaet": "Qualité",
     "nav.lernlauf": "Apprentissage du visage",
     "nav.anker": "Points d'ancrage",
-    "nav.lernen": "Suggestions",
+    "nav.lernen": 'Suggestions',
     "nav.person": "Images de corps",
     "nav.koerpernamen": "Personnes nommées",
     "nav.vision": "Détection par vision",
@@ -1672,7 +1713,7 @@ T = {
     "nav.live_alerts": "Alertes en direct",
     "nav.erkennung": "Reconnaissance",
     "nav.kameras": "Caméras",
-    "nav.benachrichtigungen": "Notifications",
+    "nav.benachrichtigungen": 'Notifications',
     "nav.areas": "Secteurs",
     "nav.kette": "Chaîne de reconnaissance",
     "nav.konfiguration": "Avancé",
@@ -1680,12 +1721,12 @@ T = {
     "nav.system": "Système",
     "nav.systemstat": "Statistiques système",
     "nav.sync_auswahl": "Synchronisation Frigate",
-    "nav.frigate": "Frigate",
+    "nav.frigate": 'Frigate',
     "ui.fuss.log": "Journal du service",
     "ui.fuss.docs": "Documentation",
-    "ui.fuss.health": "health",
-    "ui.modus.easy": "Easy",
-    "ui.modus.expert": "Expert",
+    "ui.fuss.health": 'santé',
+    "ui.modus.easy": 'Simple',
+    "ui.modus.expert": 'Expert',
     "ui.modus.tooltip": "Easy affiche les pages essentielles — Expert affiche tout. Rien n'est supprimé, Easy ne fait que masquer.",
     "ui.live.chip": "En direct",
     "ui.theme.knopf": "Thème",
@@ -1722,7 +1763,7 @@ T = {
     # diesem Wert); jede Richtung prueft die Gate-Stufe Sprach-Deckung.
     "js.status.fehler": "erreur",
     "js.status.fehler_gross": "Erreur",
-    "js.status.ok": "ok",
+    "js.status.ok": 'ok',
     "js.status.speichern": "enregistrement …",
     "js.status.gespeichert": "enregistré",
     "js.status.senden": "envoi …",
@@ -1740,9 +1781,9 @@ T = {
     "js.status.ueberspringen": "mise à l'écart …",
     "js.status.siehe_log": "voir le journal du service",
     "js.status.diagnose": "diagnostic",
-    "js.einheit.min": "{n} min",
-    "js.einheit.s": "{n} s",
-    "js.einheit.klammer_s": "({n} s)",
+    "js.einheit.min": '{n} min',
+    "js.einheit.s": '{n} s',
+    "js.einheit.klammer_s": '({n} s)',
     "js.allg.abbrechen": "Annuler",
     "js.neustart.zurueck": "Le service est revenu, chargement …",
     "js.neustart.kommt": "Le service revient …",
@@ -1753,8 +1794,11 @@ T = {
     "js.lernlauf.tag_fehlt": "choisir d'abord un jour",
     "js.lernlauf.abbruch_frage": "Interrompre cette session d'apprentissage ?",
     "js.notif.frage": "Enregistrer les paramètres de notification et redémarrer le service ?",
-    "js.frigate.ro_frage": "Passer en LECTURE SEULE ? suslik cessera d'écrire dans Frigate.",
-    "js.frigate.rw_frage": "Activer l'ÉCRITURE dans Frigate (sub_labels + synchronisation des références) ?",
+    "js.frigate.ro_frage": (
+        "Désactiver l'écriture (lecture seule) ? suslik n'écrira plus les noms reconnus ni les sous"
+        '-étiquettes dans Frigate et ne téléversera plus de visages de référence.'
+    ),
+    "js.frigate.rw_frage": "Activer l'écriture ? suslik écrira les noms reconnus dans Frigate (sub_labels + synchronisation des références).",
     "js.catchup.frage": "Ne plus rattraper les événements manqués au démarrage ? Le service redémarre pour appliquer ce choix.",
     "catchup.knopf": 'Rattraper',
     "catchup.knopf.tooltip": 'Des événements non traités sont en attente',
@@ -1823,7 +1867,7 @@ T = {
         "référence, {person} ne pourra plus être reconnu. Les jeux de "
         "référence vont dans l'archive (rien n'est supprimé). Continuer ?",
     "js.dienst.nicht_erreichbar": "service injoignable — réessayer dans un instant.",
-    "js.unb.tick": "{phase} … {s} s",
+    "js.unb.tick": '{phase} … {s} s',
     "js.unb.besucher_frage": "Ignorer comme visiteur inconnu habituel ? Il ne déclenchera plus d'alertes. (Réactivable à tout moment ci-dessous, dans \"visiteurs habituels\".)",
     "js.unb.merge_frage": "Fusionner ?",
     "js.unb.name_fehlt": "Saisir un nom (personne nouvelle ou existante).",
@@ -2267,7 +2311,7 @@ T = {
     "event.zurueck": "← Aujourd'hui",
     "event.label_korrektur": "Corriger en cas d'erreur",
     "event.label_wer": "Qui était-ce ?",
-    "event.h_bilder": "Images",
+    "event.h_bilder": 'Images',
     # ---- Routen-Seiten (Stufe 2, Tranche C) ----
     # Uebersetzung der en.py-Tranche C (429 Schluessel); Grenzen und
     # Wiederverwendungen s. en.py-Abschnittskommentar. FR-Interpunktion:
@@ -2278,9 +2322,9 @@ T = {
     # personwizard.karte.titel==nav.person_modell). "stranger" folgt F3
     # (begriffe_tabellen.md): Personen-Label « intrus ».
     # --- routes/system.py ---
-    "system.ampel.service": "Service",
+    "system.ampel.service": 'Service',
     "system.ampel.service_info": "traités (au total) : {n}",
-    "system.ampel.backend": "Backend",
+    "system.ampel.backend": 'Backend',
     "system.ampel.backend_ok": "{backend} — autotest OK",
     "system.ampel.backend_fail":
         "{backend} — {n} échec(s) d'autotest, voir le journal du service",
@@ -2321,7 +2365,7 @@ T = {
     "system.disk.satz": "Les clips sont un cache : conservés {tage} jours, plafonnés à {max} Go, et allégés dès que moins de {min} Go sont libres (vérification après chaque événement, plus une surveillance quotidienne du disque qui passe à toutes les 10 minutes tant que l'espace est faible).",
     "system.disk.knopf": "Nettoyer maintenant",
     "system.disk.warnung": "Il ne reste que {gb} Go libres et le cache des clips est déjà vide — libérez de l'espace sur le volume de données, sinon les nouveaux événements ne pourront pas être enregistrés.",
-    "system.ampel.ok": "OK",
+    "system.ampel.ok": 'OK',
     "system.ampel.check": "À VÉRIFIER",
     "system.drift.banner":
         "GARDE-FOU DE DÉRIVE AU ROUGE après le dernier ajout de "
@@ -2396,7 +2440,7 @@ T = {
     "system.write.aktuell": "Actuellement :",
     "system.write.zustand_ro":
         "LECTURE SEULE — suslik n'écrit pas dans Frigate",
-    "system.write.zustand_rw": "ÉCRITURE dans Frigate — sub_labels",
+    "system.write.zustand_rw": 'Écriture des noms reconnus dans Frigate (sub_labels)',
     "system.write.zustand_rw_sync": " + synchronisation des références",
     "system.write.knopf_rw": "Activer l'écriture",
     "system.write.knopf_ro": "Lecture seule",
@@ -2417,7 +2461,10 @@ T = {
     "vision.schalter.fehlt": "Il manque encore :",
     # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW6 Punkt 4: Vision geparkt (Seiten und Schalter).
     "vision.geparkt_satz":
-        "Vision est en pause dans cette version et ne peut pas être activé. Il reviendra lorsqu'il sera reconstruit sur les nouvelles images de corps.",
+        (
+        'La vision IA est suspendue dans cette version et ne peut pas être activée. Elle reviendra '
+        'une fois reconstruite sur les nouvelles images de corps.'
+    ),
     "vision.schalter.fehlt_galerien": "{n} sur {soll} galeries approuvees — creez-en une sous 'Creer une galerie'",
     "vision.schalter.fehlt_test": "un test de connexion au vert",
     "vision.schalter.fehlt_kandidaten": "des images jugees comme source de candidats — elles apparaissent pendant un passage ; activez la 'collecte de diagnostic' sous Personne si vous voulez les garder",
@@ -2479,7 +2526,7 @@ T = {
     "vision.verb.key_frei_ph": "seulement si votre serveur en demande une",
     "vision.verb.host": "Hôte",
     "vision.verb.host_ph": "le nom ou l'adresse de cette machine",
-    "vision.verb.port": "Port",
+    "vision.verb.port": 'Port',
     "vision.verb.host_satz":
         "Seulement la machine &mdash; suslik complète lui-même le reste "
         "de l'adresse. Le port d'exemple est celui que llama.cpp utilise "
@@ -2711,22 +2758,22 @@ T = {
     "visiontest.laeufe.kein_urteil": "aucun verdict",
     "visiontest.laeufe.von": "sur {n}",
     "visiontest.laeufe.ohne_tausch": "sans permutation",
-    "visiontest.laeufe.auto": "auto",
+    "visiontest.laeufe.auto": 'auto',
     "visiontest.laeufe.offen": "+{n} en attente",
     "visiontest.laeufe.titel": "Exécutions sur ce passage",
     "visiontest.laeufe.kopf_wann": "quand",
     "visiontest.laeufe.kopf_zellen": "cases",
     "visiontest.laeufe.kopf_noetig": "requis",
-    "visiontest.laeufe.kopf_backend": "backend",
-    "visiontest.laeufe.kopf_urteil": "verdict",
-    "visiontest.laeufe.kopf_voten": "votes",
+    "visiontest.laeufe.kopf_backend": 'backend',
+    "visiontest.laeufe.kopf_urteil": 'verdict',
+    "visiontest.laeufe.kopf_voten": 'votes',
     "visiontest.laeufe.kopf_anfragen": "req.",
     "visiontest.laeufe.kopf_zeit": "durée",
     "visiontest.laeufe.satz":
         "Les plus récentes d'abord. Seulement ce qui a réellement tourné "
         "&mdash; la liste vient du journal propre à ce passage et "
         "disparaît avec lui.",
-    "visiontest.vision.titel": "Vision",
+    "visiontest.vision.titel": 'Vision',
     "visiontest.vision.quelle_kurz":
         "un modèle de vision qui compare ce passage à vos galeries",
     "visiontest.vision.unkonfiguriert": "non configurée",
@@ -3474,7 +3521,7 @@ connues.</p>""",
     "meldung.alert.gesichter.viele": "{n} visages dans cet événement.",
     # Reiner Zahlen-Anhang: nichts zu uebersetzen (Produktname, Zahlen,
     # die Kuerzel "cos"/{unsere} aus dem Dienst) — bleibt wortgleich.
-    "meldung.alert.zahl": "[Frigate {score} (= cos {cos}) | {unsere}]",
+    "meldung.alert.zahl": '[Frigate {score} (= cos {cos}) | {unsere}]',
     # "reconnaissance corporelle, pas faciale" == der Wortlaut, den
     # personwizard.modell.live_hinweis dem Nutzer ankuendigt.
     "meldung.person.titel": "suslik : reconnaissance corporelle",
@@ -3483,7 +3530,7 @@ connues.</p>""",
         "pas faciale) — {wort}, {n} événements concordants",
     # match == correspondance (begriffe_tabellen, Nachgetragene Tragworte).
     "meldung.person.wort_ersatz": "correspondance",
-    "meldung.person.zahl": "[score {score}]",
+    "meldung.person.zahl": '[score {score}]',
     "meldung.koerper.satz": "{name} reconnu ({kamera}, {zeit}) – {zusatz}",
     "meldung.koerper.telegram": "{kamera}\n{name} à {zeit}, {zusatz} (suslik)",
     # "Vision IA" == erkennung.vision.titel; im Fliesstext bleibt das
@@ -3554,7 +3601,7 @@ connues.</p>""",
     "heute.pass.bisher.viele": "{n} événements jusqu'ici",
     "heute.pass.events.eins": "{n} événement",
     "heute.pass.events.viele": "{n} événements",
-    "heute.pass.dauer": "{m} min · {ev}",
+    "heute.pass.dauer": '{m} min · {ev}',
     "heute.pass.erkennt": "identification…",
     "heute.pass.kein_gesicht.eins": "aucun visage exploitable dans ce passage ({n} événement)",
     "heute.pass.kein_gesicht.viele": "aucun visage exploitable dans ce passage ({n} événements)",
@@ -3610,7 +3657,7 @@ connues.</p>""",
     "heute.anw.dauer": "présente environ {h} h",
     "heute.anw.title": "présence par heure, toutes caméras — rouge : présence confirmée, clair à bord rouge : par reconnaissance de personne, vert : système actif, personne vue",
     "heute.anw.title_gesamt": "présence par heure — toutes caméras, sans filtre de la vue par zone",
-    "heute.anw.zelle": "{zeit} · {zustand}",
+    "heute.anw.zelle": '{zeit} · {zustand}',
     "heute.pass.mehr_kameras": "toutes les {n} caméras ({m} de plus)",
     "heute.pass.live": "en direct",
     "heute.pass.live_title": "un veilleur en direct a signalé un nom pendant ce passage",
@@ -3648,7 +3695,7 @@ connues.</p>""",
     "meldung.wache.name_zahl": "[cosinus {cos}]",
     "meldung.wache.funde.eins": "{n} visage en {sek} s",
     "meldung.wache.funde.viele": "{n} visages en {sek} s",
-    "meldung.wache.funde_zahl": "(score {score}, {ms} ms)",
+    "meldung.wache.funde_zahl": '(score {score}, {ms} ms)',
     "meldung.video_ersatz.satz": "(vidéo indisponible — envoi de l'image)",
     "meldung.test.satz": "Notification de test suslik ✓",
     # ---- D1: ehrliche Begruendung der Pass-Pruefung ----------------------
@@ -3658,7 +3705,7 @@ connues.</p>""",
     # bleiben EINE Form (§8.18, wie antwort.adopt_skip); "cadrage de
     # visage" == event.leer_crops, "quasi identiques" == adopt_gedeckt.
     "antwort.bruecke_nichts_grund": "rien à prendre — {grund}",
-    "antwort.bruecke_grund_zusatz": " · {grund}",
+    "antwort.bruecke_grund_zusatz": ' · {grund}',
     "antwort.bruecke_grund_zu_klein":
         "les {n} visage(s) mesuré(s) dans ce passage sont tous en dessous "
         "de la taille minimale de visage : le plus grand fait {kante} px, "
@@ -3738,7 +3785,7 @@ connues.</p>""",
     "systemstat.ram.anteil_hinweis":
         "la vue docker stats : processus + graphique + cache de fichiers rapportés à la limite",
     "systemstat.platte.frei": "Libre",
-    "systemstat.platte.gesamt": "Total",
+    "systemstat.platte.gesamt": 'Total',
     "systemstat.platte.cache": "Cache des clips / plafond",
     "systemstat.platte.frei_min": "Garder libre",
     "systemstat.gpu.engine": "Moteur le plus chargé",
@@ -3769,7 +3816,7 @@ connues.</p>""",
     "systemstat.kachel.rueckstau": "Retard à rattraper",
     "systemstat.rueckstau.laeuft": "Retard en attente",
     "systemstat.rueckstau.stand": "Mis en file · en attente · en cours",
-    "systemstat.rueckstau.stand_wert": "{gesamt} · {schlange} · {arbeit}",
+    "systemstat.rueckstau.stand_wert": '{gesamt} · {schlange} · {arbeit}',
     "systemstat.rueckstau.fenster": "Fenêtre rétrospective",
     "systemstat.rueckstau.stufe": "Retard {stufe}",
     "systemstat.rueckstau.stufe_wert": "{n} · plus ancien {alter} s",
@@ -3779,8 +3826,8 @@ connues.</p>""",
     "systemstat.stand":
         "Mesuré à {zeit}. La page se recharge d\u2019elle-même.",
     "systemstat.stand_live": "Mesuré à {zeit}. Live : une nouvelle mesure toutes les {takt} secondes.",
-    "systemstat.live_knopf": "Live",
-    "systemstat.live_knopf.an": "Live · {rest} min",
+    "systemstat.live_knopf": 'Live',
+    "systemstat.live_knopf.an": 'Live · {rest} min',
     "systemstat.live_knopf.tip_aus":
         "Rechargement toutes les {takt} secondes pendant {minuten} minutes au "
         "plus, puis retour au rythme normal. Quitter la page y met fin aussi.",
@@ -3832,10 +3879,14 @@ connues.</p>""",
     "anwesenheit.nacht": "nuit",
     "anwesenheit.legende_da": "présence confirmée",
     "anwesenheit.legende_weg": "système en marche, personne confirmé",
-    "anwesenheit.legende_leer": "le service ne tournait pas",
+    "anwesenheit.legende_leer": 'le service ne tournait pas',
     "anwesenheit.legende_teil": "en marche, certains événements non analysés",
     "anwesenheit.legende_jetzt": "maintenant",
-    "anwesenheit.legende_satz": "Le blanc ne veut dire qu'une chose : le service ne tournait pas à ce moment-là. Une cellule verte au coin coupé indique que le service tournait mais que certains événements n'ont pas été analysés — survolez pour voir les chiffres.",
+    "anwesenheit.legende_satz": (
+        "Le blanc ne veut dire qu'une chose : le service ne tournait pas à ce moment-là. Une cellul"
+        "everte au coin coupé indique que le service tournait mais que certains événements n'ont pa"
+        's été analysés — survolez pour voir les chiffres.'
+    ),
     "anwesenheit.zaehler": "{zeilen} marques lues, {kaputt} lignes endommagées ignorées.",
     "anwesenheit.gekappt": "Le fichier du jour dépasse la limite de lecture ; seule sa fin a été lue.",
     "anwesenheit.nie": "Non vus dans cette vue : {namen}",
@@ -3843,7 +3894,7 @@ connues.</p>""",
     "anwesenheit.leer_personen": "Pas encore de personnes connues",
     "anwesenheit.leer_personen_hinweis": "Les lignes apparaissent dès que des personnes sont apprises (sous « Connus »).",
     "anwesenheit.keine_aufzeichnung": "Aucun enregistrement pour ce jour.",
-    "anwesenheit.tip_da": "{zeit} · {kameras} · {quelle}",
+    "anwesenheit.tip_da": '{zeit} · {kameras} · {quelle}',
     "anwesenheit.tip_weg": "{zeit} · système en marche, personne confirmé",
     "anwesenheit.tip_weg_teil": "{zeit} · système en marche, personne confirmé · {gelungen} événements analysés, {luecken} non",
     "anwesenheit.tip_leer": "{zeit} · le service ne tournait pas",
@@ -3870,7 +3921,7 @@ connues.</p>""",
     "gpu.balken.rechenzeit": "Temps de calcul",
     "gpu.worker": "fil de calcul",
     "gpu.waechter": "veilleur direct",
-    "gpu.dienst": "service",
+    "gpu.dienst": 'service',
     "gpu.frei": "libre",
     "gpu.reserve": "réserve",
     "gpu.belegt_andere": "utilisé, non attribuable",
@@ -3905,7 +3956,7 @@ connues.</p>""",
     "gpu.speichern": "Enregistrer",
     "gpu.neustart_noetig": "Prend effet au prochain redémarrage du service.",
     "gpu.messwerte": "Mesuré sur nos machines : {worker} Mo par fil de calcul, {erster} Mo pour le premier veilleur direct (il porte les modèles) et environ {weiterer} Mo pour chaque suivant. Valeurs approximatives, pas une promesse. Les analyses menées de front ont été les plus rapides sur {hw} avec {n} ; au-delà, nos tests n'ont pas été plus rapides.",
-    "gpu.knopf": "GPU",
+    "gpu.knopf": 'GPU',
     "gpu.knopf_tip": "Carte graphique : ce qu'elle supporte et comment la répartir entre analyse et veilleurs directs",
     "gpu.gespeichert": "Enregistré. Prend effet au prochain redémarrage.",
     "gpu.nicht_messbar": "Un accélérateur est utilisé, mais sa mémoire n'est pas lisible depuis le conteneur. La reconnaissance tourne bien dessus, seules les barres de mémoire ci-dessous manquent. Sur les systèmes Intel, c'est normal : les compteurs du pilote n'y sont pas lisibles sans droits supplémentaires.",
@@ -3959,8 +4010,8 @@ connues.</p>""",
     "koerperbilder.teilmenge": "Une partie des données n'a pas pu être lue, cette page est peut-être incomplète. La raison est dans le journal du service.",
     "koerperbilder.vorrat.titel": "Réserve",
     "koerperbilder.vorrat.zweck": "Touchez une personne pour voir ses images.",
-    "koerperbilder.vorrat.bilder.eins": "{n} image",
-    "koerperbilder.vorrat.bilder.viele": "{n} images",
+    "koerperbilder.vorrat.bilder.eins": '{n} image',
+    "koerperbilder.vorrat.bilder.viele": '{n} images',
     "koerperbilder.vorrat.tage": "sur {tage} des {max_tage} derniers jours",
     "koerperbilder.vorrat.neuest": "la plus récente {datum}",
     "koerperbilder.vorrat.aus": "Non reconnue : trop semblable à {person} ({wert}, seuil {schwelle}). Les images sont toujours apprises. Un seuil au-dessus de {wert} réactive la reconnaissance, plus stricte pour tout le monde.",

@@ -49,8 +49,8 @@ T = {
     "kameras.steckbrief.fertig": "will be re-checked on the next restart",
     "readme.einleitung": 'I wrote this because these questions kept coming up.',
     "readme.kontakt": 'I am glad to hear from you:',
-    "readme.titel": 'Read me first',
-        "readme.knopf": 'Read me first',
+    "readme.titel": "Help & docs",
+        "readme.knopf": "Help & docs",
         "readme.schliessen": 'Close',
     "readme.zurueck": 'Back',
         "readme.fuss": 'This text appears once after every restart.',
@@ -98,21 +98,14 @@ T = {
     "readme.lernen.titel": 'How do I teach it new faces?',
     "readme.lernen.text": "This is how I do it on my system:\n\nFace learning run. The first thing on a new system. Depending on the hardware the last 500 events, 1000 if there is room to spare. The program fetches the events with a person, groups them and puts the pictures together. Known ones it assigns on its own. Unknown ones it collects as a group, and I give the group a name. That gives the starting set. Only works on faces that were recognised cleanly.\n\nToday. Once the starting set is there, anything new comes in from here: click an event or a person, adopt the face.\n\nKnown. Pick a person, have it find matching faces. This is also where I rename a person when the name has a typo in it. The program carries the new name through the stored data, old events included. Logs and backups keep the old name.\n\nPerson learning run. There is one next to it, for people whose face is not readable. More on that later.\n\nQuality. I use that tab regularly. It shows how good a person's pictures really are, which ones are too weak and which ones overlap with another person. Anything too similar I take out.\n\nThe Unknown tab is left over from an earlier version. I do not use it.",
     "readme.mqtt.titel": "MQTT messages",
-    "readme.mqtt.text": "Since 0.1.1.058 every message of the live watcher has the field event. Automations filter on it. faces_recognized and appearance_ended are new, the old fields stay.\n\nTopic [prefix]/live/[camera], QoS 0, no retain. What the broker misses is not sent again.\n\nPer appearance they come in this order:\n\nface_found: first valid face. With score and, if there is one yet, a preliminary name in schnell_urteil.\n\nface_recognized: a name has enough votes. Once per name, with stufe in schnell_urteil.\n\nfaces_recognized: right after. faces holds all names of the appearance so far, each with name and stufe.\n\nappearance_ended: the appearance is over. reason is no_face when the time under \"Visit ends after\" has run out, or stopped when the watcher or the engine stops. Plus faces and duration_s from the first to the last face.\n\ndisturbance: disturbed watcher with state disturbed, all-clear with state recovered. At most one per watcher and 10 minutes, the latest state follows afterwards.\n\nstufe: clear well above the bar, narrow just above, below just below, none far below or not measurable.\n\n\"Push pause\" slows Pushover and Telegram, never MQTT.",
+    "readme.mqtt.text": "Since 0.1.1.058 every live-watcher message has the field event; automations filter on it. faces_recognized and appearance_ended are new; the old fields remain.\n\nTopic [prefix]/live/[camera], QoS 0, no retain. Missed messages are not replayed.\n\nPer appearance, in this order:\n\nface_found: first valid face. Carries score and, if available, a preliminary name in schnell_urteil (quick judgement).\n\nface_recognized: a name reached enough votes. Once per name, with stufe (level) in schnell_urteil.\n\nfaces_recognized: immediately after. faces lists all names of the appearance so far, each with name and stufe.\n\nappearance_ended: the appearance is over. reason is no_face when the \"Visit ends after\" time ran out, or stopped when the watcher or engine stops. Plus faces and duration_s from first to last face.\n\ndisturbance: disturbed watcher with state disturbed, all-clear with state recovered. At most one per watcher and 10 minutes; the latest state follows.\n\nstufe: clear = well above the threshold, narrow = just above, below = just below, none = far below or not measurable.\n\n\"Push pause\" slows Pushover and Telegram, never MQTT.",
     "readme.persoenlich.titel": 'Personal',
     "readme.persoenlich.text": 'This is purely a hobby. As a senior IT architect, I enjoy building something with AI. It is built entirely with Claude Code, mostly on Fable 5, with Opus 5 for the agents.\n\nWhat I would like is feedback, and it makes me happy when someone puts the system to use. That is my reward.',
     "kameras.titel": "Cameras",
     # routes/kameras.py Einleitung (t_html, Bauplan Kamerawahl KA2): aus = ganz aus,
     # die Ausnahme fuer Frigate-Namen gilt nur beim Zonenfilter.
     "kameras.sub":
-        "Read live from your Frigate config, nothing is hard-coded. "
-        "Turn a camera <b>off</b> and suslik fetches and checks nothing "
-        "from it, not even names that Frigate gave. Tick one or more "
-        "<b>zones</b> to only check events that entered them (none "
-        "ticked = all events); if Frigate already gave a name, suslik "
-        "still checks it. A camera that is off in Frigate sends no "
-        "events; your choice applies as soon as it is on there again. "
-        '<a href="/kameras?refresh=1">Refresh</a>.',
+        "The checkbox on this page decides whether suslik uses a camera: untick it and suslik stops fetching and checking that camera's events, including names Frigate has already given. A camera <b>disabled</b> in Frigate sends no events. <b>Zones</b> filter events only. <a href=\"/kameras?refresh=1\">Refresh</a>.",
     "kameras.banner.config_fehler":
         "Could not read the Frigate config: {fehler}",
     "kameras.karte.verwenden": "use this camera",
@@ -126,8 +119,7 @@ T = {
     # (title=...) und bleibt Stufe 0 exakt erhalten; huebscher machen ist
     # eine spaetere bewusste Aenderung, nie Teil des Einzugs.
     "kameras.karte.pill_keine_detektion_titel":
-        "Frigate runs no person detection on this stream &mdash; no events "
-        "can arrive here",
+        "Frigate has no person detection on this stream, so no person events can arrive here. Enable detection in Frigate or use another stream.",
     "kameras.karte.pill_keine_detektion": "no detection in Frigate",
     "kameras.karte.prio": "priority",
     "kameras.prio.low": "Low",
@@ -185,8 +177,7 @@ T = {
     "areas.verwaltung.knopf_anlegen": "Add area",
     "areas.verwaltung.titel_zuweisen": "Assign cameras",
     "areas.verwaltung.satz_zuweisen":
-        "One camera belongs to exactly one area; everything not assigned "
-        "stays in Default. Saving needs no service restart.",
+        "Each camera is in exactly one area; unassigned cameras stay in 'Default'. Saving applies without a restart.",
     "areas.verwaltung.pill_nicht_gesehen": "not seen",
     "areas.verwaltung.attr_nicht_gesehen":
         "assigned earlier, not in Frigate right now",
@@ -199,11 +190,7 @@ T = {
     # ergaenzt, braucht hier denselben Namen.
     "areas.kettung.titel": "How far a pass reaches",
     "areas.kettung.satz":
-        "A pass is one run across your property: events chain together as long "
-        "as the gap between them stays under your scene gap. Choose per area "
-        "how far that chain may reach. This only changes the grouping — the "
-        "analysis always looks at each camera on its own, and the display "
-        "stays grouped per area.",
+        "A 'pass' chains events whose gaps stay under your scene gap. Choose per area how far a chain may reach. Only grouping changes; analysis still runs per camera; display stays per area.",
     "areas.kettung.grundstueck": "one pass for the whole property",
     "areas.kettung.area": "one pass per area",
     "areas.kettung.kamera": "every camera on its own",
@@ -264,11 +251,10 @@ T = {
         "successful test to resume.",
     "benachrichtigungen.telegram.label_modus": "Mode:",
     "benachrichtigungen.telegram.hinweis_modus":
-        "aus=off · ha=via Home Assistant · direkt=direct bot · beide=both",
+        "off / via Home Assistant / direct bot / both",
     "benachrichtigungen.telegram.label_inhalt": "Attachment:",
     "benachrichtigungen.telegram.hinweis_inhalt":
-        "video=short clip, image if unavailable · bild=image only "
-        "(no transcoding — lighter on weak hardware)",
+        "video = short clip (image fallback) · image = image only (no transcoding, lighter)",
     "benachrichtigungen.telegram.label_bot_token": "Bot token:",
     "benachrichtigungen.telegram.label_chat_id": "Chat ID:",
     "benachrichtigungen.telegram.label_cooldown": "Unknown cooldown (s):",
@@ -365,15 +351,11 @@ T = {
     "frigate.kameras.knopf": "Manage cameras",
     "frigate.sync.titel": "Sync",
     "frigate.sync.satz":
-        "Keeps the two face libraries in step: send reviewed faces to "
-        "Frigate, import what only Frigate has &mdash; always your call, "
-        "never automatic.",
+        "Compares the two face libraries: send reviewed faces to Frigate and import faces only Frigate has. This is the manual review step; auto-sync runs separately.",
     "frigate.sync.knopf": "Review &amp; sync",
     "frigate.fr.titel": "Frigate&rsquo;s own face recognition",
     "frigate.fr.satz":
-        "Frigate can recognize faces too. This program works with or "
-        "without it &mdash; the switch lives in Frigate&rsquo;s config, "
-        "read here live so you know what a sync can do right now.",
+        "Frigate has its own face recognition. suslik works with or without it. The toggle is in Frigate's config (read live here) and decides whether reference uploads are accepted.",
     "frigate.fr.beweis_unbekannt": "state unknown — {detail}",
     "frigate.js.url_fehlt": "enter the Frigate URL",
     "frigate.js.fehler": "error:",
@@ -444,28 +426,23 @@ T = {
     "konfiguration.kette.zeile_kosten": "cost: {kosten}",
     "konfiguration.kette.titel": "Recognition chain",
     "konfiguration.kette.satz":
-        "Which recognizers run, and in which order. The condition "
-        "\"nur_wenn_gesicht_leer\" means: the step only runs when the face "
-        "path could NOT confirm everyone on the walk-through — decided on "
-        "the whole pass, never on a single event. Changing the order "
-        "itself is a later stage; today the chain always starts with the "
-        "face path.",
+        "Condition \"nur_wenn_gesicht_leer\": the step runs only when the face path could not confirm everyone across the whole pass, never a single event.",
     "konfiguration.knopf_speichern": "Save + restart",
     "konfiguration.kette_blatt.hinweis":
         "Changes are audited (config_audit.jsonl); after saving, the "
         "service restarts cleanly.",
     "antwort.support_token_neu": "new support token created — the old one is invalid; copy it now, it is shown only this once",
-    "konfiguration.neustart.titel": "Restart service",
-    "konfiguration.neustart.satz": "Restarts this service in place (the container keeps running, all data stays). Use it when processing seems stuck; open events are picked up again after the restart.",
-    "konfiguration.neustart.knopf": "Restart now",
+    "konfiguration.neustart.titel": "Restart processing service",
+    "konfiguration.neustart.satz": "Restarts this service in place (the container keeps running; data stays). Use it if processing seems stuck; pending events resume after the restart.",
+    "konfiguration.neustart.knopf": "Restart processing",
     "konfiguration.neustart.frage": "Restart the service now? Processing pauses for a few seconds.",
     "antwort.neustart": "Restarting — this page answers again in a few seconds.",
     "konfiguration.support.titel": "Remote support access",
-    "konfiguration.support.satz": "Read-only download of named areas (logs, masked config, faces, learning runs, body material, state files, thread list of the service) for whoever holds the support token. The on/off switch support_zugriff sits in the table below, default off. Every request is written to the service log. The face and body areas contain pictures of real people — hand the token out with care. Without TLS in front of this service the token travels in plain text. The token also allows six actions: restarting this service remotely (POST /support/restart), sending events through the recognition again (POST /support/einspielen), switching the fine measurement on or off (POST /support/feinmessung), switching debug logging on or off without a restart (POST /support/debug), timing small file operations in the service and in a fresh process (POST /support/dateiprobe) and emptying the clip cache once (POST /support/cache_leeren).",
+    "konfiguration.support.satz": "The support token can download the whole data folder (config masked) plus six remote actions: restart, replay, fine measurement, debug toggle, file probe, and cache clear. suslik serves plain HTTP; without a TLS reverse proxy the token travels unencrypted. Treat it like a password.",
     "konfiguration.support.token_gesetzt": "A support token is set.",
     "konfiguration.support.token_fehlt": "No support token yet.",
     "konfiguration.support.knopf_token": "Create new token",
-    "konfiguration.support.einmal_hinweis": "The token appears here exactly once after creation — store it; afterwards only ••• is shown.",
+    "konfiguration.support.einmal_hinweis": "The token is shown exactly once after creation. Copy it now — it cannot be recovered; later only ••• is shown.",
     "konfiguration.titel": "Advanced settings",
     "konfiguration.kopf.satz1":
         "Changes are audited (config_audit.jsonl); after saving, the "
@@ -480,14 +457,18 @@ T = {
         "empty and nothing changes: suslik talks to Frigate exactly as it does today.",
     "konfiguration.frigate_auth.erkl_user":
         "user name of a Frigate account. Empty = no login at all; emptying it also "
-        "clears the stored password",
+        "clears the stored password",    "konfiguration.frigate_auth.label_user": "Frigate username",
+    "konfiguration.frigate_auth.label_password": "Frigate password",
+    "konfiguration.param.sub_label_schreiben": "Write sub-labels",
+    "konfiguration.param.support_zugriff": "Support access",
+    "konfiguration.param.clip_aufnahme_deckel_s": "Clip wait ceiling (seconds)",
+    "konfiguration.param.live_verworfen_speichern": "Store rejected live frames",
+
     "konfiguration.frigate_auth.erkl_password":
         "password for that account. It is stored with your other settings under "
         "/data and never shown again \u2014 leave the field blank to keep it",
     "konfiguration.frigate_auth.erkl_tls":
-        "check Frigate's TLS certificate. Frigate's authenticated port ships with a "
-        "self-signed certificate, so turn this off if you connect to it by https and "
-        "have not replaced that certificate",
+        "Verify Frigate's TLS certificate. Frigate's authenticated port (8971) ships with a self-signed certificate. Disable verification only for that port over HTTPS if you have not replaced the certificate.",
     "konfiguration.frigate_auth.pw_gesetzt": "stored \u2014 leave blank to keep it",
     "konfiguration.frigate_auth.pw_leer": "no password stored",
     "konfiguration.abschnitt_alle": "All parameters",
@@ -594,8 +575,7 @@ T = {
         "{n} group(s) deleted by you (pictures gone, kept as a record only)",
     "lernanker.titel": "Anchor clusters",
     "lernanker.liste.leer":
-        "No anchors yet — a learning run builds them (Preparation → "
-        "Harvest → Grouping).",
+        "No clusters yet. Run a learning pass first (Prepare → Harvest → Group).",
     "lernanker.liste.leer_link": "Open the learning run page",
     "lernanker.liste.kopf":
         "{n} clusters from {ges} anchor-ready faces — {ok} clean, {rest} "
@@ -623,10 +603,7 @@ T = {
     # der <b>-Zahl (Split an der Markup-Grenze — neue Gattung §8).
     "syncauswahl.titel": "Review &amp; sync — references to Frigate",
     "syncauswahl.kopf.satz":
-        "Frigate runs every uploaded reference through its own face "
-        "detector and refuses images it finds no face in. This page checks "
-        "the same thing first, shows you every candidate, and sends only "
-        "what you tick.",
+        "Frigate rejects references without a detectable face. This page pre-checks that, lists candidates, and sends only ticked ones. Auto-sync uses the same skip list.",
     "syncauswahl.fehler.titel": "Candidates not available",
     "syncauswahl.fehler.satz":
         "The candidate list needs a reachable Frigate — its face library "
@@ -673,7 +650,7 @@ T = {
     "syncauswahl.fr.satz_an":
         "(read from Frigate as this page loaded) — it accepts reference "
         "uploads.",
-    "syncauswahl.fr.titel_aus": "Frigate face recognition: off",
+    "syncauswahl.fr.titel_aus": "Frigate face recognition: OFF (uploads rejected)",
     "syncauswahl.bilanz.titel": "Balance",
     "syncauswahl.bilanz.hauptzeile":
         "reference images · {beide} already in Frigate · {bereit} ready "
@@ -683,8 +660,8 @@ T = {
     "syncauswahl.bilanz.exportiert":
         "{n} sent earlier (Frigate renamed them)",
     "syncauswahl.bilanz.abgewaehlt": "{n} deselected",
-    "syncauswahl.bilanz.vorrat": "{n} stock reference(s) local only (embedding-based, not transferable)",
-    "syncauswahl.bilanz.nur_frigate": "{n} only in Frigate",
+    "syncauswahl.bilanz.vorrat": "{n} reference(s) local only (embedding-based, cannot transfer)",
+    "syncauswahl.bilanz.nur_frigate": "{n} reference image(s) exist only in Frigate",
     "syncauswahl.bilanz.je_person": "In Frigate, per person:",
     # echter Plural schon im Original — t_n loest .eins/.viele auf.
     "syncauswahl.bilanz.kandidaten.eins": "{n} candidate",
@@ -721,12 +698,7 @@ T = {
     "syncauswahl.gruppe.prueft": "{n} still checking",
     "syncauswahl.geloescht.zusatz": "— your decision",
     "syncauswahl.geloescht.satz":
-        "These are still in your library, but Frigate no longer has them "
-        "under the name they were stored with. suslik never re-sends them "
-        "without your decision: deleting a face in Frigate can be "
-        "deliberate. Offer it again to make it a normal candidate — from "
-        "then on the next sync, including the automatic one, uploads it. "
-        "Respect the deletion to keep it out for good.",
+        "Still in your library, but gone from Frigate under that name. suslik never re-sends without your choice because deletion may be intentional. 'Offer again' re-enables sending, including auto-sync; 'Respect deletion' blocks it permanently.",
     "syncauswahl.aufklapp": "— show",
     "syncauswahl.api.titel":
         "{n} exported earlier — Frigate keeps these under its own names",
@@ -747,15 +719,10 @@ T = {
         "Frigate has these reference images, suslik does not. Importing "
         "copies them into your library; nothing in Frigate changes.",
     "syncauswahl.import.warnung":
-        "This list may include your own uploads: Frigate renames every "
-        "reference it accepts, so suslik cannot tell them apart from "
-        "faces you added in Frigate directly. Importing those back would "
-        "duplicate content.",
-    "syncauswahl.import.knopf": "Import them into suslik",
+        "Warning: importing can duplicate faces you already have, because Frigate renames uploads and suslik cannot tell them apart. Review before importing.",
+    "syncauswahl.import.knopf": "Import Frigate-only images into suslik",
     "syncauswahl.raus.satz":
-        "Remembered on purpose: these stay in your library but are never "
-        "sent to Frigate, not even by the automatic sync. Restore puts "
-        "one back on the candidate list.",
+        "Intentionally skipped: stays in your library and is never sent to Frigate, even by auto-sync. 'Restore' returns it to the candidate list.",
     "syncauswahl.alter.unbekannt": "age unknown",
     "syncauswahl.alter.sekunden": "{s} s ago",
     "syncauswahl.alter.minuten": "{m} min ago",
@@ -781,10 +748,7 @@ T = {
     # live_seite) gibt es keine Kachel-Uebersicht, keine Gruppen und keinen
     # Erklaer-Kasten mehr; deren Schluessel sind entfallen.
     "live.hinweis_cpu":
-        "CPU mode: watchers are expensive here — the quick check "
-        "typically takes 1–2 s (a GPU build reacts in under a second), "
-        "and additional watchers slow each other down. How many you run "
-        "is your call; we recommend starting with one.",
+        "On CPU, each watcher is costly: a frame check takes ~1–2 s (GPU: <1 s), and watchers compete for CPU. Start with one.",
     "live.zeile.alter": "({tage} day(s) old)",
     "live.test.zeile":
         "source test {wann}: {aufloesung} → {skala}, {bilder_s} frames/s",
@@ -800,7 +764,7 @@ T = {
         "last source test FAILED ({wann}): {fehler}",
     "live.messung.zeile": "load measured on {wann}: {text}",
     "live.messung.veraltet":
-        "— STALE: source changed since this measurement, measure again",
+        "— STALE: source changed since this measurement; re-measure",
     "live.messung.fehlgeschlagen":
         "last load measurement FAILED ({wann}): {fehler}",
     "live.zaehler.auftritte": "{n} visits",
@@ -810,10 +774,9 @@ T = {
     "live.zaehler.letzter": "last {zeit}",
     "live.zaehler.kopf": "Since the start:",
     "live.engine.titel_aus": "Live engine: not running",
-    "live.engine.satz_aus": "No heartbeat from the engine process. The slots show the saved configuration; enabling, testing against a running watcher and load measurements need the engine — the service starts it automatically once at least one watcher is enabled.",
+    "live.engine.satz_aus": "Live engine is off: no heartbeat. Settings below are saved but inactive. Turn on at least one watcher to start the engine.",
     "live.engine.cpu_mit_limit":
-        "suslik CPU right now: {kerne} of {limit} allowed cores (whole "
-        "container: watchers, analysis, service)",
+        "suslik CPU now: {kerne} of {limit} allowed cores (whole container: watchers, analysis, service)",
     "live.engine.cpu_ohne_limit":
         "suslik CPU right now: {kerne} cores (whole container: watchers, "
         "analysis, service)",
@@ -859,10 +822,10 @@ T = {
     "live.intro_link": "How watchers work",
     "live.marke.aktiv": "{n} active",
     "live.platz.name": "Live {n}",
-    "live.platz.frei": "free",
-    "live.frei.titel": "Live {n} is free",
+    "live.platz.frei": "unused",
+    "live.frei.titel": "Live {n} is unused",
     "live.frei.satz": "Assign a camera to this slot. Then set here what it reports and switch it on.",
-    "live.frei.keine": "Every camera already has a slot.",
+    "live.frei.keine": "Every slot is in use.",
     "live.knopf_zuweisen": "Assign camera",
     "live.knopf_leeren": "Clear slot",
     "live.kopf.kamera": "Camera",
@@ -899,7 +862,7 @@ T = {
     "live.pause.kopf": "From the first face of a reported visit, it stays quiet for this long:",
     "live.pause.besuche": "Visits that start in this time get no video and no “Unknown person”.",
     "live.pause.name": "The same name comes again after the same number of seconds at the earliest.",
-    "live.detail.scharf_hinweis": "Home Assistant (MQTT) never pauses.",
+    "live.detail.scharf_hinweis": "Home Assistant (MQTT) ignores push pause.",
     "live.abschnitt.test": "Source test",
     "live.detail.gesperrt_hinweis":
         "testing and measuring are unavailable while live watching is "
@@ -955,8 +918,8 @@ T = {
     "live.eigenepruefen.schalter": "Re-check own Frigate events",
     "live.eigenepruefen.erklaerung": "Also analyse the events this watcher creates in Frigate.",
     "live.workeraus.erklaerung": "While the watcher runs, the event analysis skips this camera's events, except when Frigate itself names a person.",
-    "live.frigate.schalter": "Create event in Frigate",
-    "live.frigate.erklaerung": "With a recognized name, its own event carrying the name.",
+    "live.frigate.schalter": "Create a Frigate event for a recognized person",
+    "live.frigate.erklaerung": "Creates its own event carrying the recognized name. Optional.",
     "live.frigate.abstand_label": "Gap per person",
     "live.frigate.abstand_hinweis": "Empty means the push pause.",
     # --- WS2 (Bauplan analysen/bauplan_waechterseite.md): die Einstellseite eines Waechters nach der
@@ -977,7 +940,7 @@ T = {
     "live.alter.heute": "today",
     "live.alter.tage.eins": "{n} day ago",
     "live.alter.tage.viele": "{n} days ago",
-    "live.einheit.s": "s",
+    "live.einheit.s": "seconds",
     "live.abschnitt.mqtt": "Home Assistant (MQTT)",
     "live.mqtt.zweck": "For home automations. Goes out before all other channels, always in English, with no push pause.",
     "live.mqtt.topic": "Topic",
@@ -997,8 +960,8 @@ T = {
     "live.push.video_hinweis": "One video per reported visit, from the first face.",
     "live.push.nur_telegram": "Telegram only",
     "live.push.videolaenge": "Video length",
-    "live.push.neben": "Also report unknown people next to recognized ones",
-    "live.push.neben_hinweis": "“Unknown person” then also comes when someone was recognized in the same visit, without a picture.",
+    "live.push.neben": "Also report unknown people in visits with a recognized person",
+    "live.push.neben_hinweis": "An \"Unknown person\" message is then also sent when someone was recognized in the same visit, without a picture.",
     "live.abschnitt.besuch": "Visit",
     "live.besuch.zweck": "A visit begins with the first face and ends when none has been seen for this long. After that, the same person can be recognized again.",
     "live.besuch.global": "Same for all cameras: {fps} frames per second, {stimmen} minimum votes.",
@@ -1186,10 +1149,7 @@ T = {
     "erkennung.knopf_register_face": "Register face …",
     "erkennung.gesicht.titel": "Face recognition",
     "erkennung.gesicht.satz":
-        "The most precise way: every pass is checked against the faces "
-        "of the people you taught the system. It is the backbone — body "
-        "and vision hang off its walk-through verdict, so it has no off "
-        "switch today.",
+        "The most precise way: every pass is checked against the faces of the people you taught the system. It is the backbone — body and vision hang off its walk-through verdict, so it cannot be disabled in this version (body and vision depend on it).",
     "erkennung.gesicht.beweis_personen": "{n} people",
     "erkennung.gesicht.beweis_bilder": "{n} reference images",
     "erkennung.gesicht.knopf_verwalten": "Manage people …",
@@ -1206,7 +1166,7 @@ T = {
     # Stufe KW12 (Bauplan analysen/bauplan_koerperweg_neu.md, Abschnitt Oberflaeche): die Melde-Zeile der Karte
     # Koerper und die Labels der Unteroptionen; Kanalnamen sind Eigennamen.
     "erkennung.koerper.melden.titel": "Notifies:",
-    "erkennung.koerper.melden.nur_anzeige": "display only",
+    "erkennung.koerper.melden.nur_anzeige": "none (display only)",
     "erkennung.koerper.melden.leer": "Nothing selected: the name is only shown.",
     "erkennung.koerper.melden.nicht_eingerichtet": "not set up",
     "erkennung.koerper.melden.aria": "Notification channels of person recognition",
@@ -1217,7 +1177,8 @@ T = {
     "erkennung.unter.immer": "Always",
     "erkennung.unter.nur_ohne_gesicht": "Only if no face",
     "erkennung.unter.wenn_noetig": "If needed",
-    "erkennung.vision.titel": "AI vision",
+    "erkennung.vision.titel": "AI vision",    "erkennung.vision.status_paused": "Paused",
+
     "erkennung.vision.beta": "Beta",
     "erkennung.vision.satz":
         "A picture-AI as referee for the hard cases. Needs a model "
@@ -1685,7 +1646,7 @@ T = {
     "nav.bereich.activity": "Activity",
     "nav.bereich.faces": "Faces",
     "nav.bereich.learn": "Learn",
-    "nav.bereich.person": "Person",
+    "nav.bereich.person": "Body recognition",
     "nav.bereich.vision": "Vision",
     "nav.bereich.live": "Live",
     "nav.bereich.frigate": "Frigate",
@@ -1778,8 +1739,8 @@ T = {
     "js.status.siehe_log": "see service log",
     "js.status.diagnose": "diagnosis",
     "js.einheit.min": "{n} min",
-    "js.einheit.s": "{n} s",
-    "js.einheit.klammer_s": "({n} s)",
+    "js.einheit.s": "{n} seconds",
+    "js.einheit.klammer_s": "({n} seconds)",
     "js.allg.abbrechen": "Cancel",
     "js.neustart.zurueck": "Service is back, loading …",
     "js.neustart.kommt": "Service coming back …",
@@ -1790,8 +1751,8 @@ T = {
     "js.lernlauf.tag_fehlt": "pick a day first",
     "js.lernlauf.abbruch_frage": "Abort this learning run?",
     "js.notif.frage": "Save notification settings and restart the service?",
-    "js.frigate.ro_frage": "Switch to READ-ONLY? suslik will stop writing to Frigate.",
-    "js.frigate.rw_frage": "Enable WRITING to Frigate (sub_labels + reference sync)?",
+    "js.frigate.ro_frage": "Stop writing (read-only)? suslik will no longer write recognized names or sub-labels to Frigate, or upload reference faces.",
+    "js.frigate.rw_frage": "Enable writing? suslik will write recognized names to Frigate (sub_labels + reference sync).",
     "js.catchup.frage": "Skip catching up on missed events at startup from now on? The service restarts to apply this.",
     "catchup.knopf": 'Catch up',
     "catchup.knopf.tooltip": 'Unprocessed events are waiting',
@@ -2411,7 +2372,7 @@ T = {
         "(Frigate-Face + suslik).",
     "system.write.aktuell": "Current:",
     "system.write.zustand_ro": "READ-ONLY — suslik does not write to Frigate",
-    "system.write.zustand_rw": "WRITING to Frigate — sub_labels",
+    "system.write.zustand_rw": "Writing recognized names to Frigate (sub_labels)",
     "system.write.zustand_rw_sync": " + reference sync",
     "system.write.knopf_rw": "Enable writing",
     "system.write.knopf_ro": "Read-only",
@@ -2431,7 +2392,7 @@ T = {
     "vision.schalter.fehlt": "Still missing:",
     # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW6 Punkt 4: Vision geparkt (Seiten und Schalter).
     "vision.geparkt_satz":
-        "Vision is paused in this version and cannot be switched on. It comes back once it is rebuilt on the new body images.",
+        "AI vision is parked in this version and cannot be turned on. It returns once rebuilt on the new body images.",
     "vision.schalter.fehlt_galerien": "{n} of {soll} approved galleries — build one under 'Build a gallery'",
     "vision.schalter.fehlt_test": "a green connection test",
     "vision.schalter.fehlt_kandidaten": "judged images to pick a candidate from — they appear while a pass is running; turn on 'diagnostic collection' under Person if you want them to stay",
@@ -3772,10 +3733,10 @@ between.</p>""",
     "anwesenheit.nacht": "night",
     "anwesenheit.legende_da": "confirmed present",
     "anwesenheit.legende_weg": "system running, nobody confirmed",
-    "anwesenheit.legende_leer": "service not running",
+    "anwesenheit.legende_leer": "no or incomplete run data",
     "anwesenheit.legende_teil": "running, some events not analysed",
     "anwesenheit.legende_jetzt": "now",
-    "anwesenheit.legende_satz": "White means one thing only: the service was not running at that time. A green cell with a clipped corner means the service was running but some events were not analysed — hover for the numbers.",
+    "anwesenheit.legende_satz": "White means run data for that time is missing or incomplete. At night four quarter-hours are combined into one cell. A green cell with a clipped corner means the service was running but some events were not analysed — hover for the numbers.",
     "anwesenheit.zaehler": "{zeilen} marks read, {kaputt} broken lines skipped.",
     "anwesenheit.gekappt": "The day file is larger than the reading limit; only its end was read.",
     "anwesenheit.nie": "Not seen in this view: {namen}",
