@@ -468,13 +468,13 @@ T = {
         "exactement comme aujourd'hui.",
     "konfiguration.frigate_auth.erkl_user":
         "nom d'utilisateur d'un compte Frigate. Vide = aucune connexion ; le vider "
-        "efface aussi le mot de passe enregistr\u00e9",    "konfiguration.frigate_auth.label_user": "Frigate username",
+        "efface aussi le mot de passe enregistr\u00e9",
+    "konfiguration.frigate_auth.label_user": "Frigate username",
     "konfiguration.frigate_auth.label_password": "Frigate password",
     "konfiguration.param.sub_label_schreiben": "Write sub-labels",
     "konfiguration.param.support_zugriff": "Support access",
     "konfiguration.param.clip_aufnahme_deckel_s": "Clip wait ceiling (seconds)",
     "konfiguration.param.live_verworfen_speichern": "Store rejected live frames",
-
     "konfiguration.frigate_auth.erkl_password":
         "mot de passe de ce compte. Il est enregistr\u00e9 avec vos autres r\u00e9glages dans "
         "/data et n'est jamais r\u00e9affich\u00e9 \u2014 laissez le champ vide pour le conserver",
@@ -1212,7 +1212,8 @@ T = {
     "erkennung.unter.immer": "Always",
     "erkennung.unter.nur_ohne_gesicht": "Only if no face",
     "erkennung.unter.wenn_noetig": "If needed",
-    "erkennung.vision.titel": "Vision IA",    "erkennung.vision.status_paused": "Paused",
+    "erkennung.vision.titel": "Vision IA",
+    "erkennung.vision.status_paused": "Paused",
 
     "erkennung.vision.beta": "Bêta",
     "erkennung.vision.satz":

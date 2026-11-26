@@ -450,13 +450,13 @@ T = {
         "vac\u00edos no cambia nada: suslik habla con Frigate igual que hasta ahora.",
     "konfiguration.frigate_auth.erkl_user":
         "nombre de usuario de una cuenta de Frigate. Vac\u00edo = sin inicio de sesi\u00f3n; "
-        "al vaciarlo tambi\u00e9n se borra la contrase\u00f1a guardada",    "konfiguration.frigate_auth.label_user": "Frigate username",
+        "al vaciarlo tambi\u00e9n se borra la contrase\u00f1a guardada",
+    "konfiguration.frigate_auth.label_user": "Frigate username",
     "konfiguration.frigate_auth.label_password": "Frigate password",
     "konfiguration.param.sub_label_schreiben": "Write sub-labels",
     "konfiguration.param.support_zugriff": "Support access",
     "konfiguration.param.clip_aufnahme_deckel_s": "Clip wait ceiling (seconds)",
     "konfiguration.param.live_verworfen_speichern": "Store rejected live frames",
-
     "konfiguration.frigate_auth.erkl_password":
         "contrase\u00f1a de esa cuenta. Se guarda junto al resto de los ajustes en /data "
         "y no se vuelve a mostrar \u2014 deje el campo en blanco para conservarla",
@@ -1186,7 +1186,8 @@ T = {
     "erkennung.unter.immer": "Always",
     "erkennung.unter.nur_ohne_gesicht": "Only if no face",
     "erkennung.unter.wenn_noetig": "If needed",
-    "erkennung.vision.titel": "Visión por IA",    "erkennung.vision.status_paused": "Paused",
+    "erkennung.vision.titel": "Visión por IA",
+    "erkennung.vision.status_paused": "Paused",
 
     "erkennung.vision.beta": "Beta",
     "erkennung.vision.satz":
