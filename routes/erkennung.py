@@ -260,7 +260,7 @@ def render(cfg, whitelist, lage, waechter, gesicht, n_areas=None):
             '<div class="ek-card aus" id="ek-vision">'
             f'<h3>&#128302; {t("erkennung.vision.titel")} '
             f'<span class="ek-beta">{t("erkennung.vision.beta")}</span></h3>'
-            + _kipp(False, verriegelt=True, titel=park)
+            + _kipp(False, verriegelt=True, titel=park, label=t("erkennung.vision.status_paused"))
             + f'<p class="ek-satz">{t("erkennung.vision.satz")}</p>'
             + f'<div class="ek-beweis">{html.escape(park)}</div></div>')
     else:

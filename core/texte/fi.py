@@ -483,7 +483,13 @@ T = {
         "Frigaten kanssa täsmälleen kuten tähän asti.",
     "konfiguration.frigate_auth.erkl_user":
         "Frigate-tilin käyttäjätunnus. Tyhjä = ei kirjautumista lainkaan; "
-        "tyhjennys poistaa myös tallennetun salasanan",
+        "tyhjennys poistaa myös tallennetun salasanan",    "konfiguration.frigate_auth.label_user": "Frigate username",
+    "konfiguration.frigate_auth.label_password": "Frigate password",
+    "konfiguration.param.sub_label_schreiben": "Write sub-labels",
+    "konfiguration.param.support_zugriff": "Support access",
+    "konfiguration.param.clip_aufnahme_deckel_s": "Clip wait ceiling (seconds)",
+    "konfiguration.param.live_verworfen_speichern": "Store rejected live frames",
+
     "konfiguration.frigate_auth.erkl_password":
         "tilin salasana. Se tallennetaan muiden asetustesi mukana "
         "hakemistoon /data eikä sitä näytetä enää koskaan — jätä kenttä "
@@ -1258,7 +1264,8 @@ T = {
     "erkennung.unter.immer": "Always",
     "erkennung.unter.nur_ohne_gesicht": "Only if no face",
     "erkennung.unter.wenn_noetig": "If needed",
-    "erkennung.vision.titel": "Vision-tekoäly",
+    "erkennung.vision.titel": "Vision-tekoäly",    "erkennung.vision.status_paused": "Paused",
+
     "erkennung.vision.beta": "Beta",
     "erkennung.vision.satz":
         "Kuvatekoäly tuomarina vaikeisiin tapauksiin. Vaatii mallin "

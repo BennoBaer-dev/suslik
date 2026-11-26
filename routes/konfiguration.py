@@ -147,11 +147,11 @@ def frigate_auth_sektion(cfg):
         f'<h3>{t("konfiguration.frigate_auth.titel")}</h3>'
         f'<p class="sub">{t("konfiguration.frigate_auth.satz")}</p>'
         '<div class="tabelle-wrap"><table>'
-        f'<tr><td><b>frigate_user</b></td>'
+        f'<tr><td><b>{html.escape(t("konfiguration.frigate_auth.label_user"))}</b></td>'
         f'<td><input id="cfg-frigate_user" size="24" autocomplete="off" '
         f'value="{html.escape(str(cfg.get("frigate_user") or ""), quote=True)}"></td>'
         f'<td>{t("konfiguration.frigate_auth.erkl_user")}</td></tr>'
-        f'<tr><td><b>frigate_password</b></td>'
+        f'<tr><td><b>{html.escape(t("konfiguration.frigate_auth.label_password"))}</b></td>'
         f'<td><input id="cfg-frigate_password" type="password" size="24" '
         f'autocomplete="new-password" value="" placeholder="{html.escape(ph, quote=True)}"></td>'
         f'<td>{t("konfiguration.frigate_auth.erkl_password")}</td></tr>'
@@ -270,7 +270,15 @@ def render(cfg, whitelist, auto_hinweis, kette=None, kette_lage=None, store=None
         auto = (f'<br><b style="color:var(--warn)">'
                 f'{html.escape(auto_hinweis[key])}</b>'
                 if key in auto_hinweis else "")
-        zeilen.append(f"<tr><td><b>{key}</b></td><td>{feld}</td>"
+        label_key = f"konfiguration.param.{key}"
+        label = t(label_key)
+        if label == label_key:
+            label = key
+            kopf = f"<b>{html.escape(key)}</b>"
+        else:
+            kopf = (f"<b>{html.escape(label)}</b> "
+                    f'<span class="dim">({html.escape(key)})</span>')
+        zeilen.append(f"<tr><td>{kopf}</td><td>{feld}</td>"
                       f"<td>{html.escape(erkl)}{grenzen}{auto}</td></tr>")
     nur_lesen = []
     for key in ("trigger", "ov_device", "backend",

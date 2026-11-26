@@ -501,7 +501,13 @@ T = {
         "prima.",
     "konfiguration.frigate_auth.erkl_user":
         "nome utente di un account Frigate. Vuoto = nessun accesso; svuotandolo si "
-        "cancella anche la password salvata",
+        "cancella anche la password salvata",    "konfiguration.frigate_auth.label_user": "Frigate username",
+    "konfiguration.frigate_auth.label_password": "Frigate password",
+    "konfiguration.param.sub_label_schreiben": "Write sub-labels",
+    "konfiguration.param.support_zugriff": "Support access",
+    "konfiguration.param.clip_aufnahme_deckel_s": "Clip wait ceiling (seconds)",
+    "konfiguration.param.live_verworfen_speichern": "Store rejected live frames",
+
     "konfiguration.frigate_auth.erkl_password":
         "password di quell'account. Viene salvata insieme alle altre impostazioni in "
         "/data e non viene pi\u00f9 mostrata \u2014 lasciate il campo vuoto per mantenerla",
@@ -1266,7 +1272,8 @@ T = {
     "erkennung.unter.immer": "Always",
     "erkennung.unter.nur_ohne_gesicht": "Only if no face",
     "erkennung.unter.wenn_noetig": "If needed",
-    "erkennung.vision.titel": "Visione AI",
+    "erkennung.vision.titel": "Visione AI",    "erkennung.vision.status_paused": "Paused",
+
     "erkennung.vision.beta": "Beta",
     "erkennung.vision.satz":
         "Un’AI per immagini come arbitro nei casi difficili. Richiede "

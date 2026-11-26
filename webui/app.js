@@ -288,8 +288,8 @@ function testKanal(kanal, btn) {
 }
 
 function frigateWrite(readonly) {
-  var txt = readonly ? TT('js.frigate.ro_frage', 'Switch to READ-ONLY? suslik will stop writing to Frigate.')
-                     : TT('js.frigate.rw_frage', 'Enable WRITING to Frigate (sub_labels + reference sync)?');
+  var txt = readonly ? TT('js.frigate.ro_frage', 'Stop writing (read-only)? suslik will no longer write recognized names to Frigate.')
+                     : TT('js.frigate.rw_frage', 'Enable writing? suslik will write recognized names to Frigate (sub_labels + reference sync).');
   if (!confirm(txt)) return;
   var st = document.getElementById('fw-status');
   st.textContent = TT('js.status.speichern', 'saving …');
