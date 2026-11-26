@@ -533,11 +533,11 @@ T = {
     "konfiguration.frigate_auth.erkl_user":
         "nome utente di un account Frigate. Vuoto = nessun accesso; svuotandolo si "
         "cancella anche la password salvata",
-    "konfiguration.frigate_auth.label_user": 'Frigate username',
-    "konfiguration.frigate_auth.label_password": 'Frigate password',
+    "konfiguration.frigate_auth.label_user": 'Nome utente Frigate',
+    "konfiguration.frigate_auth.label_password": 'Password Frigate',
     "konfiguration.param.sub_label_schreiben": 'Scrivi sottolabel',
     "konfiguration.param.support_zugriff": 'Accesso di supporto',
-    "konfiguration.param.clip_aufnahme_deckel_s": 'Clip wait ceiling (seconds)',
+    "konfiguration.param.clip_aufnahme_deckel_s": 'Limite di attesa clip (secondi)',
     "konfiguration.param.live_verworfen_speichern": 'Conserva i fotogrammi live scartati',
     "konfiguration.frigate_auth.erkl_password":
         "password di quell'account. Viene salvata insieme alle altre impostazioni in "
@@ -894,7 +894,7 @@ T = {
         "sentinelle, analisi, servizio)",
     "live.engine.rss": "RSS del motore {rss} MB",
     "live.engine.grundkosten": "costo base {mb} MB",
-    "live.engine.je_stream": '{mb} MB per stream ({quelle})',
+    "live.engine.je_stream": '{mb} MB per flusso ({quelle})',
     "live.engine.je_stream_fehlt":
         "RAM per stream non ancora misurata su questa macchina",
     "live.engine.ram_frei": "{mb} MB di RAM liberi ({quelle})",

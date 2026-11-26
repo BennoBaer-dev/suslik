@@ -1684,7 +1684,7 @@ T = {
     "nav.frigate": 'Frigate',
     "ui.fuss.log": "Registro del servicio",
     "ui.fuss.docs": "Documentación",
-    "ui.fuss.health": 'health',
+    "ui.fuss.health": 'salud',
     "ui.modus.easy": 'Fácil',
     "ui.modus.expert": 'Experto',
     "ui.modus.tooltip": "Easy muestra las páginas esenciales — Expert lo muestra todo. Nada se borra, Easy solo oculta.",

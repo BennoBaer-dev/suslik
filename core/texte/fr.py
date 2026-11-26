@@ -1242,11 +1242,11 @@ T = {
     "erkennung.koerper.schwelle": "Seuil pour un nom par le corps",
     "erkennung.koerper.schwelle_satz": "Plus haut est plus strict. Les personnes qui se ressemblent trop restent désactivées jusqu'à un seuil plus élevé (page Images de corps).",
     # Stufe KW12: Labels der Unteroptionen wie in en (die Hilfe zitiert sie englisch).
-    "erkennung.unter.immer": 'Always',
-    "erkennung.unter.nur_ohne_gesicht": 'Only if no face',
-    "erkennung.unter.wenn_noetig": 'If needed',
+    "erkennung.unter.immer": 'Toujours',
+    "erkennung.unter.nur_ohne_gesicht": 'Seulement si aucun visage',
+    "erkennung.unter.wenn_noetig": 'Si nécessaire',
     "erkennung.vision.titel": "Vision IA",
-    "erkennung.vision.status_paused": 'Paused',
+    "erkennung.vision.status_paused": 'En pause',
 
     "erkennung.vision.beta": "Bêta",
     "erkennung.vision.satz":
@@ -1686,7 +1686,7 @@ T = {
     "lernwizard.expert.lauf_bleibt":
         "cette session reste — ses points d'ancrage demeurent disponibles",
     # --------------------------------- Stufe 1: Einhang/Skelett (webui) ---
-    "nav.bereich.activity": "Passages",
+    "nav.bereich.activity": 'Activité',
     "nav.bereich.faces": "Visages",
     "nav.bereich.learn": "Apprentissage",
     "nav.bereich.person": 'Reconnaissance corporelle',

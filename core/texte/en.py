@@ -426,7 +426,7 @@ T = {
     "konfiguration.kette.zeile_kosten": "cost: {kosten}",
     "konfiguration.kette.titel": "Recognition chain",
     "konfiguration.kette.satz":
-        "Condition \"only_if_face_empty\": the step runs only when the face path could not confirm everyone across the whole pass, never a single event.",
+        "Condition \"nur_wenn_gesicht_leer\": the step runs only when the face path could not confirm everyone across the whole pass, never a single event.",
     "konfiguration.knopf_speichern": "Save + restart",
     "konfiguration.kette_blatt.hinweis":
         "Changes are audited (config_audit.jsonl); after saving, the "
