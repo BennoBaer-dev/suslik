@@ -465,6 +465,8 @@ T = {
     "konfiguration.kette.titel": "Catena di riconoscimento",
     "konfiguration.kette.satz":
         "Quali riconoscitori sono attivi e in quale ordine. La condizione "
+        "Condizione \"only_if_face_empty\": il passaggio funziona solo quando "
+        "il percorso dei volti non ha confermato nessuno, mai un singolo evento."
         "\"nur_wenn_gesicht_leer\" significa: il passo si attiva solo "
         "quando il percorso del volto NON è riuscito a confermare tutti "
         "nel passaggio — deciso sull’intero passaggio, mai su un singolo "

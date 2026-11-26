@@ -414,6 +414,8 @@ T = {
     "konfiguration.kette.titel": "Cadena de reconocimiento",
     "konfiguration.kette.satz":
         "Qué reconocedores se ejecutan y en qué orden. La condición "
+        "Condición \"only_if_face_empty\": el paso solo se ejecuta cuando la "
+        "ruta de rostros no pudo confirmar a todos, nunca un solo evento."
         "\"nur_wenn_gesicht_leer\" significa: el paso solo se ejecuta "
         "cuando la vía del rostro NO pudo confirmar a todos en el "
         "recorrido por la propiedad — se decide a partir del recorrido "

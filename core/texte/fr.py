@@ -431,6 +431,8 @@ T = {
     "konfiguration.kette.titel": "Chaîne de reconnaissance",
     "konfiguration.kette.satz":
         "Quels moteurs de reconnaissance tournent, et dans quel ordre. La "
+        "Condition \"only_if_face_empty\": l'étape ne fonctionne que si la "
+        "voie du visage n'a pas pu confirmer tout le monde, jamais un seul événement."
         "condition \"nur_wenn_gesicht_leer\" signifie&nbsp;: l'étape ne "
         "s'exécute que si la voie du visage n'a PAS pu confirmer tout le "
         "monde lors du passage — décidé sur l'ensemble du passage, jamais "

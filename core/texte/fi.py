@@ -422,6 +422,8 @@ T = {
         '"nur_wenn_gesicht_leer" tarkoittaa: vaihe ajetaan vain, kun '
         'kasvotie EI voinut vahvistaa kaikkia käynnillä olleita — '
         'päätetään koko käynnistä, ei koskaan yksittäisestä tapahtumasta. '
+        '"only_if_face_empty": vaihe suoritetaan vain, jos kasvotie ei '
+        'pysty vahvistamaan ketjun yhtäänkään tapahtumaa.'
         'Järjestyksen muuttaminen itse on myöhempi vaihe; tänään ketju '
         'alkaa aina kasvotiestä.',
     "konfiguration.knopf_speichern": "Tallenna + käynnistä uudelleen",
