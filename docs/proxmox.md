@@ -556,8 +556,9 @@ docker logs suslik 2>&1 | grep -E "device engaged|running on CPU|\[FAIL \]"
 ```
 
 `openvino:GPU — device engaged` means your iGPU is doing the work. With an NPU as well the line
-reads `openvino:MIXED — device engaged (detector=GPU, recognition=NPU)`. A `[FAIL ]` line or
-`running on CPU` means the device is not doing the work; go to step 8.
+reads `openvino:MIXED — device engaged (detector=GPU, recognition=NPU)`. If a `[FAIL ]` line says
+the device did not compute, or the line says `running on CPU`, the iGPU is not doing the work; go to
+step 8. Other `[FAIL ]` lines (data folder, models, Frigate) name their own cause.
 
 That is the Proxmox part done. The rest is the ordinary first start: open
 `http://<container-ip>:8199/` in a browser (`hostname -I` inside the container prints the address)
@@ -711,8 +712,8 @@ docker logs suslik 2>&1 | grep -E "device engaged|running on CPU|\[FAIL \]"
 
 `openvino:GPU — device engaged` means the legacy runtime bound your iGPU. Give it time on the
 first start: the runtime compiles kernels before that line appears, so a grep three seconds after
-`up -d` finds nothing and tells you nothing. A `[FAIL ]` line or `running on CPU` means the iGPU
-is not doing the work; go to step 7.
+`up -d` finds nothing and tells you nothing. If a `[FAIL ]` line says the device did not compute,
+or the line says `running on CPU`, the iGPU is not doing the work; go to step 7.
 
 Then the Proxmox part is done: open `http://<container-ip>:8199/` in a browser (`hostname -I`
 inside the container prints the address) and the setup wizard takes over
@@ -1235,7 +1236,8 @@ docker logs suslik 2>&1 | grep -E "device engaged|running on CPU|\[FAIL \]"
 ```
 
 `cuda:0 — device engaged` is the answer you want, and unlike `nvidia-smi` it means a real session
-was built on the device. Anything else, a `[FAIL ]` line included, is step 10.
+was built on the device. If it says something else, or a `[FAIL ]` line says the GPU did not
+compute, see step 10.
 
 Then the Proxmox part is done: open `http://<container-ip>:8199/` in a browser (`hostname -I`
 inside the container prints the address) and the setup wizard takes over
@@ -1433,8 +1435,8 @@ docker logs -f suslik      # watch the self-check, Ctrl-C once it says ready
 docker logs suslik 2>&1 | grep -E "device engaged|running on CPU|\[FAIL \]"
 ```
 
-`migraphx:0 — device engaged` means ROCm bound your card. A `[FAIL ]` line or `running on CPU`
-means it did not; go to step 7.
+`migraphx:0 — device engaged` means ROCm bound your card. If a `[FAIL ]` line says the device did
+not compute, or the line says `running on CPU`, it did not; go to step 7.
 
 Then the Proxmox part is done: open `http://<container-ip>:8199/` in a browser (`hostname -I`
 inside the container prints the address) and the setup wizard takes over

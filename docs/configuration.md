@@ -15,8 +15,9 @@ restore* below) to restore all settings and skip the wizard entirely. Otherwise,
 1. **Connect Frigate** — enter your Frigate base URL, usually the internal, unauthenticated API on
    port 5000 (e.g. `http://<frigate-host>:5000`; run suslik on the same host or Docker network as
    Frigate, or expose 5000 on your LAN). If Frigate only answers on its authenticated port 8971,
-   set `frigate_user` and `frigate_password` on the **Advanced** settings page (see *Key
-   settings*). suslik reads cameras and configuration from Frigate's API. Nothing is hardcoded.
+   enter `https://<frigate-host>:8971`, set `frigate_user` and `frigate_password` on the
+   **Advanced** settings page and switch `frigate_tls_verify` off for Frigate's self-signed
+   certificate (see *Key settings*). suslik reads cameras and configuration from Frigate's API. Nothing is hardcoded.
 2. **Cameras & zones** — choose which cameras to watch and, optionally, which zones must be
    entered for an event to be considered (see *Zone filter* below). A camera you turn off is fully
    off: suslik fetches and checks nothing from it, not even events where Frigate already assigned
@@ -25,7 +26,7 @@ restore* below) to restore all settings and skip the wizard entirely. Otherwise,
    variant are offered). See [hardware-acceleration.md](hardware-acceleration.md).
 4. **Import references** — optionally import your existing Frigate face references into suslik's
    master library (with live progress). You can run the same import later without re-running the
-   wizard: **People → Known → Import / resync from Frigate**, or the *only in Frigate* section
+   wizard: **Faces → Known → Import / resync from Frigate**, or the *only in Frigate* section
    of the **Frigate sync** page. The System page only shows the sync balance and links there.
 5. **Write back to Frigate?** — decide whether suslik may correct Frigate's `sub_label` and send
    face references back (parallel operation) or stay read-only. Pre-filled with your current
@@ -213,7 +214,7 @@ These are the settings most people touch (all set via the wizard/UI; names shown
 - **Recognition threshold** — the time-window criterion (how many consistent frames within the
   window count as "recognized"). The defaults are calibrated; change only if you know why.
   The same similarity threshold also drives the live watchers' preliminary name stage.
-- **Recognition chain** — its own Settings page: the order face → person → vision with a
+- **Recognition chain** — its own page in the **Configuration** menu: the order face → person → vision with a
   plain-language condition per step (always / only when the face path could not confirm
   everyone / off). The vision step is parked and does not run (see
   [person-recognition.md](person-recognition.md)).
@@ -283,8 +284,7 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   **Advanced** settings page, or through the API with `POST /konfig` and a JSON body such as
   `{"pruef_log": true}`: it takes effect at once, without a restart, and stays on after a restart
   until you switch it off. `pruef.log` rotates like `suslik.log` and is part of
-  `/log/suslik-logs.tar.gz` and of the support area `/support/logs`
-  ([support-access.md](support-access.md)).
+  `/log/suslik-logs.tar.gz` and of the support area `/support/logs`.
 
 ## Environment variables
 
@@ -292,13 +292,14 @@ Set these on the container (compose `environment:` / `env_file:`, or `docker run
 
 | Variable | Purpose |
 |---|---|
-| `TZ` | container timezone (e.g. `Europe/Berlin`). **Set this** — otherwise timestamps are UTC. |
+| `TZ` | container timezone (e.g. `Europe/Berlin`). Without it suslik uses the `zeitzone` setting, and `Europe/Berlin` if that is empty. |
 | `FRIGATE_URL` | pre-fill the Frigate URL in the wizard (optional) |
 | `SUSLIK_HWDEC` | hardware video decode for analysis frames: `auto` (default — uses the Intel iGPU via VAAPI or an NVIDIA GPU via NVDEC when the image ships a validated driver and the device is passed through; 8-bit 4:2:0 material only), `vaapi` / `nvdec` (force one source), `aus` (always software). Decoded pixels are bit-identical either way; if the hardware path fails, the software decoder takes over and the event is flagged. |
 | `HA_URL`, `HA_TOKEN` | only for Telegram through Home Assistant (`telegram_modus` `ha` or `beide`): the address of your Home Assistant and a long-lived access token. All other channel secrets are entered on the **Notifications** page and stored in `/data`, never baked into the image. |
 
 The service passes the chosen backend to all its sub-processes, so the one `backend` setting
-controls the whole pipeline.
+controls face recognition everywhere; body recognition has its own setting, `person_backend`
+(default `cpu`).
 
 ## Configuration backup & restore
 

@@ -2,7 +2,7 @@
 
 suslik does face detection and recognition with ONNX Runtime. The backend is selected at runtime;
 each [image variant](architecture.md#image-variant-architecture-one-code-several-hardware-images)
-ships the runtime for one accelerator family plus a CPU fallback.
+ships the runtime for one accelerator family.
 
 ## Choosing a backend
 
@@ -21,13 +21,16 @@ Set it in the setup wizard or as `backend` in the stored config:
 **`auto` placement**: at first start a short real benchmark builds sessions on the NPU and
 GPU, measures them, and picks `openvino:MIXED` (recognition in the service and the live
 watchers on the NPU, which on a Core Ultra cuts recognition CPU cost from ~24 ms to well under
-1 ms per inference; the event analysis uses the iGPU), `openvino:GPU`, or `cpu`. The decision is stored in `state/placement.json` and reused until hardware,
+1 ms per inference; the event analysis uses the iGPU), `openvino:GPU`, or `cpu`. The decision is
+stored in `state/placement.json` and reused until hardware,
 runtime or version change; systems without an NPU simply end up on GPU, identical to the
 previous default. Per-model fallback chain NPU → GPU → CPU with a loud `PLACEMENT-FALLBACK`
 log marker if a device stops binding.
 
 The service validates the backend against the providers actually available and, if the requested
-accelerator can't bind, falls back to CPU **with a loud warning** (never silently). The startup
+accelerator can't bind, falls back to CPU **with a loud warning** (never silently). The event
+analysis has two exceptions: in the cuda image it does not fall back and fails with an error without
+a working NVIDIA GPU, and an explicitly chosen Intel GPU backend fails without a usable iGPU. The startup
 self-check reports real bind probes per device (`found & usable — device bound in real probe`),
 `… — device engaged` for the chosen backend, the resolved placement, and benchmarks each usable
 backend on synthetic input so you can see it's really working. `/health` reports
@@ -67,7 +70,7 @@ state — real deployments where Frigate shares the GPU never see it), Intel VAA
 CPU libx264 1.5 s.
 
 **Recommendation:** run suslik on *any* GPU or NPU — integrated is first-class here
-(see [supported-hardware.md](supported-hardware.md)). The CPU fallback works everywhere
+(see [supported-hardware.md](supported-hardware.md)). The CPU image works everywhere
 and is fine for trying it out, but budget roughly half a CPU-minute per event; an iGPU/NPU
 turns that into seconds at near-zero CPU cost.
 
@@ -216,8 +219,9 @@ synthetic input. You get one line per device — `CPU (baseline)`,
 `iGPU (OpenVINO)`, `NPU (OpenVINO)`, `CUDA (Nvidia)`, `MIGraphX (AMD)`, depending on the variant —
 with ms per inference and inferences/s, plus the machine it measured on and a reference line to
 compare against (Intel Core Ultra 9 285H: CPU 840 ms, iGPU 26 ms, NPU 18 ms). After the
-timings, a second section compares hardware and software video decode byte for byte on clips
-from the clip cache; if the cache is empty, it fetches one clip from Frigate.
+timings, if the machine has a hardware video decoder, a second section compares hardware and
+software decode byte for byte on clips from the clip cache; if the cache is empty, it fetches one
+clip from Frigate.
 
 A device whose execution provider does **not** really bind is reported as `skipped`, not measured:
 you never get a CPU fallback presented as a GPU result.

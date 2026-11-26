@@ -36,8 +36,8 @@ Details, driver notes and the measured performance comparison:
 (Gen8/9/11 — HD 5xxx/UHD 6xx graphics on 5th–10th gen Core) need the `-gpu-legacy` variant:
 Intel's current compute runtime only covers Gen12 and later, the older generations are
 served by separate legacy1 packages, and that is exactly what `-gpu-legacy` ships.
-The regular `-gpu` image on such hardware falls back to CPU (loudly) and now shows a
-banner pointing to the right variant. Field reports welcome.
+The regular `-gpu` image on such hardware falls back to CPU with its default backend `auto`
+(loudly) and shows a banner pointing to the right variant. Field reports welcome.
 
 **Live watchers and your hardware.** A live watcher decodes its camera stream
 continuously, so it is the most hardware-hungry part of suslik — and built for a GPU

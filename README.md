@@ -7,8 +7,8 @@ cameras as one pass with one verdict. A name only counts when several frames agr
 says "unknown".
 
 It can also recognize residents by the whole body when no face is visible, for example from behind
-(this part is a preview). Live watchers can watch selected cameras directly on the stream and report
-a person within about a second.
+(this part is a preview, off on a fresh install). Live watchers can watch selected cameras directly on
+the stream and send an MQTT message as soon as a face appears, within about a second on a GPU.
 
 The `latest-*` image tags follow the newest release. To stay on a fixed version, use its tag, for
 example `ghcr.io/bennobaer-dev/suslik:0.1.1.116-gpu`.
@@ -17,10 +17,9 @@ example `ghcr.io/bennobaer-dev/suslik:0.1.1.116-gpu`.
 
 Frigate's built-in face recognition works per frame and per camera. On difficult footage it can put
 a confident label on the wrong person. suslik checks the same events a second time, on its own. It
-starts from Frigate's person events, which are reliable, and not from Frigate's face recognition. It
-searches all frames of the recording itself for the best faces (large, sharp, frontal) and doesn't
-rely on one live crop. And one lucky frame is not enough for a name: several frames within a short
-window have to agree.
+starts from Frigate's person events and not from Frigate's face recognition. It searches the
+recording itself for the best faces (large, sharp, frontal) and doesn't rely on one live crop. And
+one lucky frame is not enough for a name: several frames within a short window have to agree.
 
 ## What it looks like
 
@@ -34,11 +33,12 @@ since then.*
 
 ## What it does
 
-- Person recognition (preview) names residents by the whole body when no face is visible. By
-  default the name is only shown; notifications, presence and Frigate get it only if you switch
+- Person recognition (preview) names residents by the whole body when no face is visible. It is
+  off on a fresh install. By default the name is only shown; notifications, presence and Frigate get it only if you switch
   that on. See [Person recognition](docs/person-recognition.md).
-- Live watchers watch selected cameras directly on the stream. They report a person within about a
-  second and add a preliminary name while the person is still in the picture. See
+- Live watchers watch selected cameras directly on the stream. They send an MQTT message as soon as a
+  face appears (within about a second on a GPU) and add a preliminary name while the person is still
+  in the picture. See
   [Live watchers](docs/live-watchers.md).
 - suslik learns from your own recordings. A learning run goes through the person events Frigate has
   already recorded, collects the usable faces and groups them by person, and you name a whole group
@@ -55,8 +55,8 @@ since then.*
 
 The normal analysis works on the finished recording, after the event has ended. The confirmed name
 therefore comes with a delay and is no real-time trigger. For automations that have to react while
-someone is walking up (a light, an announcement), use the live watchers: they report a person on
-the stream within about a second, for example over MQTT. The confirmed name still comes from the
+someone is walking up (a light, an announcement), use the live watchers: they send an MQTT message
+as soon as a face appears on the stream, within about a second on a GPU. The confirmed name still comes from the
 normal analysis afterwards.
 
 ## Quick start
@@ -83,8 +83,9 @@ docker compose logs -f          # watch the startup self-check
 ```
 
 The gpu, gpu-legacy (older Intel iGPUs), cuda and rocm images also need the device passed into the
-container (`devices:` and `group_add:`, or `--gpus` for cuda). Without it the gpu, gpu-legacy and
-rocm images run on the CPU, and the cuda image cannot analyse at all. Either way, every page shows
+container (`devices:` and `group_add:`, or the `deploy:` block for cuda). Without it the rocm image
+runs on the CPU, so do the gpu and gpu-legacy images with their default backend `auto`, and the cuda
+image cannot analyse at all. Either way, every page shows
 a red notice, with the cause and the fix on the System page. The full compose blocks are in the
 [installation guide](docs/installation.md). If suslik runs in an LXC container on Proxmox, see
 [Proxmox](docs/proxmox.md). suslik can run next to Frigate on the same machine as a second
@@ -93,8 +94,8 @@ container.
 Then open `http://<host>:8199/` and follow the setup wizard.
 
 suslik never updates itself. Run `docker compose pull && docker compose up -d` when you want a
-newer version. Learned faces and settings stay in the data volume. Event data is kept for 14 days
-by default (`aufbewahrung_tage` on the Advanced page). Details, and how to stay on a fixed version:
+newer version. Learned faces and settings stay in the data volume. Event data is cleaned up after 14
+days by default (`aufbewahrung_tage` on the Advanced page). Details, and how to stay on a fixed version:
 [installation guide](docs/installation.md#updating).
 
 ## Documentation
@@ -131,16 +132,16 @@ large because it bundles the CUDA runtime. gpu-legacy and rocm are tested by use
 own machines, so reports from that hardware are welcome. Google Coral is not supported; I tested
 it, and the details are on the known issues page.
 
-The source code is in this repository under the MIT license. The images run offline: nothing is
-downloaded at runtime, and internet access is only needed for the push notification channels.
+The source code is in this repository under the MIT license. The images contain everything they
+need, so nothing is downloaded at runtime. suslik only goes out to the internet for the push
+notification channels and for one check a day for a newer release on GitHub (`update_check` on the
+Advanced page, on by default; switch it off if you don't want it).
 
 ## Contact
 
 - GitHub: [issues](https://github.com/BennoBaer-dev/suslik/issues) for bugs and requests,
   [discussions](https://github.com/BennoBaer-dev/suslik/discussions) for everything else.
 - E-mail: suslik_dev@posteo.de, if you'd rather write to me directly.
-
-Every report helps, especially from hardware I can't test myself (rocm, gpu-legacy).
 
 ## License
 

@@ -17,7 +17,7 @@ Cameras, Notifications, Areas, Recognition chain, Advanced), **Recognition test*
 **System** (System, System stats). Easy mode hides some sub-pages; the tiles on each section's
 start page lead there.
 
-Two buttons sit in the top bar next to the sections: **Calibration** (per-camera bars; shown
+Among the buttons in the top bar next to the sections are **Calibration** (per-camera bars; shown
 in Expert mode only, in Easy mode the page stays reachable at `/kalibrierung` and through each
 camera's **Calibrate** button on the Live page) and **Presence** (route `/anwesenheit`) — the
 day, person by person, in quarter-hour cells. Red =
@@ -111,27 +111,28 @@ version that introduced the page — earlier days stay empty.
 - **Events** — the flat event list with filters and paging, category badges, ground-truth
   buttons, and video links. Useful for drilling into a single event.
 - The former **To label** work list is gone; its address `/offen` now leads to the **Unknown**
-  tab, where faces are named per identity (see **People** below). Single events are labeled
+  tab, where faces are named per identity (see **Faces** below). Single events are labeled
   wherever the label buttons appear, for example on the event detail page: besides the person
   buttons and *Stranger*/*?* there is a **No person** button for false triggers (a video with
   nobody in it); one click closes the case and it stops counting as unknown. Passes whose
   whole clip contains no serious face get a quiet "no usable face in this pass" note in the
   list on the **Passes** tab instead of a warning badge and an unknown-visitor card.
 
-**People**
+**Faces**
 
 - **Known** — your reference library (the "master"): the people suslik knows and their reference
   images. Also where you can upload photos to bootstrap a person.
 - **Unknown** — persistent unknown identities: recurring faces that aren't in your library yet,
   grouped over time so you can promote one to a known person.
-- **Suggestions** — enrollment suggestions. suslik proposes reference faces to add for known
-  people after each walk; **"Apply all recommended"** accepts all suggested faces at once.
+- **Suggestions** (under **Learn**) — enrollment suggestions for people suslik already knows,
+  searched when you ask for them; you add or reject each one. On a person's page, **find matching
+  faces** offers more, with **"Apply all recommended"** to accept all recommended faces at once.
   Applying stays a manual click (a safeguard against poisoning the library with bad crops).
 - **Quality** — reference-library quality reports (finding no-face, mislabeled, or confusable
   references so you can clean the master up). Every reference carries a quality value; weak
   pictures are flagged, and a progress bar shows the check while it runs.
 
-**Frigate sync**
+**Frigate**
 
 - **Frigate sync** (route `/sync_auswahl`) — the one place where your reference library and
   Frigate's own face library are compared, in both directions. The page opens with a balance
@@ -168,7 +169,7 @@ version that introduced the page — earlier days stay empty.
 - **One sync at a time.** Starting a second run while one is going is refused with a clear
   message, and the automatic export skips a round instead of racing a running transfer.
 
-**Settings**
+**Configuration**
 
 - **Cameras** — the cameras from Frigate, with the zone condition as a checkbox per camera.
 - **Notifications** — configure the alert channels (Pushover, Telegram, MQTT) and pick which
@@ -218,10 +219,10 @@ the day-to-day path; to work through your event history in one guided go, see
 [Learning people](learning.md). The flow is person-centric:
 
 1. Let the person appear on camera normally. After each walk, suslik collects the best faces
-   (up to three per event), generates enrollment suggestions (**People → Suggestions**) for
-   people it already knows, and clusters faces it doesn't recognize into the **Unknown** tab.
+   (up to three per event) and clusters faces it doesn't recognize into the **Unknown** tab.
+   Suggestions for people it already knows (**Learn → Suggestions**) are searched when you ask.
    For a known person, the check button next to an event picture on their page goes further:
-   it looks at every frame of that event, measures face quality with a reference-free score
+   it samples the frames of that event, measures face quality with a reference-free score
    and offers the best new pictures grouped by view (left, front, right). A second button on
    the pass card does the same for the other events of that walk — several cameras give the
    better angle. The pictures are prepared when you ask for them, not in the background: the
@@ -259,10 +260,12 @@ and matches it against your references over time. It reports one of:
   checks, while no known person was confirmed.
 - (plus bookkeeping categories for "Frigate labeled but no usable face", "both unknown", etc.)
 
-Alerts fire only for the categories you enable (by default disagreement and possible stranger),
-with a global cooldown so continuous presence doesn't spam you. A recognized person is reported
-through the presence notification instead (`anwesenheit_push`, on by default, with its own
-cooldown).
+Event alerts fire only for the categories you enable (by default disagreement and possible
+stranger), with a global cooldown so continuous presence doesn't spam you. The third category ticked
+by default, *a known person was recognized*, raises no event alert: it sends the Telegram message and
+the MQTT message `szene_erkannt` for the people recognized on a walk-through. On Pushover a
+recognized person comes through the presence notification (`anwesenheit_push`, on by default, with
+its own cooldown).
 
 Live watchers alert on a separate path these categories do not govern. MQTT reports every
 person at the first face. Pushover and Telegram report a known person as soon as the name

@@ -17,8 +17,8 @@ hardware:
 > each other. This is the same approach Frigate takes (`stable` vs `stable-tensorrt`). See
 > [architecture.md](architecture.md).
 
-If the accelerator is not available, the gpu, gpu-legacy and rocm images run on the CPU, and the
-cuda image cannot analyse at all. Either way, every page shows a red notice, with the cause and the
+If the accelerator is not available, the rocm image runs on the CPU, so do the gpu and gpu-legacy
+images with their default backend `auto`, and the cuda image cannot analyse at all. Either way, every page shows a red notice, with the cause and the
 fix on the System page. Match the image to your hardware.
 
 ## Prerequisites
@@ -215,7 +215,8 @@ it says `running on CPU` instead, the host driver/runtime versions don't match �
 ## Older Intel iGPUs (HD 5xxx/UHD 6xx, 5th–10th gen Core): the `gpu-legacy` variant
 
 Intel's current compute runtime only covers Gen12 and later — on a 5th–10th gen iGPU the
-regular `-gpu` image falls back to CPU (loudly, and with a banner pointing here). The
+regular `-gpu` image falls back to CPU with its default backend `auto` (loudly, and with a banner
+pointing here). The
 `gpu-legacy` variant ships Intel's legacy1 runtime instead and is confirmed working on a
 UHD 630 (Gen9). Gen8/Broadwell (5th gen Core, e.g. HD 5500) is covered by Intel's legacy1
 platform list (OpenCL 3.0) but has no field confirmation yet — reports welcome. Note VAAPI
@@ -395,11 +396,13 @@ docker compose pull && docker compose up -d
 ```
 
 Your data is not in the image. Reference faces, the unknown pool and settings live in the `/data`
-volume from your compose file and survive the update. Event data is kept for 14 days by default
-(`aufbewahrung_tage` on the **Advanced** page): event folders, the monthly archive of the event
-record, the pieces of the unknown queue and the log of names written to Frigate. If you update
+volume from your compose file and survive the update. Event data is cleaned up after 14 days by
+default (`aufbewahrung_tage` on the **Advanced** page): event folders without ground truth are
+deleted; the pieces of the unknown queue, the log of names written to Frigate and, once its whole
+month is past that limit, the monthly archive of the event record go to the trash. If you update
 from a version before 0.1.1.115 and have not set your own value, the first start deletes event
-folders without ground truth that are older than 14 days for good. One exception is announced in the release notes: the first version with the *reference
+folders without ground truth that are older than 14 days for good.
+One exception is announced in the release notes: the first version with the *reference
 source* moves your learned faces once into a new storage layout on its first start (see
 [Data layout and the one-time migration](#data-layout-and-the-one-time-migration) below). Read the
 release notes before a major jump, then check the footer of any page in the web UI: it shows the
