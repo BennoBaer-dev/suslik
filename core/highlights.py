@@ -16,7 +16,11 @@ seiner ersten Fundstelle im Text als Verweis auf den Pfad, wie `readme` den Knop
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.115"   # 0.1.1.115: Box-Eintrag und CHANGELOG-Abschnitt von 0.1.1.114 unveraendert unter der neuen
+STAND = "0.1.1.116"   # 0.1.1.116: Box unveraendert, nur STAND (Stufe K4 des Sammelplans analysen/bauplan_klein.md ist eine
+                      # Fehlerkorrektur, kein Box-Thema); neuer CHANGELOG-Abschnitt mit einem Punkt, deutscher Text
+                      # abgenommen mit "Nummer setzen und Doku committen / Lauf starten alle normal" des Eigentuemers
+                      # 26.11.2026 13:27:46.
+                      # Davor 0.1.1.115: Box-Eintrag und CHANGELOG-Abschnitt von 0.1.1.114 unveraendert unter der neuen
                       # Nummer (Bauplan analysen/release3_modell.md, Stufe 6, Entscheid E5); Nummer gesetzt auf
                       # "Nummer setzen und Doku committen" des Eigentuemers 26.11.2026. Neu nur die Probe aus Stufe K3
                       # (Sammelplan analysen/bauplan_klein.md), kein Box-Thema.

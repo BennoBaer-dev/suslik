@@ -1188,7 +1188,8 @@ def results_zeile(label, eid, zeilen, persons, wache, lat, stat, profil,
     fd_n = sum(1 for f in zeilen if f["fd"])
     z = {"label": label, "source": eid, "faces": len(zeilen),
          "faces_geprueft": len(zeilen) - fd_n,
-         "max_bw": max((f["bw"] for f in zeilen if not f["fd"]), default=0),
+         # Stufe K4 (analysen/bauplan_klein.md): nur gueltige Gesichter, dieselbe Pruefung wie im Stapel
+         "max_bw": max((f["bw"] for f in zeilen if _stapel.gueltig(f, lat)), default=0),
          "detektionen": detektionen_bauen(zeilen, wache.step, bild),
          "frames_gelesen": wache.gelesen, "frames_soll": wache.soll}
     # .540 DAS ZAHLENPAAR DES SAMPLE-BUDGETS. Bis hier stand die WIRKLICHE Zahl
