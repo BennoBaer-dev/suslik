@@ -1211,6 +1211,9 @@ T = {
     "erkennung.koerper.melden.nicht_eingerichtet": "not set up",
     "erkennung.koerper.melden.aria": "Notification channels of person recognition",
     "erkennung.koerper.melden.anwesenheit": "Presence page",
+    # Stufe SL2 (Bauplan analysen/bauplan_leiste_schwelle_bilder.md): Zahlenfeld koerper_schwelle in der Karte.
+    "erkennung.koerper.schwelle": "Threshold for a body name",
+    "erkennung.koerper.schwelle_satz": "Higher is stricter. People who look too much alike stay switched off until the threshold is higher (Body images page).",
     "erkennung.unter.immer": "Always",
     "erkennung.unter.nur_ohne_gesicht": "Only if no face",
     "erkennung.unter.wenn_noetig": "If needed",
@@ -1236,6 +1239,9 @@ T = {
     # Stufe EK1 (Bauplan analysen/bauplan_erkennung_karte.md): state line of the save bar.
     "erkennung.save.sauber": "All saved",
     "erkennung.save.offen": "Not saved, saving restarts the service",
+    # Stufe SL1 (Bauplan analysen/bauplan_leiste_schwelle_bilder.md): state line of the save bar on pages that save
+    # without a restart (Areas).
+    "erkennung.save.offen_ohne_neustart": "Not saved",
     # --------------------------------------------------- routes/faces ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): der dim-Einleitungs-
     # Satz traegt einen <a>-Link mitten im Satz (t_html-Weg spaeterer
@@ -3898,6 +3904,9 @@ between.</p>""",
     "koerperbilder.vorrat.tage": "on {tage} of the last {max_tage} days",
     "koerperbilder.vorrat.neuest": "newest {datum}",
     "koerperbilder.vorrat.aus": "Not recognised: too similar to {person} ({wert}, threshold {schwelle}). Images are still learned. A threshold above {wert} switches recognition back on, stricter for everyone.",
+    "koerperbilder.vorrat.aus_bilder.eins": "Outlined in red: {rot} of {n} image.",
+    "koerperbilder.vorrat.aus_bilder.viele": "Outlined in red: {rot} of {n} images.",
+    "koerperbilder.vorrat.schwelle_link": "Set the threshold ›",
     "koerperbilder.vorrat.weitere.eins": "{n} more person has no images in stock yet.",
     "koerperbilder.vorrat.weitere.viele": "{n} more people have no images in stock yet.",
     "koerperbilder.vorrat.keine_bilder": "No body images in stock yet. The person learning run cuts them from suitable videos.",

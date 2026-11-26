@@ -1260,6 +1260,8 @@ T = {
     "erkennung.koerper.melden.nicht_eingerichtet": "non configurato",
     "erkennung.koerper.melden.aria": "Canali di notifica del riconoscimento della persona",
     "erkennung.koerper.melden.anwesenheit": "Pagina Presenza",
+    "erkennung.koerper.schwelle": "Soglia per un nome dal corpo",
+    "erkennung.koerper.schwelle_satz": "Più alto è più severo. Le persone che si somigliano troppo restano disattivate fino a una soglia più alta (pagina Immagini del corpo).",
     # Stufe KW12: Labels der Unteroptionen wie in en (die Hilfe zitiert sie englisch).
     "erkennung.unter.immer": "Always",
     "erkennung.unter.nur_ohne_gesicht": "Only if no face",
@@ -1286,6 +1288,7 @@ T = {
     "erkennung.knopf_speichern": "Salva + riavvia",
     "erkennung.save.sauber": "Tutto salvato",
     "erkennung.save.offen": "Non salvato, il salvataggio riavvia il servizio",
+    "erkennung.save.offen_ohne_neustart": "Non salvato",
     # --------------------------------------------------- routes/faces ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): der dim-Einleitungs-
     # Satz traegt einen <a>-Link mitten im Satz (t_html-Weg spaeterer
@@ -4048,6 +4051,9 @@ vista del giorno integri le persone conosciute.</p>""",
     "koerperbilder.vorrat.tage": "in {tage} degli ultimi {max_tage} giorni",
     "koerperbilder.vorrat.neuest": "la più recente {datum}",
     "koerperbilder.vorrat.aus": "Non riconosciuta: troppo simile a {person} ({wert}, soglia {schwelle}). Le immagini vengono ancora apprese. Una soglia sopra {wert} riattiva il riconoscimento, più severo per tutti.",
+    "koerperbilder.vorrat.aus_bilder.eins": "Bordo rosso: {rot} di {n} immagine.",
+    "koerperbilder.vorrat.aus_bilder.viele": "Bordo rosso: {rot} di {n} immagini.",
+    "koerperbilder.vorrat.schwelle_link": "Imposta la soglia ›",
     "koerperbilder.vorrat.weitere.eins": "{n} altra persona non ha ancora immagini nella scorta.",
     "koerperbilder.vorrat.weitere.viele": "{n} altre persone non hanno ancora immagini nella scorta.",
     "koerperbilder.vorrat.keine_bilder": "Ancora nessuna immagine del corpo nella scorta. L'apprendimento delle persone le ritaglia dai video adatti.",

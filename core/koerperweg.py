@@ -53,6 +53,11 @@ aus der Config (Werk 0,65), fuer alle Personen gleich, ohne Eichung. `abschaltun
 Kosinus gegen ein gueltiges Bild einer anderen Person und diese andere Person; erreicht der Wert die Schwelle (Grenze
 eingeschlossen), ist die Person fuer das Erkennen aus (Eigentuemer 08:23:29), der Lernlauf sammelt fuer sie weiter. Mit
 gueltigen Bildern nur einer Person ist sie an. Leser: `vergleichen`; die Seite Body images liest sie ab Stufe KF2.
+Seit Stufe SL3 (Bauplan analysen/bauplan_leiste_schwelle_bilder.md) nennt `abschaltung` je Person zusaetzlich `rot`:
+die Stellen in `gueltig` ihrer Bilder, deren hoechster Wert gegen ein gueltiges Bild einer anderen Person die Schwelle
+erreicht (Grenze eingeschlossen), aus derselben Matrix (Maximum je Zeile). `rot` ist leer, wenn die Person an ist, und
+nie leer, wenn sie aus ist; rot heisst „zu nah an einer anderen Person“, nicht „falsch“ (beide Seiten eines Paars sind
+rot). Die Seite Body images umrandet diese Bilder rot; `vergleichen` liest weiter nur `aus`.
 
 LESARTEN (wo der Plan offen ist, die engste; im Zweifel kein Name):
   1. Ein Abfragebild ueber der Schwelle, dessen hoechster Wert (allein oder geteilt) einer ausgeschalteten Person
@@ -240,22 +245,24 @@ def _einheiten(abdruecke):
 
 
 def abschaltung(gueltig, cfg):
-    """Je Person der hoechste Kosinus gegen ein gueltiges Bild einer anderen Person, diese Person und ob sie damit fuer
-    das Erkennen aus ist (Kopf, DIE SCHWELLE). -> {Person: {"wert", "nachbar", "aus"}}; gueltige Bilder nur einer
-    Person: wert und nachbar None, aus falsch"""
+    """Je Person der hoechste Kosinus gegen ein gueltiges Bild einer anderen Person, diese Person, ob sie damit fuer
+    das Erkennen aus ist, und ihre roten Bilder (Kopf, DIE SCHWELLE). -> {Person: {"wert", "nachbar", "aus", "rot"}},
+    rot die Stellen in gueltig; gueltige Bilder nur einer Person: wert und nachbar None, aus falsch, rot leer"""
     schwelle = float(cfg["koerper_schwelle"])
     namen = [b["person"] for b in gueltig]
-    out = {p: {"wert": None, "nachbar": None, "aus": False} for p in sorted(set(namen))}
+    out = {p: {"wert": None, "nachbar": None, "aus": False, "rot": []} for p in sorted(set(namen))}
     if len(out) < 2:
         return out
     zeilen = np.asarray(namen)
     m = _einheiten([b["fingerabdruck"] for b in gueltig])
     werte = np.where(zeilen[:, None] != zeilen[None, :], m @ m.T, -np.inf)    # nur verschiedene Personen
+    je_bild = werte.max(axis=1)                  # Stufe SL3: je Bild der hoechste Wert gegen eine andere Person
     for p in out:
         eigene = np.flatnonzero(zeilen == p)
         i, j = np.unravel_index(np.argmax(werte[eigene]), (len(eigene), len(namen)))
         wert = float(werte[eigene[i], j])
-        out[p] = {"wert": wert, "nachbar": namen[j], "aus": wert >= schwelle}
+        out[p] = {"wert": wert, "nachbar": namen[j], "aus": wert >= schwelle,
+                  "rot": [int(k) for k in eigene if je_bild[k] >= schwelle]}
     return out
 
 

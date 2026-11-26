@@ -213,6 +213,35 @@ def _pushover_ablehnung(log, grund):
         f"notification settings are saved again or a channel test succeeds")
 
 
+class PushoverHttpFehler(urllib.error.HTTPError):
+    """HTTPError MIT dem Grund, den Pushover nennt (Muster FrigateHttpFehler in verifyd.py, Issue #14).
+    Pushover schreibt bei 4xx ein JSON mit `errors` in die Antwort, z. B. „application token is
+    invalid" oder „user identifier is not a valid user, group, or subscribed user key". Ohne den Body
+    stand im Log nur „HTTP Error 400: Bad Request" und der Rat „check token/user", auch wenn im
+    Token-Feld versehentlich der User-Key stand. Bewusst SUBKLASSE von HTTPError: bestehende
+    except-Pfade und .code-Auswertungen greifen unveraendert. Nur `errors` reist mit, nie Token
+    oder User. Bauplan analysen/bauplan_pr46_uebernahme.md, Stufe UE1 Punkt 1: ein Body ohne
+    lesbares JSON meldet sich ueber _logbuch.swallowed (H1); nicht druckbare Zeichen werden vor dem
+    Kuerzen zu Leerzeichen, damit kein Zeilenumbruch eine Logzeile vortaeuscht (H2)."""
+
+    def __init__(self, e):
+        grund = ""
+        try:
+            roh = e.read(2000).decode("utf-8", "replace")
+            fehler = json.loads(roh).get("errors")
+            if isinstance(fehler, list):
+                text = "; ".join(str(x) for x in fehler)
+                grund = "".join(c if c.isprintable() else " " for c in text)[:300]
+        except Exception:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "Pushover reason left empty")
+        super().__init__(e.url, e.code, e.msg, e.hdrs, None)
+        self.grund = grund
+
+    def __str__(self):
+        g = f" — Pushover says: {self.grund}" if self.grund else ""
+        return f"HTTP Error {self.code}: {self.msg}{g}"
+
+
 def push(cfg, title, message, attachment=None, herkunft=None, log=None,
          pause_ignorieren=False):
     """`herkunft` (.163): woher die Meldung kommt — Werte und Praefixe in
@@ -257,10 +286,13 @@ def push(cfg, title, message, attachment=None, herkunft=None, log=None,
             ok = json.load(r).get("status") == 1
     except urllib.error.HTTPError as e:
         # 4xx = Pushover URTEILT (Token/User/Payload falsch) -> zaehlt; 5xx/
-        # Netz = kein Urteil. Der Fehler geht wie bisher an den Aufrufer.
+        # Netz = kein Urteil. Der Fehler geht an den Aufrufer, seit Stufe UE1
+        # (Bauplan analysen/bauplan_pr46_uebernahme.md) als Unterklasse
+        # PushoverHttpFehler mit Pushovers Grund im Text.
+        fehler = PushoverHttpFehler(e)
         if 400 <= int(getattr(e, "code", 0) or 0) < 500:
-            _pushover_ablehnung(log, f"HTTP {e.code}")
-        raise
+            _pushover_ablehnung(log, f"HTTP {e.code}" + (f": {fehler.grund}" if fehler.grund else ""))
+        raise fehler from None
     if ok:
         pushover_pause_aufheben("accepted")
     else:

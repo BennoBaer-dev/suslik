@@ -42,6 +42,7 @@ document.addEventListener('click', function (ev) {
    Erkennt die Restart-Grenze robust als "erst unten, dann wieder oben" — kein fixer Timer, der den
    ~20s Reinit/Modell-Load ueberholt und in ein "Seite kann nicht laden" rennt. */
 function _neustartDann(ziel, s) {
+  LEISTE_OFFEN = false;   /* Stufe SL1: der Speicherweg verlaesst die Seite, die Speicherleiste fragt nicht mehr */
   var start = Date.now(), MAX = 120000, warUnten = false;
   function txt(m) { if (s) s.textContent = m; }
   function tick() {
@@ -73,10 +74,42 @@ function konfigSpeichern() {
       /* B6: eine reine debug-Aenderung wirkt live, der Dienst geht dabei nicht
          unten durch — dann NICHT auf die Neustart-Grenze warten (die Schleife
          liefe sonst bis in ihren 120-s-Deckel), sondern sofort neu laden. */
-      if (r.ok) { if (r.neustart === false) { location.reload(); } else { _neustartDann(location.href, s); } }
+      if (r.ok) { if (r.neustart === false) { LEISTE_OFFEN = false; location.reload(); } else { _neustartDann(location.href, s); } }
     })
     .catch(function () { _neustartDann(location.href, s); });
 }
+
+/* Bauplan analysen/bauplan_leiste_schwelle_bilder.md, Stufe SL1: die Speicherleiste der Einstellungsseiten
+   (webui/bausteine.speicherleiste, Bauform der Stufe EK1 der Seite Erkennung) an einer Stelle. Ohne Aenderung ist der
+   Knopf aria-disabled und der Klick tut nichts (leisteBereit); jedes input und change in <main> markiert die Seite,
+   ausser in [data-keine-aenderung]. Der Merker faellt, wenn ein Speicherweg die Seite verlaesst: _neustartDann, der
+   Zweig location.reload() in konfigSpeichern und der Erfolg in areasSpeichern. Bricht der Nutzer die Rueckfrage ab
+   oder lehnt der Dienst ab, bleibt die Seite "nicht gespeichert" samt Abfrage beim Verlassen. */
+var LEISTE_OFFEN = false;
+function leisteBereit(k) {
+  return k.getAttribute('aria-disabled') !== 'true';
+}
+function leisteMarkieren() {
+  var l = document.getElementById('speicherleiste');
+  if (!l) return;
+  LEISTE_OFFEN = true;
+  l.classList.add('offen');
+  var k = l.querySelector('button');
+  k.classList.add('on'); k.setAttribute('aria-disabled', 'false');
+  var z = l.querySelector('.speicherleiste-zustand');
+  z.textContent = z.getAttribute('data-offen');
+}
+function leisteVerdrahten() {
+  var m = document.querySelector('main');
+  if (!m || !document.getElementById('speicherleiste')) return;
+  function merken(e) { if (!e.target.closest('[data-keine-aenderung]')) leisteMarkieren(); }
+  m.addEventListener('input', merken);
+  m.addEventListener('change', merken);
+  window.addEventListener('beforeunload', function (e) {
+    if (LEISTE_OFFEN) { e.preventDefault(); e.returnValue = ''; }
+  });
+}
+leisteVerdrahten();
 
 /* Notifications sheet: collect channel fields (ids "n-*") + checked categories, save, restart;
    per-channel live "Test" sends a real message with the current form values (a blank secret field keeps the stored value). */
@@ -1210,16 +1243,9 @@ function _kettungObjekt() {
   for (i = 0; i < w.length; i++) paare.push([w[i].dataset.area, w[i].value]);
   return Object.fromEntries(paare);
 }
-/* Zwei Speichern-Knoepfe (Zuweisung oben, Kettung unten) teilen sich diesen
-   einen Weg. Die Rueckmeldung gehoert an den gedrueckten Knopf — sonst steht
-   die Fehlermeldung am oberen Blockende, waehrend der Nutzer unten steht. */
-function _arStatusFeld(btn) {
-  var s = btn && btn.parentNode ? btn.parentNode.querySelector('.ar-status') : null;
-  return s || document.getElementById('ar-status');
-}
 function areasSpeichern(btn, paare) {
   paare = paare || _areasSammeln();
-  var s = _arStatusFeld(btn);
+  var s = document.getElementById('ar-status');   /* Stufe SL1: das Statusfeld der Speicherleiste */
   if (btn) btn.disabled = true;
   if (s) s.textContent = TT('js.status.speichern', 'saving …');
   fetch('/areas_speichern', {method: 'POST',
@@ -1228,7 +1254,7 @@ function areasSpeichern(btn, paare) {
     .then(function (r) { return r.json(); })
     .then(function (d) {
       if (s) s.textContent = d.msg;
-      if (d.ok) location.reload();
+      if (d.ok) { LEISTE_OFFEN = false; location.reload(); }
       else if (btn) btn.disabled = false;
     })
     .catch(function () {

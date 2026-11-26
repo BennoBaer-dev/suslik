@@ -535,8 +535,14 @@ def bilder_yuv_frist(p, b, h, frist_s, jetzt=time.monotonic):
     der blockierende p.stdout.read() haelt eine lebende, stumme Quelle
     ('lebt, liefert nichts'-Klasse, Realbeleg 11.08.) fuer immer fest, und der
     Fehlertext 'no frames within Ns' versprach eine Frist, die es nicht gab.
-    Hier: select + os.read am rohen fd — die Frist greift auch dann, wenn NIE
-    ein Byte kommt. Rueckkehr ohne StopIteration-Grund = Frist um oder EOF."""
+    Hier: select am rohen fd — die Frist greift auch dann, wenn NIE ein Byte
+    kommt. Rueckkehr ohne StopIteration-Grund = Frist um oder EOF.
+    Gelesen wird seit Stufe UE1 (Bauplan analysen/bauplan_pr46_uebernahme.md,
+    H4) mit p.stdout.read1 statt os.read am fd: leser_mit_rueckfall schaut mit
+    peek in die Pipe, und die Bytes, die peek in den Puffer geholt hat, gingen
+    am rohen Deskriptor verloren — die Bilder verrutschten. read1 liefert, was
+    im Puffer liegt, und macht nur bei leerem Puffer genau einen Lesezug am fd,
+    blockiert also nach dem select nicht."""
     fsz = b * h * 3 // 2
     fd = p.stdout.fileno()
     ende = jetzt() + float(frist_s)
@@ -548,7 +554,7 @@ def bilder_yuv_frist(p, b, h, frist_s, jetzt=time.monotonic):
         r, _, _ = select.select([fd], [], [], min(rest, 0.5))
         if not r:
             continue
-        stueck = os.read(fd, fsz - len(puffer))
+        stueck = p.stdout.read1(fsz - len(puffer))
         if not stueck:
             return                              # EOF — ffmpeg-Ende/gekillt
         puffer += stueck
@@ -1108,8 +1114,9 @@ def hw_probe_frist(url):
     Der Wert gilt fuer JEDE Quelle, weil eine laengere Frist im echten
     Fehlerfall nichts kostet — GEMESSEN am selben Tag: bei kaputter
     HW-Dekodierung (Geraet nicht vorhanden) beendet sich ffmpeg nach 2,47 s
-    von selbst, bei nicht erreichbarer Quelle nach 0,10 s; die Schleife bricht
-    dann ueber p.poll() sofort ab, ohne die Frist auszusitzen. Ausgesessen wird
+    von selbst, bei nicht erreichbarer Quelle nach 0,10 s; endet ffmpeg, meldet
+    select die Pipe lesbar, ein leerer peek beendet die Schleife, ohne die Frist
+    auszusitzen (Stufe UE1, Bauplan analysen/bauplan_pr46_uebernahme.md). Ausgesessen wird
     sie nur von einer HW-Pipe, die STUMM haengt, und dort ist Warten richtig."""
     return 25.0
 
@@ -1137,7 +1144,14 @@ def leser_mit_rueckfall(url, context, log=_log, probe_s=None):
             break
         r, _, _ = select.select([p.stdout], [], [], 0.25)
         if r:
-            return p, b, h, wahl
+            # „Lesbar" heisst auch ENDE: stirbt der HW-ffmpeg ohne ein Bild (NVDEC nicht nutzbar, etwa
+            # wenn der Container die Karte verloren hat), schliesst er stdout, und select meldet die Pipe
+            # lesbar. Ohne diesen Blick galt der tote Prozess als laufender HW-Decoder: kein SW-Rueckfall,
+            # der Quelltest endete mit „only 0/20 frames in 0.0s". peek() verbraucht nichts; die Bytes,
+            # die es in den Puffer holt, lesen bilder_yuv und bilder_yuv_frist ueber denselben Puffer.
+            if p.stdout.peek(1):
+                return p, b, h, wahl
+            break
     try:
         p.kill()
         p.wait()

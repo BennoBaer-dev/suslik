@@ -114,7 +114,15 @@ shows only what has data, from top to bottom:
   not recognised by body, which person it is too similar to, with the
   value (rounded down to two places) and the threshold
   `koerper_schwelle`. Its images are still learned; a threshold above the
-  value switches recognition back on, stricter for everyone.
+  value switches recognition back on, stricter for everyone. The images
+  that are too close to another person have a red border, and the red
+  line says how many ("Outlined in red: 1 of 2 images."). Open the row:
+  the first line links to the threshold field on the body card of the
+  **Recognition** page. Remove a red image with its ×; when all red
+  images of a person are gone, recognition is on again at the same
+  threshold, as long as valid images are left. Red means "too close to
+  another person", not "wrong": both sides of a pair are red, and you
+  decide which image is under the wrong name.
 - At the bottom, the state of the path (`person_pfad`, marked as a
   warning while there are no images yet or the pose model is missing), of
   the image check and of the learning run start, with a link to the
@@ -137,7 +145,9 @@ face in the same clip already confirmed is not used.
 
 - Each picture is compared with the closest valid image of each person.
 - The threshold is `koerper_schwelle` (default 0.65), the same for every
-  person. It does not change with your images.
+  person. It does not change with your images. You can set it in the body
+  card of the **Recognition** page (Easy and Expert) or on the **Advanced**
+  settings page; a new value works after the restart that saving starts.
 - A person whose valid images reach the threshold against the valid
   images of another person is too similar to that person: recognition is
   switched off for this person, so it gets no body name. Its images are

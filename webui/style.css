@@ -1054,22 +1054,24 @@ body.easy .nur-expert { display: none; }
 /* Stufe EK1 Punkt 7: die Zeile „Lernlauf starten“ bricht um; bei 360 px rutscht die Auswahl unter ihr Label, statt die
    Karte zu verbreitern (ohne Umbruch gemessen 368 px). */
 .ek-kippzeile.ek-lauf { flex-wrap: wrap; }
-/* Stufe EK1 (Bauplan analysen/bauplan_erkennung_karte.md): Speicherleiste der Seite Erkennung, klebt unten (Bauart
-   .vs-savebar in routes/vision.py). Ohne Aenderung ruhig: Knopf grau mit aria-disabled, er bleibt fokussierbar; nach
-   einer Aenderung (.offen) Rand und Zustandszeile in --warn, der Knopf traegt dann .on. scroll-padding-bottom haelt
-   fokussierte Elemente ueber der Leiste frei (WCAG 2.2, 2.4.11); Wert = groesste gemessene Hoehe der Leiste (Chromium
-   22.11.2026: 61 px bei 1280 px Breite, bis 111 px bei 360 px Breite deutsch mit Aenderung, Zustandszeile zweizeilig). */
-html:has(#ek-savebar) { scroll-padding-bottom: 112px; }
-.ek-savebar { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
-              margin: 14px 0 0; padding: 12px 14px; border-radius: 10px; background: var(--surface);
-              border: 1px solid var(--border); box-shadow: 0 -6px 18px rgba(0,0,0,.28); }
-.ek-savebar .gtb { font-size: 15px; font-weight: 600; padding: 8px 18px; margin: 0; }
-.ek-savebar .gtb[aria-disabled="true"] { color: var(--dim); cursor: default; }
-.ek-savebar .gtb[aria-disabled="true"]:hover { border-color: var(--border); }
-.ek-save-zustand { color: var(--dim); font-size: 13px; }
-.ek-savebar #cfg-status:empty { display: none; }
-.ek-savebar.offen { border-color: var(--warn); }
-.ek-savebar.offen .ek-save-zustand { color: var(--warn); font-weight: 600; }
+/* Stufe EK1 (Bauplan analysen/bauplan_erkennung_karte.md), seit Stufe SL1 (Bauplan
+   analysen/bauplan_leiste_schwelle_bilder.md) auf allen Einstellungsseiten (webui/bausteine.speicherleiste): die
+   Speicherleiste klebt unten (Bauart .vs-savebar in routes/vision.py). Ohne Aenderung ruhig: Knopf grau mit
+   aria-disabled, er bleibt fokussierbar; nach einer Aenderung (.offen) Rand und Zustandszeile in --warn, der Knopf traegt
+   dann .on. scroll-padding-bottom haelt fokussierte Elemente ueber der Leiste frei (WCAG 2.2, 2.4.11); Wert = groesste
+   gemessene Hoehe der Leiste (Chromium 22.11.2026: 61 px bei 1280 px Breite, bis 111 px bei 360 px Breite deutsch mit
+   Aenderung, Zustandszeile zweizeilig). */
+html:has(#speicherleiste) { scroll-padding-bottom: 112px; }
+.speicherleiste { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+                  margin: 14px 0 0; padding: 12px 14px; border-radius: 10px; background: var(--surface);
+                  border: 1px solid var(--border); box-shadow: 0 -6px 18px rgba(0,0,0,.28); }
+.speicherleiste .gtb { font-size: 15px; font-weight: 600; padding: 8px 18px; margin: 0; }
+.speicherleiste .gtb[aria-disabled="true"] { color: var(--dim); cursor: default; }
+.speicherleiste .gtb[aria-disabled="true"]:hover { border-color: var(--border); }
+.speicherleiste-zustand { color: var(--dim); font-size: 13px; }
+.speicherleiste-status:empty { display: none; }
+.speicherleiste.offen { border-color: var(--warn); }
+.speicherleiste.offen .speicherleiste-zustand { color: var(--warn); font-weight: 600; }
 .ek-knopf { display: inline-block; width: 100%; text-align: center; background: var(--surface-2);
             border: 1px solid var(--border); border-radius: 8px; color: var(--text);
             font-size: 13px; font-weight: 600; padding: 8px 10px; box-sizing: border-box; }

@@ -26,10 +26,16 @@ ECHTE Schalter, nichts Vorgetaeuschtes:
              seit FN2 (Bauplan analysen/bauplan_feldnachzug_0110.md) darunter
              der Kipp "Neue Bilder automatisch uebernehmen" mit dem
              versteckten Feld cfg-koerper_sichtpruefung (umgekehrt); die
-             Seite Koerperbilder traegt beide nicht mehr.
-  Speichern -> seit EK1 die Leiste ek-savebar, die unten am Bildschirmrand
-             klebt: ohne Aenderung ruhig mit aria-disabled, nach jeder
-             Aenderung (ekMarkieren) hervorgehoben; der Klick speichert ueber
+             Seite Koerperbilder traegt beide nicht mehr. Darunter seit SL2
+             (Bauplan analysen/bauplan_leiste_schwelle_bilder.md) das
+             Zahlenfeld cfg-koerper_schwelle, in Easy und Expert, Grenzen aus
+             der Whitelist; die Zeile auf Erweitert bleibt.
+  Speichern -> seit Stufe SL1 (Bauplan analysen/bauplan_leiste_schwelle_bilder.md)
+             die gemeinsame Speicherleiste (webui/bausteine.speicherleiste, in
+             EK1 hier entstanden), die unten am Bildschirmrand klebt: ohne
+             Aenderung ruhig mit aria-disabled, nach jeder Aenderung
+             hervorgehoben (input und change in <main>, die Kipps und
+             Unterwahlen ueber leisteMarkieren); der Klick speichert ueber
              konfigSpeichern (webui/app.js).
   Vision  -> vision_pfad  (dito).
   Gesicht -> hat heute KEINEN Aus-Schalter (Rueckgrat der Kette, person/vision
@@ -53,6 +59,7 @@ from core.koerperweg import MELDE_SCHALTER
 from core.melden import konfigurierte_kanaele
 from core.sprache import t
 from routes.koerperbilder import _LAUF   # Stufe EK1: die Stellungen von koerper_lauf, gelesen, nicht kopiert
+from webui.bausteine import speicherleiste
 
 
 def _kipp(an, verriegelt=False, onclick="", titel=None, label=None):
@@ -200,7 +207,7 @@ def render(cfg, whitelist, lage, waechter, gesicht, n_areas=None):
     # Klasse ek-lauf (Punkt 7): die Zeile bricht bei 360 px um, statt die Karte zu verbreitern
     lauf = ('<div class="ek-kippzeile ek-lauf"><label class="ek-zl" for="cfg-koerper_lauf">'
             + html.escape(t("koerperbilder.auto.lauf")) + '</label>'
-            '<select id="cfg-koerper_lauf" onchange="ekMarkieren()">'
+            '<select id="cfg-koerper_lauf">'
             + "".join(f'<option value="{w}"{" selected" if w == lauf_wahl else ""}>{html.escape(t(k))}</option>'
                       for w, k in _LAUF)
             + '</select></div>')
@@ -209,6 +216,18 @@ def render(cfg, whitelist, lage, waechter, gesicht, n_areas=None):
     pruef = bool(cfg.get("koerper_sichtpruefung"))
     lauf += (_kipp(not pruef, onclick="ekUebernehmen(this)", label=html.escape(t("koerperbilder.auto.uebernehmen")))
              + f'<input type="hidden" id="cfg-koerper_sichtpruefung" value="{"true" if pruef else "false"}">')
+    # Bauplan analysen/bauplan_leiste_schwelle_bilder.md, Stufe SL2: die Schwelle koerper_schwelle als Zahlenfeld unter dem
+    # Kipp, in Easy und Expert (Entscheid E1), ohne Werkswert (E2), Grenzen aus der Whitelist und sichtbar wie auf
+    # Erweitert; gespeichert ueber die Leiste. Ohne Whitelist-Eintrag kein Feld, sonst lehnte config_schreiben jedes
+    # Speichern der Seite ab (wie vision_pfad, KW9 Punkt 2).
+    schwelle = ""
+    if "koerper_schwelle" in whitelist:
+        _typ, lo, hi, _erkl = whitelist["koerper_schwelle"]
+        schwelle = ('<div class="ek-kippzeile ek-lauf" id="ek-schwelle"><label class="ek-zl" for="cfg-koerper_schwelle">'
+                    + html.escape(t("erkennung.koerper.schwelle")) + f' ({lo}–{hi})</label>'
+                    f'<input type="number" id="cfg-koerper_schwelle" min="{lo}" max="{hi}" step="0.01" '
+                    f'value="{html.escape(str(cfg.get("koerper_schwelle")), quote=True)}"></div>'
+                    f'<p class="ek-satz">{html.escape(t("erkennung.koerper.schwelle_satz"))}</p>')
     p_status = ("" if lg_p.get("wirksam") else
                 '<div class="ek-beweis nur-expert">'
                 + html.escape(t("erkennung.status.kein_vorrat") if not lg_p.get("vorrat") else
@@ -224,7 +243,7 @@ def render(cfg, whitelist, lage, waechter, gesicht, n_areas=None):
                  [("immer", t("erkennung.unter.immer")),
                   ("nur_wenn_gesicht_leer", t("erkennung.unter.nur_ohne_gesicht"))], "ekUnter")
         + f'<p class="ek-satz">{t("erkennung.koerper.satz")}</p>'
-        + melden_block + lauf + p_status
+        + melden_block + lauf + schwelle + p_status
         # KW6: der Knopf fuehrt auf die Seite der Koerperbilder (die alten Seiten /personlauf sind ausgebaut)
         + '<div class="ek-fuss"><a class="ek-knopf" href="/koerperbilder">'
         + t("erkennung.koerper.knopf_register") + '</a></div></div>')
@@ -288,30 +307,10 @@ def render(cfg, whitelist, lage, waechter, gesicht, n_areas=None):
 
     script = """
 <script>
-var ekDirty = false;
 function ekFeld(id){return document.getElementById(id);}
-/* Stufe EK1 (Bauplan analysen/bauplan_erkennung_karte.md): jede Aenderung hebt die Speicherleiste hervor. */
-function ekMarkieren(){ekDirty = true;
-  ekFeld('ek-savebar').classList.add('offen');
-  var k = ekFeld('ek-speichern');
-  k.classList.add('on'); k.setAttribute('aria-disabled', 'false');
-  var z = ekFeld('ek-save-zustand');
-  z.textContent = z.getAttribute('data-offen');}
-/* Ohne Aenderung tut der Klick nichts. konfigSpeichern schreibt cfg-status erst nach dem Ja der Rueckfrage: bleibt die
-   Zeile leer, hat der Nutzer abgebrochen, und die Seite bleibt "nicht gespeichert" samt Abfrage beim Verlassen. */
-function ekSpeichern(k){
-  if (k.getAttribute('aria-disabled') === 'true') return;
-  var s = ekFeld('cfg-status');
-  s.textContent = '';
-  konfigSpeichern();
-  ekDirty = !s.textContent;
-}
-/* .210 (User 16.08.): wer mit ungesicherten Body/Vision-Aenderungen die Seite
-   verlaesst (Zuruecktaste, Link), bekommt den Browser-Warn-Dialog. Der
-   Live-Kipp zaehlt nicht als ungesichert — er wirkt sofort. */
-window.addEventListener('beforeunload', function(e){
-  if (ekDirty) { e.preventDefault(); e.returnValue = ''; }
-});
+/* Stufe SL1 (Bauplan analysen/bauplan_leiste_schwelle_bilder.md): Speicherleiste, Merker und Abfrage beim Verlassen
+   stehen in webui/app.js (leisteMarkieren); die Kipps setzen versteckte Felder ohne Ereignis und markieren deshalb
+   selbst. Der Live-Kipp zaehlt nicht als ungesichert — er wirkt sofort. */
 function ekKipp(k, key){
   if(k.classList.contains('fest')) return;
   var an = !k.classList.contains('an');
@@ -324,7 +323,7 @@ function ekKipp(k, key){
     var u = karte.querySelector('.ek-unter button.an');
     sel.value = u ? u.getAttribute('data-wert') : 'immer';
   } else { sel.value = 'aus'; }
-  ekMarkieren();
+  leisteMarkieren();
 }
 /* Stufe KW12: Melde-Schalter der Koerper-Erkennung. Ein Klick setzt nur das versteckte Feld und die Zeile
    "Meldet an"; gespeichert wird mit dem Knopf wie der Modus. */
@@ -341,7 +340,7 @@ function ekMelden(k, key){
   if (namen.length) { var b = document.createElement('b'); b.textContent = namen.join(', '); w.appendChild(b); }
   else { w.textContent = w.getAttribute('data-leer'); }
   document.querySelector('.ek-melden-leer').hidden = namen.length > 0;
-  ekMarkieren();
+  leisteMarkieren();
 }
 /* Stufe FN2: Kipp "Neue Bilder automatisch uebernehmen"; an heisst Sichtpruefung aus, das Feld traegt den umgekehrten
    Wert, gespeichert wird mit der Leiste. */
@@ -350,7 +349,7 @@ function ekUebernehmen(k){
   k.classList.toggle('an', an);
   k.setAttribute('aria-checked', an ? 'true' : 'false');
   ekFeld('cfg-koerper_sichtpruefung').value = an ? 'false' : 'true';
-  ekMarkieren();
+  leisteMarkieren();
 }
 function ekUnter(b, wert){
   var u = b.closest('.ek-unter');
@@ -358,7 +357,7 @@ function ekUnter(b, wert){
     x.classList.toggle('an', x===b);});
   var sel = ekFeld(u.getAttribute('data-feld'));
   if (sel && !b.closest('.ek-card').classList.contains('aus')) {
-    sel.value = wert; ekMarkieren();
+    sel.value = wert; leisteMarkieren();
   }
 }
 function ekLive(k){
@@ -402,13 +401,6 @@ function ekLive(k){
           'audited settings as <a href="/kette">Recognition chain</a> and '
           'the <a href="/live">Live tab</a> — one value, shown in one more '
           "place.</p>"
-        # Stufe EK1 Punkt 4: die Speicherleiste klebt unten; aria-disabled statt disabled, damit der Knopf fokussierbar
-        # bleibt (W3C); den Text "nicht gespeichert" setzt ekMarkieren aus data-offen.
-        + '<div class="ek-savebar" id="ek-savebar">'
-          '<button type="button" class="gtb" id="ek-speichern" aria-disabled="true" onclick="ekSpeichern(this)">'
-        + t("erkennung.knopf_speichern") + '</button>'
-          '<span class="ek-save-zustand" id="ek-save-zustand" '
-        + f'data-offen="{html.escape(t("erkennung.save.offen"), quote=True)}">'
-        + html.escape(t("erkennung.save.sauber")) + '</span>'
-          '<span id="cfg-status" style="color:var(--dim)"></span></div>'
+        # Stufe EK1 Punkt 4, seit Stufe SL1 das gemeinsame Bauteil: die Speicherleiste klebt unten.
+        + speicherleiste(t("erkennung.knopf_speichern"), "konfigSpeichern()", "cfg-status")
         + script)

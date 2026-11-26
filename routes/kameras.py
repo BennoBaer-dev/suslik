@@ -15,6 +15,7 @@ import webui
 
 from core import registry as _reg
 from core.sprache import t, t_html
+from webui.bausteine import speicherleiste
 
 # Schluessel-Praefix der Stufennamen (kameras.prio.<stufe>); auch die Systemseite liest ihn von hier.
 PRIO_TEXT = "kameras.prio."
@@ -76,10 +77,11 @@ def render(cams, err, kam_store, rz_cfg, steckbriefe=None):
               + ("".join(karten) if cams else
                  webui.leer(t("kameras.leer.titel"),
                             t("kameras.leer.hinweis")))
-              + (f'<p style="margin-top:1rem"><button class="gtb on" '
-                 f'onclick="kamerasSpeichern(this)">{t("kameras.fuss.knopf_speichern")}</button> '
-                 '<span id="kam-status" style="color:var(--dim)"></span></p>' if cams else "")
-              + _steckbrief_block(cams, steckbriefe))
+              + _steckbrief_block(cams, steckbriefe)
+              # Stufe SL1 (Bauplan analysen/bauplan_leiste_schwelle_bilder.md): die Speicherleiste am Ende, nur mit
+              # Kameras; der Block der Stream-Angaben steht darueber
+              + (speicherleiste(t("kameras.fuss.knopf_speichern"), "kamerasSpeichern(this)", "kam-status")
+                 if cams else ""))
     return fehlerbanner + inhalt
 
 

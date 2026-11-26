@@ -461,3 +461,18 @@ def js_literal(wert):
         else:
             aus.append(ch)
     return "'" + "".join(aus) + "'"
+
+
+def speicherleiste(knopf, aufruf, status_id, neustart=True):
+    """Die Speicherleiste der Einstellungsseiten (Bauplan analysen/bauplan_leiste_schwelle_bilder.md, Stufe SL1).
+    -> HTML der Leiste: Knopf mit dem Aufruf der Seite, Zustandszeile, Statusfeld status_id"""
+    # Bauform der Stufe EK1 (vorher nur auf der Seite Erkennung): aria-disabled statt disabled, damit der Knopf
+    # fokussierbar bleibt (W3C); leisteBereit (webui/app.js) laesst den Klick ohne Aenderung ins Leere laufen. Den Text
+    # "nicht gespeichert" setzt leisteMarkieren aus data-offen. knopf ist fertiger Text aus t(), wie bisher eingesetzt.
+    offen = t("erkennung.save.offen") if neustart else t("erkennung.save.offen_ohne_neustart")
+    return ('<div class="speicherleiste" id="speicherleiste">'
+            '<button type="button" class="gtb" aria-disabled="true" '
+            f'onclick="{html.escape("leisteBereit(this)&&" + aufruf, quote=True)}">{knopf}</button>'
+            f'<span class="speicherleiste-zustand" data-offen="{html.escape(offen, quote=True)}">'
+            f'{html.escape(t("erkennung.save.sauber"))}</span>'
+            f'<span id="{status_id}" class="speicherleiste-status" style="color:var(--dim)"></span></div>')

@@ -5,6 +5,15 @@ never pushed to GHCR; they ship bundled with the next release (each release entr
 says which steps it bundles). This file keeps the last five releases; the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git history.
 
+## 0.1.1.115 (2026-11-26)
+
+Test release. Person recognition stays a preview.
+
+- **Important, retention:** suslik now keeps its own event data for 14 days by default instead of 60 (`aufbewahrung_tage`). At the first start of this version, every installation without its own value deletes event folders without ground truth that are older than 14 days for good; the monthly archive of the event record, the pieces of the unknown queue and the log of names written to Frigate go to the trash after 14 days. You now set the value on the **Advanced** page (whole days from 1); folders deleted at the first start do not come back.
+- **Person recognition:** the body check now compares every frame along a person's track (three per second, between the first and the last point Frigate has for them) instead of at most three images, so it names the person more often.
+- **Settings:** every settings page has the same save bar; it shows whether something is unsaved and warns before you leave the page with unsaved changes. You can now set the body threshold right in the **Body recognition** card on the **Recognition** page. On **Body images**, images that are too similar to another person have a red frame, and a link leads to the threshold.
+- **Small fixes from reported issues** (pull request #46): when Pushover rejects a message, the log, the pause notice and the channel test now show Pushover's own reason (for example "application token is invalid") instead of only "HTTP Error 400". When the hardware decoder of a live watcher delivers no frame, suslik falls back to decoding on the CPU and says so, instead of failing the source test.
+
 ## 0.1.1.113 (2026-11-24)
 
 Test release. Person recognition stays a preview.
@@ -49,10 +58,3 @@ Test release. 0.1.1.104 to 0.1.1.109 were never published; their changes are par
 - Vision detect is parked: it is switched off and cannot be switched on in this version, a saved "on" is set to off once at the first start, and the Vision pages say why.
 - Telegram: with `telegram_modus` set to `aus` (off, the default), nothing is sent over Telegram any more, including fault messages and the messages and videos of the live watchers. The channel test on the page still works.
 - Body images live in `refquelle/koerperbilder/` in the data folder and are part of the full backup and of `/support/faces`; the support area `/support/personlern` is gone. The images no longer carry the DINOv2 model file.
-
-## 0.1.1.103 (2026-11-18)
-
-- Accelerator images (cuda, gpu, gpu-legacy, rocm) no longer report OK when their GPU or NPU is not working at startup: the startup log shows FAIL, `/health` reports `ok: false`, every page shows a red line in the header, and the System page gives cause and fix under the Backend tile.
-- cuda: the startup log now names the exact case and lists what arrives in the container.
-- Docs: the Compose example for NVIDIA now names only `capabilities: [gpu]`. With `video` added, `nvidia-smi` was missing in the container; if you copied the old example, remove `video`.
-- System page: the Analysis tile turns red when the last analysis has failed.

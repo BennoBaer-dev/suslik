@@ -16,6 +16,7 @@ import json
 
 from core.frigate_auth import SEKTIONS_SCHLUESSEL as FRIGATE_AUTH_KEYS
 from core.sprache import t
+from webui.bausteine import speicherleiste
 
 # person_pfad/vision_pfad erscheinen NICHT mehr in der generischen Tabelle —
 # sie leben in der Ketten-Sektion (dieselben cfg-<key>-IDs, derselbe Save-Weg:
@@ -118,15 +119,14 @@ def kette_seite(cfg, kette, lage, whitelist, auto_hinweis):
     """-> Seiten-INHALT des EIGENEN Blatts /kette (.189, User: 'vier
     Menuepunkte' — Cameras · Notifications · Recognition chain · Advanced).
     Save nutzt denselben konfigSpeichern-Weg (sammelt die cfg-*-Felder DIESER
-    Seite; config_schreiben schreibt nur gelieferte Schluessel)."""
+    Seite; config_schreiben schreibt nur gelieferte Schluessel), seit Stufe SL1
+    ueber die Speicherleiste am Ende der Seite."""
     return (kette_sektion(cfg, kette, lage, whitelist, auto_hinweis)
-            + '<p><button class="gtb on" onclick="konfigSpeichern()">'
-            + t("konfiguration.knopf_speichern") + '</button> '
-              '<span id="cfg-status" style="color:var(--dim)"></span></p>'
-              # Stufe-0-Grenze: der Satzrest mit <a>-Link bleibt literal.
-              f'<p class="sub">{t("konfiguration.kette_blatt.hinweis")} '
+            # Stufe-0-Grenze: der Satzrest mit <a>-Link bleibt literal.
+            + f'<p class="sub">{t("konfiguration.kette_blatt.hinweis")} '
               'All other parameters '
-              'live under <a href="/konfiguration">Advanced</a>.</p>')
+              'live under <a href="/konfiguration">Advanced</a>.</p>'
+            + speicherleiste(t("konfiguration.knopf_speichern"), "konfigSpeichern()", "cfg-status"))
 
 
 def frigate_auth_sektion(cfg):
@@ -300,11 +300,12 @@ def render(cfg, whitelist, auto_hinweis, kette=None, kette_lage=None, store=None
               f'<th>{t("konfiguration.tabelle.kopf_wert")}</th>'
               f'<th>{t("konfiguration.tabelle.kopf_bedeutung")}</th></tr>'
               + "".join(zeilen) + "</table></div>"
-              f'<p><button class="gtb on" onclick="konfigSpeichern()">{t("konfiguration.knopf_speichern")}</button> '
-              f'<a href="/setup" class="gtb" style="text-decoration:none">{t("konfiguration.knopf_setup")}</a> '
-              '<span id="cfg-status" style="color:var(--dim)"></span></p>'
+              # Stufe SL1: der Knopf Speichern sitzt in der Leiste am Ende, der Link zum Setup bleibt hier
+              f'<p><a href="/setup" class="gtb" style="text-decoration:none">{t("konfiguration.knopf_setup")}</a></p>'
               f"<h3>{t('konfiguration.abschnitt_readonly')}</h3>"
               '<div class="tabelle-wrap"><table>' + "".join(nur_lesen) + "</table></div>"
               '<p class="sub">Camera on/off and per-camera zone conditions are now edited '
-              'on the <a href="/kameras">Cameras</a> page.</p>')
+              'on the <a href="/kameras">Cameras</a> page.</p>'
+              # Neustart und Support-Token bleiben eigene Aktionen (Klicks, kein Feld cfg-) und markieren nichts
+              + speicherleiste(t("konfiguration.knopf_speichern"), "konfigSpeichern()", "cfg-status"))
     return inhalt

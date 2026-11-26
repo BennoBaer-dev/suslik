@@ -27,11 +27,14 @@ ABLAUF EINES AUFTRAGS (schnitt_job, Typ koerperschnitt im Koerper-Prozess worker
   3. der Clip nur aus dem Cache (der Dienst holt ihn vorher)
   4. EIN Frame-Lauf ueber core.frames.lauf am decode.FrameIter mit RAM-Gate; Zeitwache EVENT_ZEITWACHE_S; reisst sie
      oder wird der Abnehmer abgeworfen, faellt das Video aus, Teilmaterial wird nicht ausgewertet
-  5. bestbilder: Uhr-Anker, Median-Hintergrund, Pfad-Fenster, alle Kandidaten, Zeitregel
+  5. bestbilder: Uhr-Anker, Median-Hintergrund, Pfad-Fenster, alle Kandidaten, Zeitregel; nur abfrage: dazu jedes
+     Abtastbild in der Spanne am zeitlich eingeschobenen Wegpunkt, zwischen erstem und letztem Wegpunkt, je ein
+     Abtastschritt Rand (Sammelplan analysen/bauplan_klein.md, Stufen K1 und K2)
   6. sieben: Pose-Wache streng (core.livewache.pose_wache, keine zweite Ladestelle), Zuschnitt aufs Skelett, Groesse des
      Fingerabdrucks, Fingerabdruck
   7. nur cutter: Anker gegen den Fingerabdruck des person.png, Grenze koerper_anker_min; darunter fallen alle Bilder weg
-  8. Auswahl zeitlich gleichmaessig, hoechstens n
+  8. Auswahl zeitlich gleichmaessig, hoechstens n; abfrage setzt n auf die Zahl der Kandidaten (kein Pose-Deckel in
+     Schritt 6, keine Auswahl): alle bestandenen Bilder gehen zurueck
 Die Bilder gehen als PNG (base64) mit Feldern zurueck; abgelegt werden sie vom Dienst (Service.cutter_starten ueber
 core.refquelle.body_add). auftrag, antwort_lesen und schublade_felder sind die Dienst-Seite desselben Protokolls.
 
@@ -192,8 +195,8 @@ class Koerper:
     unter dem Dichte-Boden (MIN_DICHTE_ANTEIL, mindestens MIN_BILDER) faellt das Ereignis laut aus. Ohne Budget kein
     Lauf (seit .202 verboten, konzept_speicher I-1)."""
 
-    def __init__(self, eid, frigate_url, fps_sample=FPS_SAMPLE, ram_budget_mb=None):
-        self.eid = eid
+    def __init__(self, eid, frigate_url, fps_sample=FPS_SAMPLE, ram_budget_mb=None, alle=False):
+        self.eid, self.alle = eid, alle
         self.basis = str(frigate_url or "").rstrip("/")
         self.fps_sample = fps_sample
         self.ram_budget_mb = ram_budget_mb
@@ -264,7 +267,7 @@ class Koerper:
         """Alle Kandidaten aus den gehaltenen Samples; der Puffer wird immer losgelassen.
         -> wie bestbilder"""
         try:
-            return bestbilder(self.bilder, self.fps, self.ev, self.snap, self.fps_sample)
+            return bestbilder(self.bilder, self.fps, self.ev, self.snap, self.fps_sample, alle=self.alle)
         finally:
             self.bilder = []
 
@@ -320,8 +323,10 @@ def _box_am_pfad(f, hintergrund, cx, cy, bw, bh):
     return f[cy0:cy1, cx0:cx1].copy(), bhy
 
 
-def bestbilder(bilder, fps, ev, snap, fps_sample=FPS_SAMPLE):
-    """Uhr-Anker, Median-Hintergrund, Pfad-Fenster und Zeitregel (KW3 Punkt 2) ueber die gehaltenen Samples.
+def bestbilder(bilder, fps, ev, snap, fps_sample=FPS_SAMPLE, alle=False):
+    """Uhr-Anker, Median-Hintergrund, Pfad-Fenster und Zeitregel (KW3 Punkt 2) ueber die gehaltenen Samples; mit alle
+    dazu jedes Abtastbild ohne Kandidaten in der Spanne am zeitlich eingeschobenen Wegpunkt, zwischen erstem und letztem
+    Wegpunkt, je ein Abtastschritt Rand (Sammelplan, Stufen K1 und K2).
     -> (Kandidaten oder None, Grund oder None, Detail); Kandidat = (Wert, Bildnummer, Ausschnitt, Hoehe, Bildzeit),
        alle, nach Wert absteigend"""
     if len(bilder) < MIN_BILDER:
@@ -352,6 +357,19 @@ def bestbilder(bilder, fps, ev, snap, fps_sample=FPS_SAMPLE):
             continue
         crop, bhy = treffer
         kandidaten.append((bhy * np.log1p(schaerfe(crop)), i, crop, bhy, bildzeit))
+    # die Stelle zeitlich eingeschoben, nur zwischen erstem und letztem Wegpunkt, je ein Abtastschritt Rand
+    if alle:
+        reihe, belegt = sorted(pd, key=lambda p: p[1]), {k[1] for k in kandidaten}
+        zeiten, xs, ys = [p[1] for p in reihe], [p[0][0] for p in reihe], [p[0][1] for p in reihe]
+        for i, f in bilder:
+            bildzeit = st + i / fps - pre
+            if (i in belegt or not st <= bildzeit <= ende
+                    or not zeiten[0] - schritt_s <= bildzeit <= zeiten[-1] + schritt_s):
+                continue
+            treffer = _box_am_pfad(f, hintergrund, float(np.interp(bildzeit, zeiten, xs)),
+                                   float(np.interp(bildzeit, zeiten, ys)), bw, bh)
+            if treffer is not None:
+                kandidaten.append((treffer[1] * np.log1p(schaerfe(treffer[0])), i, treffer[0], treffer[1], bildzeit))
     if not kandidaten:
         return None, GRUND_KEINE_BOX, f"anchor quality {guete:.2f}"
     kandidaten.sort(key=lambda t: -t[0])
@@ -605,7 +623,7 @@ def schnitt_job(job, ram_budget_mb):
         roh, detail = person_bild(dd, eid, job.get("person"))
         if roh is None:
             return _ausfall(GRUND_PERSONBILD, detail)
-    k = Koerper(eid, job.get("frigate_url"), ram_budget_mb=ram_budget_mb)
+    k = Koerper(eid, job.get("frigate_url"), ram_budget_mb=ram_budget_mb, alle=art == "abfrage")
     try:
         k.vorbereiten()
     except KeinKoerper as e:
@@ -627,14 +645,15 @@ def schnitt_job(job, ram_budget_mb):
         _log.warning("body cutter: the pose model is missing — no body image can be cut")
         return _ausfall(GRUND_POSE)
     sess = _sitzung(job.get("person_backend"))
-    bilder, zaehler = sieben(kandidaten, wache, job["n"], lambda rgb: abdruck_rechnen(sess, rgb))
+    n = len(kandidaten) if art == "abfrage" else job["n"]     # abfrage: kein Pose-Deckel, keine Auswahl (Stufe K1)
+    bilder, zaehler = sieben(kandidaten, wache, n, lambda rgb: abdruck_rechnen(sess, rgb))
     if not bilder:
         return _ausfall(GRUND_UNVOLLSTAENDIG, detail, zaehler)
     fp_person = None
     if art == "cutter":
         fp_person = abdruck_rechnen(sess, np.asarray(Image.open(io.BytesIO(roh)).convert("RGB").resize(
             BACKBONES[FINGERABDRUCK]["groesse"], Image.BILINEAR)))
-    grund, detail2, gewaehlt = abschliessen(bilder, art, fp_person, job.get("anker_min"), job["n"])
+    grund, detail2, gewaehlt = abschliessen(bilder, art, fp_person, job.get("anker_min"), n)
     zaehler["anker_bester"] = max((b["anker"] for b in bilder if b["anker"] is not None), default=None)
     if grund:
         return _ausfall(grund, detail2, zaehler)

@@ -1627,8 +1627,11 @@ def load_config(path):
                          # E3a-1c (Bauplan Referenz-Quelle einbauen, Entscheid 1 und V3,
                          # aus E3a-4 vorgezogen, O562 c): Seite des Profilbilds eines
                          # Satzes = profil_faktor x laengere Seite der Gesichtsbox;
-                         # Frist fuer Saetze mit Status verworfen in Tagen.
-                         ("profil_faktor", 2.2), ("aufbewahrung_tage", 60),
+                         # aufbewahrung_tage: Frist in Tagen fuer alles an Ereignissen (Ordner,
+                         # Monatsarchiv, Unbekannt-Stapel, Schreibprotokoll), Werkswert 14 (Bauplan
+                         # analysen/bauplan_pr46_uebernahme.md, Stufe UE1 Punkt 6, O1513 a; ED004,
+                         # freigegeben fuer diesen Wert, Eigentuemer 25.11.2026 14:39:07 und 14:47:58).
+                         ("profil_faktor", 2.2), ("aufbewahrung_tage", 14),
                          # Und der Deckel war MEHR ALS DIE PLATTE: der Melder von
                          # Issue #25 hat 32 GB, der Vorgabewert stand auf 50 —
                          # der Deckel konnte per Konstruktion nie greifen, sein
@@ -13047,9 +13050,12 @@ class Service:
         "vorrat_rand_faktor": (float, 1.0, 4.0, "stock crops: context margin factor around the face box — for the human eye in the offer view, never an embedding source (2.2)"),
         # E3a-1c (Bauplan Referenz-Quelle einbauen, Entscheid 1): Untergrenze UEBER 1,5,
         # deshalb die kleinste Kommazahl oberhalb von 1,5; eine Obergrenze nennt der
-        # Bauplan nicht. aufbewahrung_tage steht (wie lernlauf_retention_d) nur in
-        # der Werkswert-Liste: der Bauplan nennt fuer ihn keine Grenzen (O555 f).
+        # Bauplan nicht. lernlauf_retention_d steht nur in der Werkswert-Liste, ohne Feld.
         "profil_faktor": (float, math.nextafter(1.5, math.inf), math.inf, "saved faces: side of the profile picture as this factor times the longer side of the face box, centred on the box, unscaled and lossless, cut at the frame edge (2.2; must be above 1.5)"),
+        # Bauplan analysen/bauplan_pr46_uebernahme.md, Stufe UE1 Punkt 6 (ED004, freigegeben fuer dieses Feld, Eigentuemer
+        # 25.11.2026 12:07:58, 12:10:33 und 14:39:07): ganze Tage ab 1, ohne Obergrenze, damit die Klemme in load_config
+        # keinen von Hand groesser gesetzten Wert senkt; Speichern startet neu, die Wartung liest den Wert beim Start.
+        "aufbewahrung_tage": (int, 1, math.inf, "how long everything tied to events is kept, in whole days (default 14): event folders, the monthly archive of the event record, the pieces of the unknown queue and the log of names written to Frigate. It does not follow Frigate's own retention. A lower value applies at the restart after saving: older event folders without ground truth are deleted then, not moved to the trash. No upper limit"),
         "vorrat_zwilling_sim": (float, 0.8, 0.99, "stock offers: near-identical twins within one walk-through are folded into the strongest picture at/above this cosine similarity (measured: neighbour frames ~1.0, real variety 0.41-0.70; 0.95)"),
         "vorrat_konsens_min": (float, 0.1, 0.6, "stock offers: min. scenario consensus — best similarity to another stock face of the same walk-through; filters foreign faces like animals (measured: dog 0.15 vs. real 0.59+, threshold 0.30)"),
         "katalog_norm_min": (float, 15.0, 35.0, "catalog offer line: min. feature norm for frontal faces offered as new references (measured 24.0 = top 22%% of the existing reference set)"),

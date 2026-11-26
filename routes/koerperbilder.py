@@ -44,6 +44,14 @@ core.koerperweg.abschaltung einmal mit den gueltigen Bildern aus daten und cfg; 
 dort. Die Zeile einer Person, die aus ist, traegt data-aus="1" und die Klasse kb-aus (roter Ring um die Initiale), unter
 dem Namen steht rot der Text koerperbilder.vorrat.aus mit der aehnlichen Person, dem Wert auf zwei Stellen abgerundet und
 der Schwelle koerper_schwelle (_aus_satz). Personen, die an sind, bekommen nichts Neues.
+Seit Stufe SL3 (Bauplan analysen/bauplan_leiste_schwelle_bilder.md; Eigentuemer 24.11.2026 20:02:59, die Bilder rot
+umranden, die zur Ueberschneidung mit anderen Personen fuehren, damit der Nutzer sie loeschen kann) nimmt _bestand die
+roten Bilder aus dem Feld rot von abschaltung und derselben Liste, die es ihr gibt; deren Kacheln tragen die Klasse kb-nah
+und data-nah="1" (roter Rand, die Reihenfolge der Bilder bleibt). Hinter dem Satz der roten Zeile steht ein zweiter,
+koerperbilder.vorrat.aus_bilder (wie viele der Bilder rot sind, Mehrzahl nach der Zahl aller Bilder). Die Zeile liegt im
+Knopf der Zeile, dort darf kein Verweis stehen; der Verweis zum Feld der Schwelle (/erkennung#ek-schwelle) steht deshalb
+als erste Zeile im aufgeklappten Bereich einer ausgeschalteten Person, in Easy und Expert. Entfernt wird ueber das
+vorhandene × (kbEntfernen). Rot heisst zu nah an einer anderen Person, nicht falsch: beide Seiten eines Paars sind rot.
 
 EHRLICHKEIT (ED008): laesst sich ein Teil nicht lesen, zeigt die Seite einen roten Hinweis und schreibt den Grund als
 ERROR-Zeile, einmal je Prozess und Grund (Muster routes/unbekannte._melden); die wartenden Videos fehlen dann (der Knopf
@@ -162,6 +170,7 @@ _STIL = ('<style>'
          '.kb-rot{color:var(--crit)}'
          '.kb-aus .avs{box-shadow:0 0 0 2px var(--surface),0 0 0 4px var(--crit)}'
          '.kb-aus-satz{display:block;font-size:13px;color:var(--crit);margin:2px 0 0}'
+         '.kb-nah .kb-kb{border-color:var(--crit);box-shadow:0 0 0 1px var(--crit)}'
          '@media (max-width:560px){.kb-gruppe-kopf .gtb{margin-left:0}.kb-offen{padding-left:0}}'
          '</style>')
 
@@ -256,9 +265,9 @@ def _fuss(cfg, d, pose_ok):
             '</span></p>')
 
 
-def _bild_kachel(b, wahl):
+def _bild_kachel(b, wahl, nah=False):
     """Eine Kachel eines Koerperbilds: Bild, Zeit und darunter (Neue Bilder) Annehmen und Verwerfen, sonst der Knopf
-    zum Entfernen am Bild. -> HTML"""
+    zum Entfernen am Bild; ein rotes Bild (nah, Stufe SL3) mit Klasse kb-nah und data-nah="1". -> HTML"""
     bild = f'<img class="kb-kb" src="{_e(BILD_PFAD + b["bild_id"])}.png" loading="lazy" alt="">'
     if wahl:
         unten = (f'<span class="kb-wahl"><button class="gtb" title="{_e(t("koerperbilder.neu.annehmen"))}" '
@@ -270,19 +279,22 @@ def _bild_kachel(b, wahl):
                 f'<small>{_e(_zeit(b["zeit"]))}</small>{unten}</div>')
     x = (f'<button class="gtb kb-x" title="{_e(t("koerperbilder.vorrat.entfernen"))}" '
          f'aria-label="{_e(t("koerperbilder.vorrat.entfernen"))}" onclick="kbEntfernen(this)">&times;</button>')
-    return (f'<div class="pass-kachel kb-bild" data-bild="{_e(b["bild_id"])}"><div class="kb-rahmen">{bild}{x}</div>'
-            f'<small>{_e(_zeit(b["zeit"]))}</small></div>')
+    kl, merk = (" kb-nah", ' data-nah="1"') if nah else ("", "")
+    return (f'<div class="pass-kachel kb-bild{kl}" data-bild="{_e(b["bild_id"])}"{merk}><div class="kb-rahmen">{bild}{x}'
+            f'</div><small>{_e(_zeit(b["zeit"]))}</small></div>')
 
 
-def _aus_satz(a, cfg):
+def _aus_satz(a, cfg, n):
     """Die rote Zeile einer Person, die fuer das Erkennen aus ist (Kopf, AUSGESCHALTETE PERSONEN): wem sie zu aehnlich
-    ist, Wert und Schwelle. -> HTML; fuer eine Person, die an ist, leer"""
+    ist, Wert und Schwelle, dahinter wie viele ihrer n Bilder rot sind (Stufe SL3). -> HTML; fuer eine Person, die an
+    ist, leer"""
     if not a["aus"]:
         return ""
     wert = math.floor(a["wert"] * 100) / 100           # abgerundet: eine gezeigte Zahl unter der Schwelle heisst nie aus
     text = t("koerperbilder.vorrat.aus", person=a["nachbar"], wert=f"{wert:.2f}",
              schwelle=f'{float(cfg["koerper_schwelle"]):g}')
-    return f'<span class="kb-aus-satz">{_e(text)}</span>'
+    zahl = t_n("koerperbilder.vorrat.aus_bilder", n, rot=len(a["rot"]))
+    return f'<span class="kb-aus-satz">{_e(text)} {_e(zahl)}</span>'
 
 
 def _bestand(d, cfg, jetzt):
@@ -301,7 +313,10 @@ def _bestand(d, cfg, jetzt):
     heute = datetime.date.fromtimestamp(jetzt)          # Kalendertage der Ortszeit, heute und die tage - 1 davor
     erster = heute - datetime.timedelta(days=tage - 1)
     # Stufe KF2 Punkt 1: Wert, Nachbar und aus nur aus core.koerperweg.abschaltung, die Seite vergleicht selbst nichts
-    abschaltung = _kw.abschaltung([b for b in d["bilder"] if b["zustand"] == GUELTIG], cfg)
+    gueltig = [b for b in d["bilder"] if b["zustand"] == GUELTIG]
+    abschaltung = _kw.abschaltung(gueltig, cfg)
+    # Stufe SL3 Punkt 2: die roten Bild-Kennungen aus rot und derselben Liste, die abschaltung bekommt
+    nah = {gueltig[k]["bild_id"] for a in abschaltung.values() for k in a["rot"]}
     zeilen = []
     for nr, p in enumerate(sorted(je, key=lambda p: (-len(je[p]), p)), start=1):
         gl = sorted(je[p], key=lambda b: -b["zeit"])
@@ -309,14 +324,18 @@ def _bestand(d, cfg, jetzt):
         hn = " · ".join((t("koerperbilder.vorrat.tage", tage=abgedeckt, max_tage=tage),
                          t("koerperbilder.vorrat.neuest", datum=_datum(gl[0]["zeit"]))))
         kl, merk = (" kb-aus", ' data-aus="1"') if abschaltung[p]["aus"] else ("", "")    # Stufe KF2 Punkt 2
+        # Stufe SL3 Punkt 3: der Verweis zum Feld der Schwelle als erste Zeile im Bereich (im Knopf darf kein Link stehen)
+        verweis = (f'<p class="kb-zeile"><a href="/erkennung#ek-schwelle">'
+                   f'{_e(t("koerperbilder.vorrat.schwelle_link"))}</a></p>' if abschaltung[p]["aus"] else "")
         zeilen.append(f'<button type="button" class="kb-person{kl}" aria-expanded="false" aria-controls="kb-p-{nr}" '
                       f'data-person="{_e(p)}"{merk} onclick="kbAuf(this)">{_avatar(p)}<span class="lvs-lbl">'
                       f'<span class="lvs-name">{_e(p)}</span><span class="lvs-hn">{_e(hn)}</span>'
-                      f'{_aus_satz(abschaltung[p], cfg)}</span>'
+                      f'{_aus_satz(abschaltung[p], cfg, len(gl))}</span>'
                       f'<span class="kb-zahl">{_e(t_n("koerperbilder.vorrat.bilder", len(gl)))}</span>'
                       '<span class="kb-pfeil" aria-hidden="true">&#8250;</span></button>'
-                      f'<div id="kb-p-{nr}" class="kb-offen" hidden>'
-                      + auftritte.reihe_html("", "".join(_bild_kachel(b, False) for b in gl)) + '</div>')
+                      f'<div id="kb-p-{nr}" class="kb-offen" hidden>{verweis}'
+                      + auftritte.reihe_html("", "".join(_bild_kachel(b, False, b["bild_id"] in nah) for b in gl))
+                      + '</div>')
     rest = len([p for p in d["personen"] if p not in je])
     weitere = (f'<p class="kb-rest">{_e(t_n("koerperbilder.vorrat.weitere", rest))}</p>'
                if rest and not d["gruende"] else "")

@@ -16,8 +16,22 @@ seiner ersten Fundstelle im Text als Verweis auf den Pfad, wie `readme` den Knop
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.113"   # 0.1.1.113: Eigentuemer 24.11.2026 12:06:07 "Nimm mal als What's New Text Small Fixes mit drauf.
-                      # Und zwar Small Fixes für das Speichern, also das Auswählen der Kamera, die Config und
+STAND = "0.1.1.115"   # 0.1.1.115: Box-Eintrag und CHANGELOG-Abschnitt von 0.1.1.114 unveraendert unter der neuen
+                      # Nummer (Bauplan analysen/release3_modell.md, Stufe 6, Entscheid E5); Nummer gesetzt auf
+                      # "Nummer setzen und Doku committen" des Eigentuemers 26.11.2026. Neu nur die Probe aus Stufe K3
+                      # (Sammelplan analysen/bauplan_klein.md), kein Box-Thema.
+                      # Davor 0.1.1.114: Eigentuemer 25.11.2026 20:4x "whats new nemen wir small fixes from some issus . das
+                      # passt doch oder ?", 21:32:18 "Ja, entwerfen", Box-Satz und CHANGELOG DE abgenommen 21:39:28
+                      # "Texte abnehmen, Nummer setzen und Doku committen" (Texte in
+                      # .suslik_tmp/release_0.1.1.114/text_changelog.md). Neuer Box-Eintrag 0.1.1.114 zuoberst. Im
+                      # Produkt neu: die Speicherleiste, die Schwelle in der Karte und die roten Bilder (Bauplan
+                      # analysen/bauplan_leiste_schwelle_bilder.md, Stufen SL1 bis SL3), Pushover-Grund, Rueckfall des
+                      # Live-Waechters und die Aufbewahrung auf Erweitert mit Werkswert 14 (Bauplan
+                      # analysen/bauplan_pr46_uebernahme.md, Stufen UE1 und UE2, Pull Request #46), die Koerper-Abfrage
+                      # mit allen Abtastbildern zwischen erstem und letztem Wegpunkt (Sammelplan
+                      # analysen/bauplan_klein.md, Stufen K1 und K2).
+                      # Davor 0.1.1.113: Eigentuemer 24.11.2026 12:06:07 "Nimm mal als What's New Text Small Fixes mit
+                      # drauf. Und zwar Small Fixes für das Speichern, also das Auswählen der Kamera, die Config und
                       # Personenerkennung.", 12:07:41 "Aber das mit Testversion davor lassen wir noch bestehen.",
                       # Box-Satz DE abgenommen 12:08:14 "Passt so", CHANGELOG-Text 12:13:07 "Passt so" (Texte in
                       # .suslik_tmp/release_0.1.1.113/text_changelog.md). Neuer Box-Eintrag 0.1.1.113 zuoberst. Im
@@ -970,6 +984,31 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.1.115 (Eintrag von 0.1.1.114 unveraendert, Entscheid E5) — EIN Eintrag, MIT DEM EIGENTUEMER ABGESTIMMT
+    # 25.11.2026 (sein Wunsch 20:4x: „small fixes from some issus“, 21:32:18 „Ja, entwerfen“; Box-Satz DE abgenommen
+    # 21:39:28 „Texte abnehmen, Nummer setzen und Doku committen“, .suslik_tmp/release_0.1.1.114/text_changelog.md).
+    # EN von der Hauptsession, ES, IT, FR und FI nach EN.
+    ("0.1.1.115", (
+        {"de": "Testversion — Die Personenerkennung vergleicht mehr Bilder, dazu kleine Korrekturen. Wichtig: suslik "
+               "hebt Ereignisdaten jetzt 14 statt 60 Tage auf und löscht beim ersten Start ältere Ereignisordner ohne "
+               "Grundwahrheit.",
+         "en": "Test release — Person recognition compares more images, plus small fixes. Important: suslik now keeps "
+               "event data for 14 days instead of 60 and deletes older event folders without ground truth at the first "
+               "start.",
+         "es": "Versión de prueba — El reconocimiento de personas compara más imágenes, además de pequeñas "
+               "correcciones. Importante: suslik ahora guarda los datos de eventos 14 días en lugar de 60 y en el "
+               "primer arranque borra las carpetas de eventos más antiguas sin ground truth.",
+         "it": "Versione di prova — Il riconoscimento della persona confronta più immagini, più piccole correzioni. "
+               "Importante: suslik ora conserva i dati degli eventi per 14 giorni invece di 60 e al primo avvio "
+               "elimina le cartelle degli eventi più vecchie senza ground truth.",
+         "fr": "Version de test — La reconnaissance de personne compare plus d'images, avec de petites corrections. "
+               "Important : suslik conserve désormais les données d'événements 14 jours au lieu de 60 et supprime au "
+               "premier démarrage les dossiers d'événements plus anciens sans vérité terrain.",
+         "fi": "Testiversio — Henkilöntunnistus vertaa nyt useampia kuvia, lisäksi pieniä korjauksia. Tärkeää: suslik "
+               "säilyttää tapahtumatiedot nyt 14 päivää 60 sijaan ja poistaa ensimmäisellä käynnistyksellä vanhemmat "
+               "tapahtumakansiot ilman ground truthia.",
+         "betont": True},
+    )),
     # 0.1.1.113 — EIN Eintrag, MIT DEM EIGENTUEMER ABGESTIMMT 24.11.2026 (sein Wunsch 12:06:07: Small Fixes fuer das
     # Speichern, die Kamerawahl, die Config und die Personenerkennung, und 12:07:41: „Testversion“ davor bleibt;
     # Wortlaut DE abgenommen 12:08:14 „Passt so“, .suslik_tmp/release_0.1.1.113/text_changelog.md). EN von der

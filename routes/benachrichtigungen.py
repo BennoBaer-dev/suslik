@@ -9,6 +9,7 @@ verschatten."""
 import html
 
 from core.sprache import t
+from webui.bausteine import speicherleiste
 
 
 def render(cfg, kat_labels, pushover=None):
@@ -137,6 +138,6 @@ def render(cfg, kat_labels, pushover=None):
         '<button class="gtb" onclick="testKanal(\'mqtt\',this)">'
         f'{t("benachrichtigungen.mqtt.knopf_test")}</button> '
         '<span id="test-mqtt" class="dim"></span></div>'
-        f'<p><button class="gtb on" onclick="notifSpeichern()">'
-        f'{t("benachrichtigungen.fuss.knopf_speichern")}</button> '
-        '<span id="notif-status" style="color:var(--dim)"></span></p>')
+        # Stufe SL1 (Bauplan analysen/bauplan_leiste_schwelle_bilder.md): die Speicherleiste am Ende; die Knoepfe Test
+        # bleiben eigene Aktionen
+        + speicherleiste(t("benachrichtigungen.fuss.knopf_speichern"), "notifSpeichern()", "notif-status"))

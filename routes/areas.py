@@ -12,12 +12,17 @@ sind reine LINKS: lesezeichenfaehig, ohne JS bedienbar, S9-messbar.
 Sprach-Stufe 0 (konzept_sprache.md v2): sichtbare Texte aus core/sprache.t()
 — BYTE-TREU (Harnisch tools/harnisch_sprache.py). Grenzen dieser Stufe (siehe
 Abschnitts-Kommentar in core/texte/en.py): "All"/"Default" sind Anzeige UND
-Sicht-Kennung zugleich und bleiben literal; zwei Markup-Saetze ebenso."""
+Sicht-Kennung zugleich und bleiben literal; zwei Markup-Saetze ebenso.
+Speichern seit Stufe SL1 (Bauplan analysen/bauplan_leiste_schwelle_bilder.md):
+EINE Speicherleiste am Ende der Seite (webui/bausteine.speicherleiste, ohne
+Neustart) fuer Zuweisung UND Kettung; Anlegen und × bleiben eigene Aktionen,
+das Namensfeld ar-neu markiert nichts ([data-keine-aenderung])."""
 import html
 import urllib.parse
 
 from core import areas as _areas          # EINE Quelle der Modus-Aufzaehlung
 from core.sprache import t, t_n
+from webui.bausteine import speicherleiste
 
 
 def chips(areas, aktiv, pfad, fest=None):
@@ -80,21 +85,16 @@ def verwaltung(areas, live_cams):
     tabelle = ('<div class="card">' + "".join(zeilen) + '</div>' if zeilen else
                f'<p class="dim">{t("areas.verwaltung.hinweis_keine_kameras")}</p>')
 
+    # Stufe SL1: ein getippter Name entsteht erst mit „Anlegen“ — das Feld liegt in [data-keine-aenderung] und markiert
+    # die Speicherleiste nicht; gespeichert wird die Zuweisung ueber die Leiste am Ende der Seite (uebersicht).
     return (f'<h3 style="margin-top:1rem">{t("areas.verwaltung.titel")}</h3>'
             + leiste +
-            '<p style="margin:.6rem 0">'
+            '<p style="margin:.6rem 0" data-keine-aenderung>'
             f'<input id="ar-neu" placeholder="{t("areas.verwaltung.attr_neu")}" maxlength="32"> '
             f'<button class="gtb" onclick="areaAnlegen(this)">{t("areas.verwaltung.knopf_anlegen")}</button></p>'
             f'<h3>{t("areas.verwaltung.titel_zuweisen")}</h3>'
             f'<p class="sub">{t("areas.verwaltung.satz_zuweisen")}</p>'
-            + tabelle +
-            '<p style="margin-top:.6rem">'
-            f'<button class="gtb on" onclick="areasSpeichern(this)">{t("areas.verwaltung.knopf_speichern")}</button> '
-            # class zusaetzlich zur id (.507 B3b): der Kettungs-Block hat einen
-            # eigenen Speichern-Knopf mit eigenem Statusfeld, und das JS nimmt
-            # das Feld NEBEN dem gedrueckten Knopf. Zwei Elemente mit derselben
-            # id waeren kaputtes HTML.
-            '<span id="ar-status" class="ar-status" style="color:var(--dim)"></span></p>')
+            + tabelle)
 
 
 def kettung(areas, modi):
@@ -133,17 +133,11 @@ def kettung(areas, modi):
             f'{html.escape(anzeige)}</div>'
             f'<select class="ar-kettung" data-area="{html.escape(wert, quote=True)}">'
             f'{opts}</select></div>')
-    # Eigener Speichern-Knopf: der Knopf der Zuweisung steht ueber diesem Block,
-    # und eine Einstellung, deren Speichern-Knopf ausserhalb des Blickfelds
-    # liegt, wird nicht gespeichert. Es ist DERSELBE Weg (ein POST fuer
-    # Zuweisung UND Modi) — nur ein zweiter Auslöser an der zweiten Stelle.
+    # Stufe SL1: kein eigener Speichern-Knopf mehr. Gespeichert wird ueber die Leiste am Ende der Seite, die unten
+    # klebt und damit immer im Blickfeld ist; es ist DERSELBE Weg (ein POST fuer Zuweisung UND Modi).
     return (f'<h3 style="margin-top:1rem">{t("areas.kettung.titel")}</h3>'
             f'<p class="sub">{t("areas.kettung.satz")}</p>'
-            '<div class="card">' + "".join(zeilen) + '</div>'
-            '<p style="margin-top:.6rem">'
-            f'<button class="gtb on" onclick="areasSpeichern(this)">'
-            f'{t("areas.verwaltung.knopf_speichern")}</button> '
-            '<span class="ar-status" style="color:var(--dim)"></span></p>')
+            '<div class="card">' + "".join(zeilen) + '</div>')
 
 
 def uebersicht(areas, live_cams, modi=None):
@@ -159,4 +153,7 @@ def uebersicht(areas, live_cams, modi=None):
             + (', and alerts name the area of the camera' if areas else '') + '.</p>')
     sprung = ((f'<p class="sub" style="margin-top:.4rem">{t("areas.kopf.sprung")}</p>'
                + chips(areas, "", "/heute")) if areas else '')
-    return kopf + sprung + verwaltung(areas, live_cams) + kettung(areas, modi or {})
+    # Stufe SL1: die Speicherleiste ohne Neustart am Ende (Zuweisung und Kettung in einem POST)
+    return (kopf + sprung + verwaltung(areas, live_cams) + kettung(areas, modi or {})
+            + speicherleiste(t("areas.verwaltung.knopf_speichern"), "areasSpeichern(this)", "ar-status",
+                             neustart=False))
