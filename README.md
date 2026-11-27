@@ -111,6 +111,7 @@ days by default (`aufbewahrung_tage` on the Advanced page). Details, and how to 
   visible face.
 - [Live watchers](docs/live-watchers.md): watching camera streams directly, alerts and MQTT
   messages.
+- [Pass MQTT](docs/pass-mqtt.md): pass-level MQTT messages and the contact sheet for Home Assistant.
 - [Architecture](docs/architecture.md): how the analysis works and why there are separate hardware
   images.
 - [Supported hardware](docs/supported-hardware.md): what runs on which hardware, and what is not
