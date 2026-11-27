@@ -113,7 +113,7 @@ def _segmente(evs):
         yield aktuell
 
 
-def _snapshot(cfg, s, pass_key, by_h, *, event_dir=None):
+def _snapshot(cfg, s, pass_key, by_h, *, event_dir=None, leser=None):
     """Ein Szenario -> Pass-Snapshot samt Segmenten. -> dict"""
     evs = sorted(s.get("evs") or [], key=_t)
     kams = _kameras(evs)
@@ -124,7 +124,7 @@ def _snapshot(cfg, s, pass_key, by_h, *, event_dir=None):
         seg_eids = sorted(str(e.get("eid") or "") for e in teil if e.get("eid"))
         leute = _personen(s, teil, by_h)
         seg_kams = _kameras(teil)
-        frames = frames_fuer_segment(cfg, seg_eids, by_h=by_h, event_dir=event_dir)
+        frames = frames_fuer_segment(cfg, seg_eids, by_h=by_h, event_dir=event_dir, leser=leser)
         segmente.append({
             "index": len(segmente),
             "window": [_t(teil[0]), _t(teil[-1])],
@@ -146,7 +146,7 @@ def _snapshot(cfg, s, pass_key, by_h, *, event_dir=None):
             "segments": segmente}
 
 
-def paesse(cfg, by_h, *, jetzt=None, gtmap=None, event_dir=None):
+def paesse(cfg, by_h, *, jetzt=None, gtmap=None, event_dir=None, leser=None):
     """Pass-Snapshots aller lokalen Tage in by_h — Gruppierung nur in szenarien. -> list"""
     cfg, by_h = cfg or {}, by_h or {}
     tage = sorted({datetime.datetime.fromtimestamp(
@@ -159,13 +159,27 @@ def paesse(cfg, by_h, *, jetzt=None, gtmap=None, event_dir=None):
         for s in _sz.szenarien_des_tages(by_h, t0, t1, cfg, gtmap or {}, now=jetzt):
             key = str(_sz._pass_schluessel(s["start"], s.get("kette")))
             if key not in treffer:
-                treffer[key] = _snapshot(cfg, s, key, by_h, event_dir=event_dir)
+                treffer[key] = _snapshot(cfg, s, key, by_h, event_dir=event_dir, leser=leser)
     return [treffer[k] for k in sorted(treffer, key=lambda k: treffer[k]["start"])]
 
 
-def frames_fuer_segment(cfg, eids, *, by_h=None, event_dir=None):
-    """Deterministische Bildauswahl eines Segments (max 12, Ziel 10, 2 pro Ereignis). -> list"""
+def frames_fuer_segment(cfg, eids, *, by_h=None, event_dir=None, leser=None):
+    """Deterministische Bildauswahl lesbarer Bilder (max 12, Ziel 10, 2 pro Ereignis). -> list"""
     cfg, by_h = cfg or {}, by_h or {}
+    if leser is None:
+        if event_dir is None:
+            leser = bild_bytes
+        else:
+            # nur Offline-Tests: ein gemeinsamer Ordner statt echter Ereignis-Ordner
+            def leser(_cfg, frame):
+                name = urllib.parse.unquote(
+                    str(frame.get("url") or "").split("?", 1)[0].rsplit("/", 1)[-1])
+                if not name or ".." in name or not re.fullmatch(_reg.DATEI_RE, name):
+                    return None
+                basis = os.path.realpath(event_dir)
+                pfad = os.path.realpath(os.path.join(basis, name))
+                return (_lesen(pfad) if pfad.startswith(basis + os.sep)
+                        and os.path.isfile(pfad) else None)
     daten = str(cfg.get("data_dir") or "")
     bw_pro_kamera = {}
     for eid in eids:
@@ -228,6 +242,8 @@ def frames_fuer_segment(cfg, eids, *, by_h=None, event_dir=None):
     kand.sort(key=lambda c: (c[0], c[1], c[2]))
     aus, rest, pro_eid = [], [], {}
     for _prio, _neg, _fid, frame in kand:
+        if leser(cfg, frame) is None:   # unlesbare Kandidaten nie in aus/rest
+            continue
         if len(aus) >= MAX_BILDER:
             break
         e = frame["eid"]
@@ -279,16 +295,18 @@ def bild_bytes(cfg, frame):
         return _lesen(pfad)
     m = re.fullmatch(r"/lernlauf/satz/([0-9a-f]{8,64})", teile.path)
     if m:
-        # ohne core.refquelle: der Satz liegt als <hex>.* irgendwo unter state/.
-        basis = os.path.realpath(os.path.join(daten, "state"))
-        treffer = []
-        for wurzel, _dirs, dateien in os.walk(basis):
-            for datei in dateien:
-                if datei.startswith(m.group(1) + "."):
-                    pfad = os.path.realpath(os.path.join(wurzel, datei))
-                    if pfad.startswith(basis + os.sep) and os.path.isfile(pfad):
-                        treffer.append(pfad)
-        return _lesen(sorted(treffer)[0]) if treffer else None
+        rid = m.group(1)
+        if not _REF_RE.fullmatch(rid):
+            return None
+        # ohne core.refquelle: genau diese sechs Orte, live vor Archiv (kein sha noetig).
+        for teil in (("refquelle",), ("state", "archiv", "refquelle")):
+            basis = os.path.realpath(os.path.join(daten, *teil))
+            for endung in (".png", ".webp", ".jpg"):
+                pfad = os.path.realpath(os.path.join(basis, rid, "profil" + endung))
+                if pfad.startswith(basis + os.sep) and os.path.isfile(pfad):
+                    daten_bytes = _lesen(pfad)
+                    if daten_bytes is not None:
+                        return daten_bytes
     return None
 
 

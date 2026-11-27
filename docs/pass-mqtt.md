@@ -76,6 +76,12 @@ for a learned-set image. All URLs in the payload are relative, including
 `contact_url`: Home Assistant prefixes its own base URL. These frame URLs are
 diagnostic and secondary.
 
+Ref frames come from the existing guarded `/lernlauf/satz/<hex>?klein=1` route,
+reading `refquelle/<ref_id>/profil.*` from suslik's set directories, including
+archived sets. A missing set is skipped, so `frames` and `counts.frames` only
+contain usable images. When fewer than eight usable images exist, fewer frames
+are sent.
+
 `contact_url` is the primary input for Home Assistant. The HA host has no
 ffmpeg, Pillow or ImageMagick, so Gemini `image_analyzer` gets one local file
 per call: download `contact_url` and pass that file. The route

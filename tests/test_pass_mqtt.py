@@ -95,12 +95,26 @@ class OfflineCase(unittest.TestCase):
             with open(os.path.join(directory, "clip_show_Person_A_%02d.jpg" % i), "wb") as f:
                 f.write(JPEG)
 
-    def write_ref_rows(self, directory, n):
+    def write_ref_rows(self, directory, n, *, ext="png", archiv=False, leer=()):
+        """kandidaten.jsonl + echte Profildateien; IDs in `leer` bleiben bildlos. -> list"""
+        ids = []
         with open(os.path.join(directory, "kandidaten.jsonl"), "w", encoding="utf-8") as f:
             for i in range(n):
-                z = {"eid": "e1", "ref_id": "%012x" % (i + 1), "person": "Person A",
+                rid = "%012x" % (i + 1)
+                z = {"eid": "e1", "ref_id": rid, "person": "Person A",
                      "score": 0.9 - i * 0.01, "datei": "ref_%02d.jpg" % i}
                 f.write(json.dumps(z) + "\n")
+                ids.append(rid)
+        basis = os.path.join(self.tmp, "state", "archiv", "refquelle") if archiv \
+            else os.path.join(self.tmp, "refquelle")
+        for rid in ids:
+            if rid in leer:
+                continue
+            d = os.path.join(basis, rid)
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "profil." + ext), "wb") as f:
+                f.write(JPEG)
+        return ids
 
 
 class TestConstantsAndGrouping(OfflineCase):
@@ -211,16 +225,18 @@ class TestFrameSelection(OfflineCase):
         self.assertGreaterEqual(len({f["eid"] for f in frames}), pm.MIN_BILDER // 2)
 
     def test_ref_rows_preferred_over_show_files(self):
-        d = self.frames_dir()
-        self.write_show_images(d, 8)
+        d = os.path.join(self.tmp, "events", "e1")
+        os.makedirs(d, exist_ok=True)
+        self.write_show_images(d, 8, "e1")
         self.write_ref_rows(d, 6)
-        by_h = self._by_h()
-        frames = pm.frames_fuer_segment(self.cfg, ["e1"], by_h=by_h, event_dir=d)
+        frames = pm.frames_fuer_segment(self.cfg, ["e1"], by_h=self._by_h())
         self.assertTrue(frames)
         self.assertGreaterEqual(sum(1 for f in frames if f["kind"] == "ref"), 2)
-        show_only = self.frames_dir("show-only")
-        self.write_show_images(show_only, 8)
-        other = pm.frames_fuer_segment(self.cfg, ["e1"], by_h=by_h, event_dir=show_only)
+        show_only = os.path.join(self.tmp, "events", "e2")
+        os.makedirs(show_only, exist_ok=True)
+        self.write_show_images(show_only, 8, "e2")
+        other = pm.frames_fuer_segment(
+            self.cfg, ["e2"], by_h={"e2": row("e2", BASE)})
         self.assertTrue(other)
         self.assertTrue(all(f["kind"] != "ref" for f in other))
         self.assertTrue(any(f["kind"] == "event" for f in other))
@@ -246,15 +262,76 @@ class TestFrameSelection(OfflineCase):
         self.assertIsNone(pm.bild_bytes(self.cfg, evil))
 
     def test_ref_bytes_accepts_non12_hex(self):
-        d = os.path.join(self.tmp, "state", "lernlauf", "satz")
+        d = os.path.join(self.tmp, "refquelle", "abc12345")
         os.makedirs(d, exist_ok=True)
-        daten = b"synthetic-ref-bytes"
-        with open(os.path.join(d, "abc12345.png"), "wb") as f:
-            f.write(daten)
+        with open(os.path.join(d, "profil.png"), "wb") as f:
+            f.write(JPEG)
         self.assertEqual(
-            pm.bild_bytes(self.cfg, {"url": "/lernlauf/satz/abc12345?klein=1"}), daten)
+            pm.bild_bytes(self.cfg, {"url": "/lernlauf/satz/abc12345?klein=1"}), JPEG)
         self.assertIsNone(pm.bild_bytes(
             self.cfg, {"url": "/lernlauf/satz/../etc/passwd"}))
+
+    def test_ref_bytes_live_profile_webp(self):
+        rid = "abc12345"
+        d = os.path.join(self.tmp, "refquelle", rid)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "profil.webp"), "wb") as f:
+            f.write(JPEG)
+        self.assertEqual(pm.bild_bytes(
+            self.cfg, {"url": "/lernlauf/satz/%s?klein=1" % rid}), JPEG)
+
+    def test_ref_bytes_archiv_profile_jpg(self):
+        rid = "def67890"
+        d = os.path.join(self.tmp, "state", "archiv", "refquelle", rid)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "profil.jpg"), "wb") as f:
+            f.write(JPEG)
+        self.assertEqual(pm.bild_bytes(
+            self.cfg, {"url": "/lernlauf/satz/%s?klein=1" % rid}), JPEG)
+
+    def test_ref_bytes_missing_and_traversal_are_none(self):
+        self.assertIsNone(pm.bild_bytes(
+            self.cfg, {"url": "/lernlauf/satz/99999999?klein=1"}))
+        for url in ("/lernlauf/satz/../etc/passwd",
+                    "/lernlauf/satz/../etc/passwd?klein=1"):
+            self.assertIsNone(pm.bild_bytes(self.cfg, {"url": url}))
+
+    def test_missing_ref_set_does_not_break_selection(self):
+        eid = "e1"
+        d = os.path.join(self.tmp, "events", eid)
+        os.makedirs(d, exist_ok=True)
+        self.write_show_images(d, 4, eid)
+        ids = self.write_ref_rows(d, 2, leer=("%012x" % 1, "%012x" % 2))
+        self.assertEqual(len(ids), 2)
+        by_h = {eid: row(eid, BASE)}
+        a = pm.frames_fuer_segment(self.cfg, [eid], by_h=by_h)
+        b = pm.frames_fuer_segment(self.cfg, [eid], by_h=by_h)
+        self.assertTrue(a)
+        self.assertEqual(a, b)
+        self.assertTrue(all(f["kind"] != "ref" for f in a))
+
+    def test_unreadable_refs_fill_from_show_candidates(self):
+        eid = "e1"
+        d = os.path.join(self.tmp, "events", eid)
+        os.makedirs(d, exist_ok=True)
+        self.write_show_images(d, 6, eid)
+        self.write_ref_rows(d, 4, leer=tuple("%012x" % (i + 1) for i in range(4)))
+        snap = self.passe({eid: row(eid, BASE)})[0]
+        seg = snap["segments"][0]
+        frames = seg["frames"]
+        self.assertTrue(frames)
+        self.assertEqual(seg["counts"]["frames"], len(frames))
+        self.assertTrue(all("placeholder" not in f["id"].lower() for f in frames))
+        self.assertTrue(all(f["id"].count("|") == 2 for f in frames))
+        self.assertTrue(all(f["kind"] != "ref" for f in frames))
+
+    def test_only_two_usable_candidates_stay_two(self):
+        eid = "e1"
+        d = os.path.join(self.tmp, "events", eid)
+        os.makedirs(d, exist_ok=True)
+        self.write_show_images(d, 2, eid)
+        frames = pm.frames_fuer_segment(self.cfg, [eid], by_h={eid: row(eid, BASE)})
+        self.assertEqual(len(frames), 2)
 
     def test_fill_to_min_when_all_candidates_one_eid(self):
         d = self.frames_dir("one-eid")
