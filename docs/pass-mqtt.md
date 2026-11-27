@@ -84,7 +84,10 @@ are sent.
 
 `contact_url` is the primary input for Home Assistant. The HA host has no
 ffmpeg, Pillow or ImageMagick, so Gemini `image_analyzer` gets one local file
-per call: download `contact_url` and pass that file. The route
+per call: download `contact_url` and pass that file. `contact_url` is empty
+for a segment with zero usable frames; Home Assistant skips an empty
+`contact_url`. The rest of the segment payload is still published, including
+`counts.frames = 0`, `eids`, `people` and `window`. The route
 `/pass/<pass_key>/<revision>/<segment>/contact.jpg` is read-only, sits behind
 the existing Caddy Basic Auth and validates its index key. It returns a 2x6
 grid of tiles of about 512x384 pixels, each labelled with index, camera and

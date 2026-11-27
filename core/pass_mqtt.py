@@ -342,8 +342,9 @@ def payload(snapshot, segment_index, status, rev):
         "camera_first_seen": seg["camera_first_seen"],
         "inferred_direction": seg["inferred_direction"], "people": seg["people"],
         "categories": seg["categories"], "frames": seg["frames"],
-        "contact_url": ("/pass/" + urllib.parse.quote(str(snapshot.get("pass_key") or ""), safe="")
-                        + f"/{rev}/{segment_index}/contact.jpg"),
+        "contact_url": ("" if not (seg.get("frames") if isinstance(seg, dict) else None) else
+                        ("/pass/" + urllib.parse.quote(str(snapshot.get("pass_key") or ""), safe="")
+                        + f"/{rev}/{segment_index}/contact.jpg")),
     }
 
 

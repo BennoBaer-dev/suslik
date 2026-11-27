@@ -32602,7 +32602,7 @@ def make_handler(svc):
                 # DENSELBEN nav.*-Schluessel wie ihr Menue-Linktext (Pflicht
                 # Linktext == Seitentitel, begriffe_tabellen.md Notiert-Liste).
                 return self._send(200, webui.layout(_sprache.t("titel.setup"), "/setup", inhalt, self._banner()))
-            if path.startswith("/pass/"):         # Haeppchen 2: Durchgangs-Seite
+            if path.startswith("/pass/") and not PASS_CONTACT_RE.match(path):  # legacy: Kontaktblatt wird weiter unten bedient
                 import webui
                 import auftritte as _auf
                 _eidp = urllib.parse.unquote(path[len("/pass/"):])

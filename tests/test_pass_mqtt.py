@@ -421,6 +421,21 @@ class TestPayload(OfflineCase):
         snap = self.passe(by_h, event_dir=d)[0]
         return snap, pm.revision(snap["pass_key"], 0, snap)
 
+    def test_empty_segment_has_no_contact_url(self):
+        snap, rev = self._snap()
+        empty = copy.deepcopy(snap)
+        empty["segments"][0]["frames"] = []
+        empty["segments"][0]["counts"]["frames"] = 0
+        d = pm.payload(empty, 0, "active", rev)
+        self.assertEqual(set(d), PAYLOAD_KEYS)
+        self.assertTrue(COUNT_KEYS <= set(d["counts"]))
+        self.assertEqual(d["counts"]["frames"], 0)
+        self.assertEqual(d["frames"], [])
+        self.assertEqual(d["contact_url"], "")
+        full = pm.payload(snap, 0, "active", rev)
+        self.assertEqual(full["contact_url"],
+                         "/pass/%s/%s/0/contact.jpg" % (snap["pass_key"], rev))
+
     def test_exact_key_set_and_statuses(self):
         snap, rev = self._snap()
         for status in ("active", "revision", "final"):
@@ -657,6 +672,21 @@ class TestSourceWiring(unittest.TestCase):
         branch = self._src(self._func("do_GET"))
         self.assertIn("PASS_CONTACT_RE", branch)
         self.assertIn("contact_sheet", branch)
+
+    def test_legacy_pass_branch_excludes_contact_route(self):
+        branch = self._src(self._func("do_GET"))
+        legacy = re.search(
+            r'if\s+path\.startswith\("/pass/"\)\s+and\s+not\s+PASS_CONTACT_RE\.match\(path\)',
+            branch)
+        self.assertIsNotNone(legacy)
+        node = next(n for n in self.tree.body if isinstance(n, ast.Assign)
+                    and any(isinstance(t, ast.Name) and t.id == "PASS_CONTACT_RE"
+                            for t in n.targets))
+        rx = re.compile(ast.literal_eval(node.value.args[0]))
+        self.assertTrue(rx.match("/pass/1764231000/0123456789ab/0/contact.jpg"))
+        self.assertIsNone(rx.match("/pass/1764231000"))
+        contact = branch.index("_pm_treffer = PASS_CONTACT_RE.match(path)", legacy.end())
+        self.assertLess(legacy.start(), contact)
 
     def test_topic_and_anstossen_hook(self):
         self.assertIn('_melden.topic(self.cfg, "pass")', self.src)
