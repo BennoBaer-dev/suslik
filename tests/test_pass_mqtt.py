@@ -21,6 +21,7 @@ from PIL import Image
 
 from core import pass_mqtt as pm
 from core import passbild as pb
+from core import registry as reg
 
 BASE = int(datetime.datetime(2026, 3, 1, 12, 0, 0).timestamp())
 
@@ -673,20 +674,42 @@ class TestSourceWiring(unittest.TestCase):
         self.assertIn("PASS_CONTACT_RE", branch)
         self.assertIn("contact_sheet", branch)
 
-    def test_legacy_pass_branch_excludes_contact_route(self):
-        branch = self._src(self._func("do_GET"))
-        legacy = re.search(
-            r'if\s+path\.startswith\("/pass/"\)\s+and\s+not\s+PASS_CONTACT_RE\.match\(path\)',
-            branch)
-        self.assertIsNotNone(legacy)
-        node = next(n for n in self.tree.body if isinstance(n, ast.Assign)
-                    and any(isinstance(t, ast.Name) and t.id == "PASS_CONTACT_RE"
+    def _regex_assignment(self, name):
+        return next(n for n in self.tree.body if isinstance(n, ast.Assign)
+                    and any(isinstance(t, ast.Name) and t.id == name
                             for t in n.targets))
-        rx = re.compile(ast.literal_eval(node.value.args[0]))
-        self.assertTrue(rx.match("/pass/1764231000/0123456789ab/0/contact.jpg"))
-        self.assertIsNone(rx.match("/pass/1764231000"))
-        contact = branch.index("_pm_treffer = PASS_CONTACT_RE.match(path)", legacy.end())
-        self.assertLess(legacy.start(), contact)
+
+    def test_legacy_pass_branch_excludes_contact_route(self):
+        legacy_node = self._regex_assignment("PASS_LEGACY_RE")
+        self.assertTrue(any(isinstance(n, ast.Attribute) and n.attr == "EID_RE"
+                            and isinstance(n.value, ast.Name) and n.value.id == "_reg"
+                            for n in ast.walk(legacy_node.value)))
+        legacy = re.compile(r"/pass/(" + reg.EID_RE + r")\Z")
+        contact = re.compile(
+            ast.literal_eval(self._regex_assignment("PASS_CONTACT_RE").value.args[0]))
+
+        good_legacy = ("/pass/1764231000", "/pass/evt-1.2_3")
+        good_contact = "/pass/1764231000/0123456789ab/0/contact.jpg"
+        bad_revision = "/pass/1764231000/0123456789a/0/contact.jpg"
+        nonhex = "/pass/1764231000/0123456789az/0/contact.jpg"
+        traversal = "/pass/../etc/0123456789ab/0/contact.jpg"
+        prefix = "/pass/1764231000/extra"
+        for path in good_legacy:
+            self.assertTrue(legacy.fullmatch(path), path)
+            self.assertIsNone(contact.fullmatch(path), path)
+        for path in (good_contact, bad_revision, nonhex, traversal, prefix):
+            self.assertIsNone(legacy.fullmatch(path), path)
+        self.assertTrue(contact.fullmatch(good_contact))
+        for path in (bad_revision, nonhex, traversal, prefix):
+            self.assertIsNone(contact.fullmatch(path), path)
+        for path in good_legacy + (good_contact, bad_revision, nonhex, traversal, prefix):
+            self.assertFalse(bool(legacy.fullmatch(path)) and bool(contact.fullmatch(path)),
+                             path)
+
+        branch = self._src(self._func("do_GET"))
+        guard = branch.index("if PASS_LEGACY_RE.fullmatch(path):")
+        contact_i = branch.index("_pm_treffer = PASS_CONTACT_RE.match(path)", guard)
+        self.assertLess(guard, contact_i)
 
     def test_topic_and_anstossen_hook(self):
         self.assertIn('_melden.topic(self.cfg, "pass")', self.src)

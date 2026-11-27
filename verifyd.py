@@ -59,6 +59,7 @@ LOG_SWITCH_KEYS = frozenset({"debug", "pruef_log", "pruef_takt_s"})
 PASS_CONTACT_RE = re.compile(
     r"^/pass/(?P<pass_key>[0-9A-Za-z][0-9A-Za-z_.-]{0,63})/"
     r"(?P<revision>[0-9a-f]{12})/(?P<segment>\d+)/contact\.jpg$")
+PASS_LEGACY_RE = re.compile(r"/pass/(" + _reg.EID_RE + r")\Z")
 
 
 # Bauplan Debug-Zeitfenster Stufe 1 (Eigentuemer 29.09.2026 09:59:12): debug schaltet sich
@@ -32602,10 +32603,11 @@ def make_handler(svc):
                 # DENSELBEN nav.*-Schluessel wie ihr Menue-Linktext (Pflicht
                 # Linktext == Seitentitel, begriffe_tabellen.md Notiert-Liste).
                 return self._send(200, webui.layout(_sprache.t("titel.setup"), "/setup", inhalt, self._banner()))
-            if path.startswith("/pass/") and not PASS_CONTACT_RE.match(path):  # legacy: Kontaktblatt wird weiter unten bedient
+            if PASS_LEGACY_RE.fullmatch(path):  # legacy: Kontaktblatt wird weiter unten bedient
                 import webui
                 import auftritte as _auf
-                _eidp = urllib.parse.unquote(path[len("/pass/"):])
+                _m = PASS_LEGACY_RE.fullmatch(path)
+                _eidp = urllib.parse.unquote(_m.group(1))
                 _titel, _inhalt = _auf.render_pass(cfg, svc.log_path, master_persons(cfg), _eidp)
                 return self._send(200, webui.layout(_titel, "/heute", _inhalt, self._banner()))
             if path == "/auftritte":
