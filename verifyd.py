@@ -54,6 +54,13 @@ _log = _logbuch.logger(__name__)
 # ohne Neustart ueber core/logbuch.set_switches (config_schreiben, _schalter_spiegeln).
 LOG_SWITCH_KEYS = frozenset({"debug", "pruef_log", "pruef_takt_s"})
 
+# Pass-Kontaktblatt (lesend): das enge Muster schliesst Pfad-Traversal aus; die
+# Route liegt hinter der Caddy-Basic-Auth, es gibt hier keine freie Dateischau.
+PASS_CONTACT_RE = re.compile(
+    r"^/pass/(?P<pass_key>[0-9A-Za-z][0-9A-Za-z_.-]{0,63})/"
+    r"(?P<revision>[0-9a-f]{12})/(?P<segment>\d+)/contact\.jpg$")
+PASS_LEGACY_RE = re.compile(r"/pass/(" + _reg.EID_RE + r")\Z")
+
 
 # Bauplan Debug-Zeitfenster Stufe 1 (Eigentuemer 29.09.2026 09:59:12): debug schaltet sich
 # zeitgesteuert aus statt beim Start. EINE Stelle fuer das Fensterende; es lesen der
@@ -8791,6 +8798,15 @@ class Service:
         # uebersprungen statt wieder eingereiht.
         self._haenger_versuche = {}
         self.pub = None                           # MQTT-Publisher (AP2), Setup via start_publisher()
+        # Pass-MQTT: Timer und Merker NUR im Speicher — beim Start laeuft kein
+        # Timer, ein Neustart meldet also keine "final"-Flut alter Durchgaenge.
+        try:
+            from core import pass_mqtt as _pass_mqtt
+            self._pass_timer = _pass_mqtt.PassTimer(self.cfg, self._pass_faellig)
+        except Exception:
+            self._pass_timer = None                # fehlt das Modul, laeuft die Analyse weiter
+        self._pass_published = {}                  # (pass_key, segment) -> letzte Revision
+        self._pass_finalized = set()               # pass_key mit schon gemeldetem "final"
         self.mqtt_trigger = None                  # MQTT-Trigger-Client (nur trigger=mqtt), Setup via mqtt_loop()
         self.frigate_fehler = None                # (ts, msg) letzter Frigate-API-Fehler -> UI-Banner
         self.disk_warnung = None                  # .313 (ts, frei_gb): Platte unter Mindestfrei trotz leerem Clip-Cache
@@ -14627,6 +14643,66 @@ class Service:
                      f"confirmed the whole pass (vision_pfad=nur_wenn_gesicht_leer)")
             return
         self.vision_urteil_anstossen(pass_key)
+
+    def _pass_publizieren(self, paesse, final_key=None):
+        """Der EINE MQTT-Schreiber fuer Pass-Snapshots: Revision merken und nur
+        bei Erfolg senden. `final_key` ist der Durchgang, der hier zum ersten
+        Mal "final" wird (muss auch bei gleicher Revision raus)."""
+        from core import pass_mqtt as _pm
+        topic = _melden.topic(self.cfg, "pass")
+        neu_final = final_key is not None and final_key not in self._pass_finalized
+        for p in paesse:
+            if final_key is not None and p["pass_key"] != final_key:
+                continue
+            for seg in p.get("segments") or []:
+                key = (p["pass_key"], seg["index"])
+                rev = _pm.revision(p["pass_key"], seg["index"], seg)
+                if self._pass_published.get(key) == rev and not neu_final:
+                    continue
+                if final_key is not None:
+                    status = "final" if neu_final else "revision"
+                else:
+                    status = ("revision" if p["pass_key"] in self._pass_finalized
+                              else "active")
+                text = json.dumps(
+                    _pm.payload(p, seg["index"], status, rev),
+                    ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                if self._mqtt_pub(topic, text, retain=False):
+                    self._pass_published[key] = rev
+
+    def _pass_anstossen(self, eid, entry=None):
+        """Pass-MQTT (lesend): Durchgang per Timer anstossen und alle bekannten
+        Pass-Snapshots melden. Kein Eingriff in Analyse/Urteil; ein Fehler darf
+        die Event-Verarbeitung nie unterbrechen."""
+        try:
+            from core import pass_mqtt as _pm
+            if not eid or self._pass_timer is None:
+                return
+            by_h = _kette.deckung_by_eid(self.log_path, entry)
+            paesse = _pm.paesse(self.cfg, by_h, jetzt=time.time())
+            pk = next((p["pass_key"] for p in paesse
+                       if eid in (p.get("eids") or [])), None)
+            if not pk:
+                return
+            self._pass_timer.antossen(pk)
+            self._pass_publizieren(paesse)
+        except Exception as e:
+            self.log.error(f"pass MQTT arm failed ({eid}): {e}")
+
+    def _pass_faellig(self, pass_key, mein_timer):
+        """Der Debounce-Timer ist abgelaufen: einmal "final", danach bei
+        weiteren Treffern desselben Durchgangs "revision"."""
+        try:
+            from core import pass_mqtt as _pm
+            # Token-Prüfung erfolgt in PassTimer vor dem Callback.
+            if self._pass_timer is None:
+                return
+            by_h = _kette.deckung_by_eid(self.log_path)
+            self._pass_publizieren(
+                _pm.paesse(self.cfg, by_h, jetzt=time.time()), final_key=pass_key)
+            self._pass_finalized.add(pass_key)
+        except Exception as e:
+            self.log.error(f"pass MQTT final failed ({pass_key}): {e}")
 
     def vision_waisen(self, pass_key=None):
         """Verwaiste Lauf-Protokolle schliessen (.164, Live-Fund 09.08.).
@@ -25908,6 +25984,7 @@ class Service:
                 # Timer-Start, keine Arbeit, kein Lock — die Analyse laeuft
                 # unveraendert weiter.
                 self._vision_anstossen(entry.get("eid"), entry)
+                self._pass_anstossen(entry.get("eid"), entry)
             elif koerper:
                 # .161: Nachanalyse AUF WUNSCH eines Durchgangs. Sie faehrt den
                 # bestehenden Nachhol-Weg (stumm, keine Alarme, kein Live-Echo,
@@ -32526,10 +32603,11 @@ def make_handler(svc):
                 # DENSELBEN nav.*-Schluessel wie ihr Menue-Linktext (Pflicht
                 # Linktext == Seitentitel, begriffe_tabellen.md Notiert-Liste).
                 return self._send(200, webui.layout(_sprache.t("titel.setup"), "/setup", inhalt, self._banner()))
-            if path.startswith("/pass/"):         # Haeppchen 2: Durchgangs-Seite
+            if PASS_LEGACY_RE.fullmatch(path):  # legacy: Kontaktblatt wird weiter unten bedient
                 import webui
                 import auftritte as _auf
-                _eidp = urllib.parse.unquote(path[len("/pass/"):])
+                _m = PASS_LEGACY_RE.fullmatch(path)
+                _eidp = urllib.parse.unquote(_m.group(1))
                 _titel, _inhalt = _auf.render_pass(cfg, svc.log_path, master_persons(cfg), _eidp)
                 return self._send(200, webui.layout(_titel, "/heute", _inhalt, self._banner()))
             if path == "/auftritte":
@@ -33645,6 +33723,24 @@ def make_handler(svc):
                 return self._send(200, webui.layout(
                     _sprache.t("livekalib.titel", name=kamera),
                     "/kalibrierung", inhalt, self._banner()))
+            _pm_treffer = PASS_CONTACT_RE.match(path)
+            if _pm_treffer:
+                from core import passbild as _passbild
+                _bild = _passbild.contact_sheet(
+                    cfg, _pm_treffer.group("pass_key"), _pm_treffer.group("revision"),
+                    int(_pm_treffer.group("segment")))
+                if _bild is not None:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Cache-Control", "private, max-age=31536000, immutable")
+                    self.send_header("ETag", '"{}"'.format(_pm_treffer.group("revision")))
+                    self.end_headers()
+                    try:
+                        self.wfile.write(_bild)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass                          # Client weg — wie in _send
+                    return None
+                return self._send(404, "not found", "text/plain")
             if path.startswith("/lernlauf/satz/"):
                 # E3a-1c (Bauplan Referenz-Quelle einbauen, J1): das Bild eines
                 # Lauf-Funds aus seinem Satz — Profilbild ueber Lese-Stufe d,

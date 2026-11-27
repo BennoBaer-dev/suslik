@@ -10,6 +10,7 @@ says which steps it bundles). This file keeps the last five releases; the full r
 Test release. Person recognition stays a preview.
 
 - **Stranger alert** (`fremd_verdacht`): suslik now raises it only when a face at least 100 pixels wide also passes the recognition checks (head pose, image quality, second look). Until now any detection not marked as a false detection was enough, so grass, leaves or the back of a head could trigger the alert. A stranger whose face is only seen turned away or blurred no longer triggers it.
+- **Pass-level MQTT** (preview): suslik can publish one message per pass on `<mqtt.topic_praefix>/pass` (QoS 0, not retained), with `active` updates throttled by a deterministic 12-character `revision`, `final` after `szene_karenz_s` and `revision` for late events. The payload lists people, categories and up to twelve frames; `contact_url` points to a fixed 2x6 contact sheet behind the existing Basic Auth, so Home Assistant only needs one local file for Gemini. Vision stays off and no new public endpoint is added.
 
 ## 0.1.1.115 (2026-11-26)
 
