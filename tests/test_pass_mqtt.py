@@ -716,6 +716,11 @@ class TestSourceWiring(unittest.TestCase):
         self.assertIn("def _pass_anstossen(", self.src)
         self.assertIn("self._pass_anstossen(", self.src)
 
+    def test_pass_anstossen_uses_module_kette_not_self(self):
+        src = self._src(self._func("_pass_anstossen"))
+        self.assertNotIn("self._kette", src)
+        self.assertIn("_kette.deckung_by_eid", src)
+
     def test_vision_off_and_no_refquelle_in_new_code(self):
         self.assertNotIn("_vision_anstossen", self._src(self._func("_pass_anstossen")))
         base = os.path.dirname(VERIFYD)

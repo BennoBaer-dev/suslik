@@ -14678,7 +14678,7 @@ class Service:
             from core import pass_mqtt as _pm
             if not eid or self._pass_timer is None:
                 return
-            by_h = self._kette.deckung_by_eid(self.log_path, entry)
+            by_h = _kette.deckung_by_eid(self.log_path, entry)
             paesse = _pm.paesse(self.cfg, by_h, jetzt=time.time())
             pk = next((p["pass_key"] for p in paesse
                        if eid in (p.get("eids") or [])), None)
@@ -14697,7 +14697,7 @@ class Service:
             # Token-Prüfung erfolgt in PassTimer vor dem Callback.
             if self._pass_timer is None:
                 return
-            by_h = self._kette.deckung_by_eid(self.log_path)
+            by_h = _kette.deckung_by_eid(self.log_path)
             self._pass_publizieren(
                 _pm.paesse(self.cfg, by_h, jetzt=time.time()), final_key=pass_key)
             self._pass_finalized.add(pass_key)
