@@ -16,7 +16,10 @@ seiner ersten Fundstelle im Text als Verweis auf den Pfad, wie `readme` den Knop
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.116"   # 0.1.1.116: Box unveraendert, nur STAND (Stufe K4 des Sammelplans analysen/bauplan_klein.md ist eine
+STAND = "0.1.1.117"   # 0.1.1.117: Box unveraendert, nur STAND (Stufe K6 des Sammelplans und die Uebernahme von Pull
+                      # Request #47 stehen im CHANGELOG; der Eigentuemer 27.11.2026 20:14:29 "Unveraendert" zur Box,
+                      # deutscher CHANGELOG-Text abgenommen 20:03:22 "Passt").
+                      # Davor 0.1.1.116: Box unveraendert, nur STAND (Stufe K4 des Sammelplans analysen/bauplan_klein.md ist eine
                       # Fehlerkorrektur, kein Box-Thema); neuer CHANGELOG-Abschnitt mit einem Punkt, deutscher Text
                       # abgenommen mit "Nummer setzen und Doku committen / Lauf starten alle normal" des Eigentuemers
                       # 26.11.2026 13:27:46.
@@ -1062,21 +1065,21 @@ HIGHLIGHTS = (
     ("0.1.1.110", (
         {"de": "Testversion — Die Personenerkennung ist neu gebaut. Sie ist optional und greift, wenn ein Gesicht "
                "nicht erkannt oder keines gefunden wurde, auf Wunsch auch immer. Nähere Informationen unter "
-               "„Bitte zuerst lesen“.",
+               "„Hilfe & Doku“.",
          "en": "Test release — Person recognition has been rebuilt. It's optional and steps in when a face wasn't "
-               "recognized or none was found, or always if you choose. More details under “Read me first”.",
+               "recognized or none was found, or always if you choose. More details under “Help & docs”.",
          "es": "Versión de prueba — El reconocimiento de personas se ha rehecho. Es opcional y entra en acción "
                "cuando una cara no se ha reconocido o no se ha encontrado ninguna, o siempre si así lo eliges. Más "
-               "detalles en «Léeme primero».",
+               "detalles en «Ayuda y documentación».",
          "it": "Versione di prova — Il riconoscimento della persona è stato ricostruito. È facoltativo e interviene "
                "quando un volto non è stato riconosciuto o non ne è stato trovato nessuno, oppure sempre, se vuoi. "
-               "Maggiori dettagli in «Leggimi prima».",
+               "Maggiori dettagli in «Aiuto & documentazione».",
          "fr": "Version de test — La reconnaissance de personne a été reconstruite. Elle est facultative et intervient "
                "quand un visage n'a pas été reconnu ou qu'aucun n'a été trouvé, ou toujours si vous le choisissez. "
-               "Plus de détails sous « À lire d'abord ».",
+               "Plus de détails sous « Aide et documentation ».",
          "fi": "Testiversio — Henkilöntunnistus on rakennettu uudelleen. Se on valinnainen ja tulee käyttöön, kun "
-               "kasvoja ei tunnistettu tai niitä ei löytynyt, tai halutessasi aina. Lisätietoja kohdassa ”Lue tämä "
-               "ensin”.",
+               "kasvoja ei tunnistettu tai niitä ei löytynyt, tai halutessasi aina. Lisätietoja kohdassa "
+               "”Ohjeet ja dokumentaatio”.",
          "betont": True,
          "readme": "person"},
     )),
@@ -1145,17 +1148,17 @@ HIGHLIGHTS = (
                "Live-vahdin näkemät tuntemattomat näkyvät nyt myös siellä.",
          "betont": True},
         {"de": "Live-Wächter: eine Seite mit Plätzen; MQTT, Pushover und Telegram melden anders "
-               "(siehe „Bitte zuerst lesen“).",
+               "(siehe „Hilfe & Doku“).",
          "en": "Live watchers: one page with slots; MQTT, Pushover and Telegram report differently "
-               "(see “Read me first”).",
+               "(see “Help & docs”).",
          "es": "Vigilancia en vivo: una página con plazas; MQTT, Pushover y Telegram avisan de otra forma "
-               "(véase «Léeme primero»).",
+               "(véase «Ayuda y documentación»).",
          "it": "Sentinelle live: una pagina con posti; MQTT, Pushover e Telegram segnalano in modo diverso "
-               "(vedi «Leggimi prima»).",
+               "(vedi «Aiuto & documentazione»).",
          "fr": "Surveillance en direct : une page avec des emplacements ; MQTT, Pushover et Telegram signalent "
-               "autrement (voir « À lire d'abord »).",
+               "autrement (voir « Aide et documentation »).",
          "fi": "Live-vahdit: yksi sivu, jolla on paikat; MQTT, Pushover ja Telegram ilmoittavat toisin "
-               "(katso ”Lue tämä ensin”)."},
+               "(katso ”Ohjeet ja dokumentaatio”)."},
         {"de": "Neuer Filter gegen Fehlalarme durch Blätter und Büsche.",
          "en": "New filter against false alarms from leaves and bushes.",
          "es": "Nuevo filtro contra falsas alarmas por hojas y arbustos.",
@@ -1412,32 +1415,32 @@ HIGHLIGHTS = (
                "Grundlage für eine bessere Vorauswahl und bessere Empfehlungen. Unbekannte Gesichter "
                "werden besser erkannt und zugeordnet, und Unbekannte, die einer bekannten Person ähneln,"
                " stehen gesammelt unter „Vermutlich erkannt“. Was alles neu ist und was beim Update "
-               "wichtig ist, steht unter „Bitte zuerst lesen“.",
+               "wichtig ist, steht unter „Hilfe & Doku“.",
          "en": "This version brings a lot of changes. Faces are stored in a new way, which is the basis "
                "for better pre-selection and better recommendations. Unknown faces are recognized and "
                "assigned better, and unknowns that look like a known person are grouped under \"Probably "
-               "recognized\". What's new, and what matters when you update, is under \"Read me first\".",
+               "recognized\". What's new, and what matters when you update, is under \"Help & docs\".",
          "es": "Esta versión trae muchas novedades. Las caras se guardan de una forma nueva, que es la "
                "base para una mejor preselección y mejores recomendaciones. Las caras desconocidas se "
                "reconocen y se asignan mejor, y los desconocidos que se parecen a una persona conocida "
                "aparecen agrupados en «Probablemente reconocidos». Todo lo nuevo y lo que importa al "
-               "actualizar está en «Léeme primero».",
+               "actualizar está en «Ayuda y documentación».",
          "it": "Questa versione porta molte novità. I volti vengono salvati in un modo nuovo, che è la "
                "base per una preselezione migliore e consigli migliori. I volti sconosciuti vengono "
                "riconosciuti e assegnati meglio, e gli sconosciuti che somigliano a una persona "
                "conosciuta sono raccolti sotto «Probabilmente riconosciuti». Tutte le novità e ciò che "
-               "conta durante l'aggiornamento sono in «Leggimi prima».",
+               "conta durante l'aggiornamento sono in «Aiuto & documentazione».",
          "fr": "Cette version apporte beaucoup de nouveautés. Les visages sont enregistrés d'une "
                "nouvelle façon, c'est la base d'une meilleure présélection et de meilleures "
                "recommandations. Les visages inconnus sont mieux reconnus et mieux attribués, et les "
                "inconnus qui ressemblent à une personne connue sont regroupés sous « Probablement "
                "reconnus ». Tout ce qui est nouveau et ce qui compte lors de la mise à jour se trouve "
-               "dans « À lire d'abord ».",
+               "dans « Aide et documentation ».",
          "fi": "Tämä versio tuo paljon uutta. Kasvot tallennetaan uudella tavalla, ja se on pohja "
                "paremmalle esivalinnalle ja paremmille suosituksille. Tuntemattomat kasvot tunnistetaan "
                "ja kohdistetaan paremmin, ja tuntemattomat, jotka muistuttavat tunnettua henkilöä, on "
                "koottu kohtaan ”Todennäköisesti tunnistetut”. Kaikki uudet asiat ja se, mikä "
-               "päivityksessä on tärkeää, löytyvät kohdasta ”Lue tämä ensin”.",
+               "päivityksessä on tärkeää, löytyvät kohdasta ”Ohjeet ja dokumentaatio”.",
          "readme": True},
     )),
     # ####################################################################
@@ -1453,36 +1456,36 @@ HIGHLIGHTS = (
         {"de": "Neue Gesichtserkennung. Erreicht ein Gesicht bei einer bekannten Person "
                "einen bestimmten Wert, werden die nächsten 20 Bilder einzeln geprüft. "
                "Grün wird ein Name nach drei Treffern. Jede Version läuft jetzt vor der "
-               "Veröffentlichung durch einen neuen Testlauf. Mehr dazu unter „Bitte "
-               'zuerst lesen". Ich freue mich über jede Rückmeldung, besonders wenn die '
+               "Veröffentlichung durch einen neuen Testlauf. Mehr dazu unter „Hilfe "
+               "& Doku“. Ich freue mich über jede Rückmeldung, besonders wenn die "
                "neue Erkennung danebenliegt.",
          "en": "New face recognition. When a face reaches a certain score for a known "
                "person, the next 20 frames are checked one by one. A name turns green "
                "after three hits. Every version now goes through a new test run before "
-               "release. More under Read me first. I am happy about any feedback, "
+               "release. More under Help & docs. I am happy about any feedback, "
                "especially if the new recognition gets something wrong.",
          "es": "Nuevo reconocimiento facial. Cuando una cara alcanza cierta puntuación "
                "para una persona conocida, las 20 imágenes siguientes se revisan una por "
                "una. Un nombre se pone verde tras tres coincidencias. Ahora cada versión "
-               "pasa por una nueva prueba antes de publicarse. Más en «Léeme primero». "
+               "pasa por una nueva prueba antes de publicarse. Más en «Ayuda y documentación». "
                "Me alegra recibir cualquier comentario, sobre todo si el nuevo "
                "reconocimiento se equivoca.",
          "it": "Nuovo riconoscimento facciale. Quando un volto raggiunge un certo "
                "punteggio per una persona conosciuta, i 20 fotogrammi successivi vengono "
                "controllati uno per uno. Un nome diventa verde dopo tre corrispondenze. "
                "Ora ogni versione passa per un nuovo test prima della pubblicazione. "
-               "Maggiori dettagli in «Leggimi prima». Mi fa piacere ogni riscontro, "
+               "Maggiori dettagli in «Aiuto & documentazione». Mi fa piacere ogni riscontro, "
                "soprattutto se il nuovo riconoscimento sbaglia.",
          "fr": "Nouvelle reconnaissance faciale. Quand un visage atteint un certain "
                "score pour une personne connue, les 20 images suivantes sont vérifiées "
                "une par une. Un nom passe au vert après trois correspondances. Chaque "
                "version passe maintenant par un nouveau test avant sa publication. Plus "
-               "de détails dans « À lire d'abord ». Tout retour me fait "
+               "de détails dans « Aide et documentation ». Tout retour me fait "
                "plaisir, surtout si la nouvelle reconnaissance se trompe.",
          "fi": "Uusi kasvontunnistus. Kun kasvot saavuttavat tunnetun henkilön kohdalla "
                "tietyn arvon, seuraavat 20 kuvaa tarkistetaan yksitellen. Nimi muuttuu "
                "vihreäksi kolmen osuman jälkeen. Jokainen versio käy nyt ennen julkaisua "
-               "läpi uuden testiajon. Lisää kohdassa ”Lue tämä ensin”. Kaikki "
+               "läpi uuden testiajon. Lisää kohdassa ”Ohjeet ja dokumentaatio”. Kaikki "
                "palaute ilahduttaa minua, varsinkin jos uusi tunnistus menee pieleen."},
     )),
     # ####################################################################

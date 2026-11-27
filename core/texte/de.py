@@ -52,8 +52,8 @@ T = {
     "kameras.steckbrief.fertig": "wird beim n\u00e4chsten Neustart neu ermittelt",
     "readme.einleitung": 'Ich habe das hier geschrieben, weil diese Fragen immer wieder kamen.',
     "readme.kontakt": 'Ich freue mich über Rückmeldung:',
-    "readme.titel": 'Bitte zuerst lesen',
-        "readme.knopf": 'Bitte zuerst lesen',
+    "readme.titel": 'Hilfe & Doku',
+        "readme.knopf": 'Hilfe & Doku',
         "readme.schliessen": 'Schliessen',
     "readme.zurueck": 'Zurück',
         "readme.fuss": 'Dieser Text erscheint nach jedem Neustart einmal.',
@@ -101,19 +101,27 @@ T = {
     "readme.lernen.titel": 'Wie lerne ich neue Gesichter?',
     "readme.lernen.text": 'So lerne ich mit meinem System:\n\nGesichts-Lernlauf. Auf einem neuen System das Erste. Je nach Hardware die letzten 500 Ereignisse, mit Reserve 1000. Das Programm holt die Ereignisse mit Person, gruppiert sie und legt Bilder zusammen. Bekannte ordnet es selbst zu. Unbekannte sammelt es als Gruppe, und ich gebe der Gruppe einen Namen. Das gibt den Grundstock. Greift nur bei Gesichtern, die sauber erkannt wurden.\n\nHeute. Steht der Grundstock, kommt Neues von hier dazu: Ereignis oder Person anklicken, Gesicht übernehmen.\n\nBekannte Personen. Person auswählen, passende Gesichter suchen lassen. Hier benenne ich eine Person auch um, wenn im Namen ein Tippfehler steckt. Das Programm zieht den neuen Namen durch die Bestände nach, auch durch die alten Ereignisse. Protokolle und Sicherungen behalten den alten Namen.\n\nPersonen-Lernlauf. Den gibt es daneben, für Personen ohne erkennbares Gesicht. Dazu schreibe ich später mehr.\n\nQualität. Den Reiter nutze ich regelmäßig. Er zeigt, wie gut die Bilder einer Person wirklich sind, welche zu schwach sind und welche sich mit einer anderen Person überschneiden. Zu ähnliche nehme ich raus.\n\nDen Reiter Unbekannte gibt es noch aus einer früheren Fassung. Ich nutze ihn nicht.',
     "readme.mqtt.titel": "MQTT-Meldungen",
-    "readme.mqtt.text": "Seit 0.1.1.058 hat jede Meldung des Live-Wächters das Feld event. Danach filtert die Automation. Neu sind faces_recognized und appearance_ended, die alten Felder bleiben.\n\nTopic [Präfix]/live/[Kamera], QoS 0, ohne Retain. Was der Broker verpasst, kommt nicht nochmal.\n\nJe Auftritt kommen sie in dieser Folge:\n\nface_found: erstes gültiges Gesicht. Mit score und, falls es schon einen gibt, einem vorläufigen Namen in schnell_urteil.\n\nface_recognized: ein Name hat genug Stimmen. Einmal je Name, mit stufe in schnell_urteil.\n\nfaces_recognized: gleich danach. faces enthält alle Namen des Auftritts bis jetzt, je mit name und stufe.\n\nappearance_ended: der Auftritt ist vorbei. reason ist no_face, wenn die Zeit unter „Besuch endet nach“ um ist, oder stopped, wenn Wächter oder Engine stoppen. Dazu faces und duration_s vom ersten bis zum letzten Gesicht.\n\ndisturbance: Störung mit state disturbed, Entwarnung mit state recovered. Höchstens eine je Wächter und 10 Minuten, der letzte Stand kommt danach.\n\nstufe: clear klar über der Latte, narrow knapp darüber, below knapp darunter, none weit darunter oder nicht messbar.\n\n„Push-Pause“ bremst Pushover und Telegram, MQTT nie.",
+    "readme.mqtt.text":
+        "Seit 0.1.1.058 hat jede Live-Wächter-Nachricht das Feld event; Automatisierungen filtern darauf. "
+        "faces_recognized und appearance_ended sind neu; die alten Felder bleiben.\n\nTopic [Präfix]/live/[Kamera], "
+        "QoS 0, kein Retain. Verpasste Nachrichten werden nicht nachgesendet.\n\nJe Auftritt in dieser Reihenfolge:\n\n"
+        "face_found: erstes gültiges Gesicht. Enthält Score und, falls vorhanden, einen vorläufigen Namen in "
+        "schnell_urteil (Schnellurteil).\n\nface_recognized: ein Name hat genug Stimmen. Einmal pro Name, mit stufe "
+        "(Stufe) in schnell_urteil.\n\nfaces_recognized: direkt danach. faces listet alle Namen des Auftritts bis "
+        "dahin, jeweils mit name und stufe.\n\nappearance_ended: der Auftritt ist vorbei. reason ist no_face, wenn die "
+        "Zeit unter „Besuch endet nach“ abgelaufen ist, oder stopped, wenn Wächter oder Engine stoppt. Plus faces und "
+        "duration_s vom ersten bis zum letzten Gesicht.\n\ndisturbance: gestörter Wächter mit state disturbed, "
+        "Entwarnung mit state recovered. Höchstens eine pro Wächter und 10 Minuten; der neueste Zustand folgt.\n\n"
+        "stufe: clear = deutlich über der Schwelle, narrow = knapp darüber, below = knapp darunter, none = weit "
+        "darunter oder nicht messbar.\n\n„Push-Pause“ bremst Pushover und Telegram, nie MQTT.",
     "readme.persoenlich.titel": 'Persönliches',
     "readme.persoenlich.text": 'Das hier ist reines Hobby. Es macht mir Spaß, als Senior IT-Architekt mit KI etwas zu entwickeln. Entwickelt wird komplett mit Claude Code, überwiegend mit Fable 5, für die Agenten mit Opus 5.\n\nWas ich mir wünsche, ist Rückmeldung, und es freut mich, wenn jemand das System einsetzt. Das ist mein Lohn.',
     "kameras.titel": "Kameras",
     "kameras.sub":
-        "Live aus deiner Frigate-Config gelesen, nichts ist fest "
-        "eingetragen. Schaltest du eine Kamera <b>aus</b>, holt und prüft "
-        "suslik dort nichts, auch keine Namen, die Frigate vergeben hat. "
-        "Hakst du eine oder mehrere <b>Zonen</b> an, prüft suslik nur "
-        "Events, die in diese Zonen kamen (nichts angehakt = alle Events); "
-        "hat Frigate schon einen Namen vergeben, prüft suslik ihn trotzdem. "
-        "Eine Kamera, die in Frigate aus ist, liefert keine Events; deine "
-        "Wahl gilt, sobald sie dort wieder an ist. "
+        "Live aus deiner Frigate-Config gelesen. Das Häkchen entscheidet, ob suslik eine Kamera nutzt: nimmst du es "
+        "raus, holt und prüft suslik keine Events dieser Kamera, auch keine Namen, die Frigate vergeben hat. Eine in "
+        "Frigate <b>ausgeschaltete</b> Kamera liefert keine Events. Hakst du <b>Zonen</b> an, prüft suslik nur Events, "
+        "die in diese Zonen kamen; hat Frigate schon einen Namen vergeben, prüft suslik ihn trotzdem. "
         '<a href="/kameras?refresh=1">Neu laden</a>.',
     "kameras.banner.config_fehler":
         "Die Frigate-Config ließ sich nicht lesen: {fehler}",
@@ -125,9 +133,8 @@ T = {
     "kameras.karte.rec_aus": "keine Aufnahme",
     "kameras.karte.pill_aus": "in Frigate aus",
     "kameras.karte.pill_keine_detektion_titel":
-        "Frigate führt auf diesem Stream keine Objekterkennung "
-        "für Personen aus &mdash; hier können keine Events "
-        "ankommen",
+        "Frigate hat auf diesem Stream keine Personenerkennung, daher können hier keine Personen-Events ankommen. In "
+        "Frigate aktivieren oder anderen Stream nutzen.",
     "kameras.karte.pill_keine_detektion": "keine Objekterkennung in Frigate",
     "kameras.karte.prio": "Priorität",
     "kameras.prio.low": "niedrig",
@@ -175,9 +182,8 @@ T = {
     "areas.verwaltung.knopf_anlegen": "Bereich anlegen",
     "areas.verwaltung.titel_zuweisen": "Kameras zuweisen",
     "areas.verwaltung.satz_zuweisen":
-        "Eine Kamera gehört zu genau einem Bereich; alles nicht "
-        "Zugewiesene bleibt in Default. Speichern braucht keinen "
-        "Dienst-Neustart.",
+        "Jede Kamera ist in genau einem Bereich; nicht zugewiesene Kameras bleiben in 'Default'. Das Speichern wirkt "
+        "ohne Neustart.",
     "areas.verwaltung.pill_nicht_gesehen": "nicht gesehen",
     "areas.verwaltung.attr_nicht_gesehen":
         "früher zugewiesen, gerade nicht in Frigate",
@@ -349,16 +355,14 @@ T = {
     "frigate.kameras.knopf": "Kameras verwalten",
     "frigate.sync.titel": "Abgleich",
     "frigate.sync.satz":
-        "Hält die Gesichter auf beiden Seiten im Gleichschritt: "
-        "durchgesehene Gesichter an Frigate senden, importieren, was nur "
-        "Frigate hat &mdash; immer deine Entscheidung, nie automatisch.",
+        "Vergleicht die Gesichter auf beiden Seiten: geprüfte Gesichter an Frigate senden und Gesichter importieren, "
+        "die nur Frigate hat. Das ist der manuelle Prüfschritt; der automatische Export nach neuen Referenzen "
+        "(Einstellung frigate_sync, falls an) läuft getrennt davon.",
     "frigate.sync.knopf": "Durchsehen &amp; abgleichen",
     "frigate.fr.titel": "Frigates eigene Gesichtserkennung",
     "frigate.fr.satz":
-        "Auch Frigate kann Gesichter erkennen. Dieses Programm arbeitet "
-        "mit oder ohne sie &mdash; der Schalter liegt in Frigates Config "
-        "und wird hier live gelesen, damit du weißt, was ein "
-        "Abgleich gerade kann.",
+        "Frigate hat eine eigene Gesichtserkennung. suslik funktioniert mit oder ohne sie. Der Schalter liegt in "
+        "Frigates Config (hier live gelesen) und entscheidet, ob Referenz-Uploads angenommen werden.",
     "frigate.fr.beweis_unbekannt": "Zustand unbekannt — {detail}",
     "frigate.js.url_fehlt": "Frigate-URL eingeben",
     "frigate.js.fehler": "Fehler:",
@@ -418,29 +422,34 @@ T = {
     "konfiguration.kette.zeile_kosten": "Kosten: {kosten}",
     "konfiguration.kette.titel": "Erkennungskette",
     "konfiguration.kette.satz":
-        "Welche Erkenner laufen, und in welcher Reihenfolge. Die "
-        "Bedingung \"nur_wenn_gesicht_leer\" heißt: Der Schritt "
-        "läuft nur, wenn der Gesichtspfad NICHT alle im Durchgang "
-        "bestätigen konnte — entschieden über den ganzen "
-        "Durchgang, nie über ein einzelnes Event. Die Reihenfolge "
-        "selbst zu ändern ist eine spätere Ausbaustufe; heute "
-        "beginnt die Kette immer mit dem Gesichtspfad.",
+        'Welche Erkenner laufen. Bedingung "nur_wenn_gesicht_leer": Der Schritt läuft nur, wenn der Gesichtspfad im '
+        "ganzen Durchgang nicht alle bestätigen konnte, nie bei einem einzelnen Event. Die Kette beginnt immer mit dem "
+        "Gesichtspfad.",
     "konfiguration.knopf_speichern": "Speichern + neu starten",
     "konfiguration.kette_blatt.hinweis":
         "Änderungen werden protokolliert (config_audit.jsonl); "
         "nach dem Speichern startet der Dienst sauber neu.",
     "antwort.support_token_neu": "neuer Support-Token erzeugt — der alte ist ungültig; jetzt kopieren, er wird nur dieses eine Mal angezeigt",
-    "konfiguration.neustart.titel": "Dienst neu starten",
-    "konfiguration.neustart.satz": "Startet diesen Dienst an Ort und Stelle neu (der Container läuft weiter, alle Daten bleiben). Für den Fall, dass die Verarbeitung hängt; offene Events werden nach dem Neustart wieder aufgegriffen.",
-    "konfiguration.neustart.knopf": "Jetzt neu starten",
+    "konfiguration.neustart.titel": "Verarbeitungsdienst neu starten",
+    "konfiguration.neustart.satz":
+        "Startet den Dienst an Ort und Stelle neu (der Container läuft weiter; Daten bleiben). Bei hängender "
+        "Verarbeitung verwenden; ausstehende Events werden nach dem Neustart fortgesetzt.",
+    "konfiguration.neustart.knopf": "Verarbeitung neu starten",
     "konfiguration.neustart.frage": "Dienst jetzt neu starten? Die Verarbeitung pausiert ein paar Sekunden.",
     "antwort.neustart": "Neustart läuft — diese Seite antwortet in wenigen Sekunden wieder.",
     "konfiguration.support.titel": "Fern-Support-Zugriff",
-    "konfiguration.support.satz": "Nur-Lese-Download benannter Bereiche (Logs, maskierte Config, Gesichter, Lernläufe, Körpermaterial, Zustandsdateien, Fadenliste des Dienstes) für den Inhaber des Support-Tokens. Der Ein/Aus-Schalter support_zugriff steht in der Tabelle unten, Standard aus. Jede Anfrage steht im Dienst-Log. Die Gesichts- und Körperbereiche enthalten Bilder echter Personen — den Token mit Bedacht weitergeben. Ohne TLS vor diesem Dienst reist der Token im Klartext. Der Token erlaubt auch sechs Aktionen: diesen Dienst aus der Ferne neu starten (POST /support/restart), Ereignisse erneut durch die Erkennung schicken (POST /support/einspielen), die Feinmessung ein- und ausschalten (POST /support/feinmessung), das Debug-Log ohne Neustart ein- und ausschalten (POST /support/debug), kleine Dateioperationen im Dienst und in einem frischen Prozess messen (POST /support/dateiprobe) und den Clip-Cache einmal leeren (POST /support/cache_leeren).",
+    "konfiguration.support.satz":
+        "Der Support-Token kann den ganzen Datenordner herunterladen (Config maskiert): Logs, Gesichter, Körperbilder "
+        "echter Personen und mehr. Dazu erlaubt er sechs Fernaktionen: Neustart, erneutes Einspielen, Feinmessung, "
+        "Debug ein/aus, Dateiprobe und Cache leeren. Der Ein/Aus-Schalter support_zugriff steht in der Tabelle unten, "
+        "Standard aus. suslik liefert reines HTTP; ohne TLS-Reverse-Proxy reist der Token unverschlüsselt. Behandle "
+        "ihn wie ein Passwort.",
     "konfiguration.support.token_gesetzt": "Ein Support-Token ist gesetzt.",
     "konfiguration.support.token_fehlt": "Noch kein Support-Token.",
     "konfiguration.support.knopf_token": "Neuen Token erzeugen",
-    "konfiguration.support.einmal_hinweis": "Der Token erscheint hier genau einmal nach dem Erzeugen — sichern; danach wird nur noch ••• gezeigt.",
+    "konfiguration.support.einmal_hinweis":
+        "Der Token wird genau einmal nach dem Erzeugen angezeigt. Jetzt kopieren — er kann nicht wiederhergestellt "
+        "werden; danach wird nur ••• angezeigt.",
     "konfiguration.titel": "Erweiterte Einstellungen",
     "konfiguration.kopf.satz1":
         "Änderungen werden protokolliert (config_audit.jsonl); "
@@ -457,13 +466,15 @@ T = {
     "konfiguration.frigate_auth.erkl_user":
         "Benutzername eines Frigate-Kontos. Leer = keine Anmeldung; wird er "
         "geleert, verf\u00e4llt auch das gespeicherte Passwort",
+    "konfiguration.frigate_auth.label_user": "Frigate-Benutzername",
+    "konfiguration.frigate_auth.label_password": "Frigate-Passwort",
     "konfiguration.frigate_auth.erkl_password":
         "Passwort zu diesem Konto. Es liegt bei den \u00fcbrigen Einstellungen unter "
         "/data und wird nie wieder angezeigt \u2014 leer lassen beh\u00e4lt es",
     "konfiguration.frigate_auth.erkl_tls":
-        "TLS-Zertifikat von Frigate pr\u00fcfen. Frigates authentifizierter Port bringt "
-        "ab Werk ein selbstsigniertes Zertifikat mit; schalten Sie das hier aus, wenn "
-        "Sie ihn per https ansprechen und das Zertifikat nicht ersetzt haben",
+        "Frigates TLS-Zertifikat pr\u00fcfen. Frigates authentifizierter Port (8971) bringt ab Werk ein "
+        "selbstsigniertes Zertifikat mit; schalte das aus, wenn du ihn per HTTPS ansprichst und das Zertifikat nicht "
+        "ersetzt hast.",
     "konfiguration.frigate_auth.pw_gesetzt": "gespeichert \u2014 leer lassen beh\u00e4lt es",
     "konfiguration.frigate_auth.pw_leer": "kein Passwort gespeichert",
     "konfiguration.abschnitt_alle": "Alle Parameter",
@@ -561,9 +572,7 @@ T = {
     "lernanker.liste.verworfen":
         "{n} Gruppe(n) von dir gelöscht (Bilder weg, nur noch als Eintrag)",
     "lernanker.titel": "Ankergruppen",
-    "lernanker.liste.leer":
-        "Noch keine Anker — ein Lernlauf baut sie auf (Vorbereitung "
-        "→ Sammeln → Gruppierung).",
+    "lernanker.liste.leer": "Noch keine Gruppen. Starte zuerst einen Lernlauf (Vorbereitung → Sammeln → Gruppierung).",
     "lernanker.liste.leer_link": "Lernlauf-Seite öffnen",
     "lernanker.liste.kopf":
         "{n} Gruppen aus {ges} ankertauglichen Gesichtern — {ok} "
@@ -588,10 +597,8 @@ T = {
     "syncauswahl.titel": "Durchsehen &amp; abgleichen — Referenzen "
         "nach Frigate",
     "syncauswahl.kopf.satz":
-        "Frigate schickt jede hochgeladene Referenz durch seinen "
-        "eigenen Gesichtsdetektor und weist Bilder ab, in denen es kein "
-        "Gesicht findet. Diese Seite prüft zuerst dasselbe, zeigt "
-        "dir jeden Kandidaten und sendet nur, was du anhakst.",
+        "Frigate lehnt Referenzen ohne erkennbares Gesicht ab. Diese Seite prüft das vorher, listet Kandidaten und "
+        "sendet nur angehakte. Der Auto-Abgleich nutzt dieselbe Überspring-Liste.",
     "syncauswahl.fehler.titel": "Kandidaten nicht verfügbar",
     "syncauswahl.fehler.satz":
         "Die Kandidatenliste braucht ein erreichbares Frigate — "
@@ -640,7 +647,7 @@ T = {
     "syncauswahl.fr.satz_an":
         "(beim Laden dieser Seite aus Frigate gelesen) — sie nimmt "
         "hochgeladene Referenzen an.",
-    "syncauswahl.fr.titel_aus": "Frigate-Gesichtserkennung: aus",
+    "syncauswahl.fr.titel_aus": "Frigate-Gesichtserkennung: AUS (Uploads werden abgelehnt)",
     "syncauswahl.bilanz.titel": "Bilanz",
     "syncauswahl.bilanz.hauptzeile":
         "Referenzbilder · {beide} schon in Frigate · {bereit} bereit "
@@ -650,8 +657,8 @@ T = {
     "syncauswahl.bilanz.exportiert":
         "{n} früher gesendet (Frigate hat sie umbenannt)",
     "syncauswahl.bilanz.abgewaehlt": "{n} abgewählt",
-    "syncauswahl.bilanz.vorrat": "{n} Vorrats-Referenz(en) nur lokal (Embedding-basiert, nicht übertragbar)",
-    "syncauswahl.bilanz.nur_frigate": "{n} nur in Frigate",
+    "syncauswahl.bilanz.vorrat": "{n} Referenz(en) nur lokal (Embedding-basiert, nicht übertragbar)",
+    "syncauswahl.bilanz.nur_frigate": "{n} Referenzbild(er) nur in Frigate",
     "syncauswahl.bilanz.je_person": "In Frigate, je Person:",
     "syncauswahl.bilanz.kandidaten.eins": "{n} Kandidat",
     "syncauswahl.bilanz.kandidaten.viele": "{n} Kandidaten",
@@ -690,13 +697,9 @@ T = {
     "syncauswahl.gruppe.prueft": "{n} noch in Prüfung",
     "syncauswahl.geloescht.zusatz": "— deine Entscheidung",
     "syncauswahl.geloescht.satz":
-        "Diese sind noch in deinen Referenzen, aber Frigate hat sie "
-        "unter dem gespeicherten Namen nicht mehr. suslik sendet sie "
-        "nie ohne deine Entscheidung erneut: Ein Gesicht in Frigate zu "
-        "löschen kann Absicht sein. Wieder anbieten macht es zum "
-        "normalen Kandidaten — ab dann lädt es der nächste "
-        "Abgleich hoch, auch der automatische. Löschung respektieren "
-        "hält es dauerhaft draußen.",
+        "Bleibt bei deinen Referenzen, ist aber unter diesem Namen nicht mehr in Frigate. suslik sendet ohne deine "
+        "Entscheidung nie erneut, da das Löschen absichtlich sein kann. 'wieder anbieten' erlaubt das Senden "
+        "einschließlich Auto-Abgleich; 'Löschung respektieren' blockiert dauerhaft.",
     "syncauswahl.aufklapp": "— anzeigen",
     "syncauswahl.api.titel":
         "{n} früher exportiert — Frigate führt sie unter "
@@ -719,17 +722,12 @@ T = {
         "kopiert sie in deine Referenzen; in Frigate ändert sich "
         "nichts.",
     "syncauswahl.import.warnung":
-        "Diese Liste kann von dir Hochgeladenes enthalten: Frigate "
-        "benennt jede angenommene Referenz um, deshalb kann suslik sie "
-        "nicht von Gesichtern unterscheiden, die du direkt in Frigate "
-        "hinzugefügt hast. Sie zurückzuimportieren würde "
-        "Inhalte doppeln.",
-    "syncauswahl.import.knopf": "In suslik importieren",
+        "Achtung: Der Import kann Gesichter duplizieren, da Frigate Uploads umbenennt und suslik sie nicht "
+        "unterscheiden kann. Vor dem Import prüfen.",
+    "syncauswahl.import.knopf": "Bilder, die nur Frigate hat, importieren",
     "syncauswahl.raus.satz":
-        "Mit Absicht gemerkt: Diese bleiben in deinen Referenzen, "
-        "werden aber nie nach Frigate gesendet, auch nicht vom "
-        "automatischen Abgleich. Zurückholen setzt eines wieder auf "
-        "die Kandidatenliste.",
+        "Bewusst übersprungen: Bleibt bei deinen Referenzen und wird nie nach Frigate gesendet, auch nicht beim "
+        "Auto-Abgleich. 'zurückholen' setzt es zurück auf die Kandidatenliste.",
     "syncauswahl.alter.unbekannt": "Alter unbekannt",
     "syncauswahl.alter.sekunden": "vor {s} s",
     "syncauswahl.alter.minuten": "vor {m} min",
@@ -746,11 +744,8 @@ T = {
     "syncauswahl.ergebnis.dauer": "dauerte {n} s",
     # ---------------------------------------------------- routes/live ---
     "live.hinweis_cpu":
-        "CPU-Modus: Wächter sind hier teuer — die schnelle "
-        "Prüfung dauert typisch 1–2 s (ein GPU-Build reagiert in "
-        "unter einer Sekunde), und zusätzliche Wächter bremsen "
-        "sich gegenseitig. Wie viele du laufen lässt, entscheidest "
-        "du; wir empfehlen den Start mit einem.",
+        "Auf CPU kostet jeder Wächter: ein Frame-Check dauert ~1–2 s (GPU: <1 s), und Wächter konkurrieren um CPU. Mit "
+        "einem starten.",
     "live.zeile.alter": "({tage} Tag(e) alt)",
     "live.test.zeile":
         "Quellentest {wann}: {aufloesung} → {skala}, {bilder_s} "
@@ -782,8 +777,7 @@ T = {
     "live.engine.titel_aus": "Live-Engine: läuft nicht",
     "live.engine.satz_aus": "Kein Heartbeat vom Engine-Prozess. Die Plätze zeigen die gespeicherten Einstellungen; Einschalten, Tests gegen einen laufenden Wächter und Lastmessungen brauchen die Engine — der Dienst startet sie automatisch, sobald mindestens ein Wächter eingeschaltet ist.",
     "live.engine.cpu_mit_limit":
-        "suslik-CPU gerade: {kerne} von {limit} erlaubten Kernen "
-        "(ganzer Container: Wächter, Analyse, Dienst)",
+        "suslik-CPU jetzt: {kerne} von {limit} erlaubten Kernen (gesamter Container: Wächter, Analyse, Dienst)",
     "live.engine.cpu_ohne_limit":
         "suslik-CPU gerade: {kerne} Kerne (ganzer Container: "
         "Wächter, Analyse, Dienst)",
@@ -831,8 +825,8 @@ T = {
     "live.intro_link": "So arbeiten Wächter",
     "live.marke.aktiv": "{n} aktiv",
     "live.platz.name": "Live {n}",
-    "live.platz.frei": "frei",
-    "live.frei.titel": "Live {n} ist frei",
+    "live.platz.frei": "unbenutzt",
+    "live.frei.titel": "Live {n} ist unbenutzt",
     "live.frei.satz": "Weise dem Platz eine Kamera zu. Danach stellst du hier ein, was sie meldet, und schaltest sie ein.",
     "live.frei.keine": "Jede Kamera hat schon einen Platz.",
     "live.knopf_zuweisen": "Kamera zuweisen",
@@ -876,7 +870,7 @@ T = {
     "live.pause.kopf": "Ab dem ersten Gesicht eines gemeldeten Besuchs ist so lange Ruhe:",
     "live.pause.besuche": "Besuche, die in dieser Zeit beginnen, bekommen kein Video und keine „Unbekannte Person“.",
     "live.pause.name": "Derselbe Name kommt frühestens nach ebenso vielen Sekunden wieder.",
-    "live.detail.scharf_hinweis": "Home Assistant (MQTT) pausiert nie.",
+    "live.detail.scharf_hinweis": "Home Assistant (MQTT) ignoriert die Push-Pause.",
     "live.abschnitt.test": "Quelltest",
     "live.detail.gesperrt_hinweis":
         "Testen und Messen sind nicht verfügbar, solange "
@@ -933,8 +927,8 @@ T = {
     "live.eigenepruefen.schalter": "Eigene Frigate-Ereignisse nachprüfen",
     "live.eigenepruefen.erklaerung": "Auch die Ereignisse analysieren, die dieser Wächter in Frigate anlegt.",
     "live.workeraus.erklaerung": "Solange der Wächter läuft, überspringt die Ereignis-Analyse die Ereignisse dieser Kamera, außer Frigate nennt selbst eine Person.",
-    "live.frigate.schalter": "Ereignis in Frigate anlegen",
-    "live.frigate.erklaerung": "Bei erkanntem Namen ein eigenes Ereignis mit dem Namen.",
+    "live.frigate.schalter": "Frigate-Ereignis für eine erkannte Person erstellen",
+    "live.frigate.erklaerung": "Erzeugt ein eigenes Ereignis mit dem erkannten Namen.",
     "live.frigate.abstand_label": "Abstand je Person",
     "live.frigate.abstand_hinweis": "Leer heißt die Push-Pause.",
     # --- WS2 (Bauplan analysen/bauplan_waechterseite.md): die Einstellseite eines Waechters nach der
@@ -955,7 +949,7 @@ T = {
     "live.alter.heute": "heute",
     "live.alter.tage.eins": "vor {n} Tag",
     "live.alter.tage.viele": "vor {n} Tagen",
-    "live.einheit.s": "s",
+    "live.einheit.s": "sec",
     "live.abschnitt.mqtt": "Home Assistant (MQTT)",
     "live.mqtt.zweck": "Für Automationen im Haus. Geht vor allen anderen Wegen raus, immer englisch, ohne Push-Pause.",
     "live.mqtt.topic": "Topic",
@@ -975,8 +969,10 @@ T = {
     "live.push.video_hinweis": "Ein Video je gemeldetem Besuch, ab dem ersten Gesicht.",
     "live.push.nur_telegram": "nur Telegram",
     "live.push.videolaenge": "Videolänge",
-    "live.push.neben": "Unbekannte auch neben Erkannten melden",
-    "live.push.neben_hinweis": "„Unbekannte Person“ kommt dann auch, wenn im selben Besuch jemand erkannt wurde, ohne Bild.",
+    "live.push.neben": "Auch unbekannte Personen in Besuchen mit erkannter Person melden",
+    "live.push.neben_hinweis":
+        "Dann wird auch eine „Unbekannte Person“-Meldung gesendet, wenn in demselben Besuch jemand erkannt wurde, ohne "
+        "Bild.",
     "live.abschnitt.besuch": "Besuch",
     "live.besuch.zweck": "Ein Besuch beginnt mit dem ersten Gesicht und endet, wenn so lange keines mehr zu sehen war. Danach kann dieselbe Person neu erkannt werden.",
     "live.besuch.global": "Für alle Kameras gleich: {fps} Bilder je Sekunde, {stimmen} Mindeststimmen.",
@@ -1155,11 +1151,8 @@ T = {
     "erkennung.knopf_register_face": "Gesicht registrieren …",
     "erkennung.gesicht.titel": "Gesichtserkennung",
     "erkennung.gesicht.satz":
-        "Der präziseste Weg: Jeder Durchgang wird gegen die "
-        "Gesichter der Personen geprüft, die du dem System angelernt "
-        "hast. Sie ist das Rückgrat — Körper und Vision "
-        "hängen an ihrem Durchgangsurteil, deshalb hat sie heute "
-        "keinen Aus-Schalter.",
+        "Der genaueste Weg: Jeder Durchgang wird mit den Gesichtern der gelernten Personen abgeglichen. Das ist das "
+        "Rückgrat — Körper und Vision hängen an seinem Durchgangsurteil, daher in dieser Version nicht abschaltbar.",
     "erkennung.gesicht.beweis_personen": "{n} Personen",
     "erkennung.gesicht.beweis_bilder": "{n} Referenzbilder",
     "erkennung.gesicht.knopf_verwalten": "Personen verwalten …",
@@ -1174,7 +1167,7 @@ T = {
         "läuft nicht (die Vision-Erkennung ist abgeschaltet)",
     "erkennung.koerper.knopf_register": "Körper registrieren …",
     "erkennung.koerper.melden.titel": "Meldet an:",
-    "erkennung.koerper.melden.nur_anzeige": "nur Anzeige",
+    "erkennung.koerper.melden.nur_anzeige": "keine (nur Anzeige)",
     "erkennung.koerper.melden.leer": "Nichts gewählt: der Name wird nur angezeigt.",
     "erkennung.koerper.melden.nicht_eingerichtet": "nicht eingerichtet",
     "erkennung.koerper.melden.aria": "Meldewege der Personenerkennung",
@@ -1185,6 +1178,7 @@ T = {
     "erkennung.unter.nur_ohne_gesicht": "Nur ohne Gesicht",
     "erkennung.unter.wenn_noetig": "Bei Bedarf",
     "erkennung.vision.titel": "KI-Vision",
+    "erkennung.vision.status_paused": "Geparkt",
     "erkennung.vision.beta": "Beta",
     "erkennung.vision.satz":
         "Eine Bild-KI als Schiedsrichter für die harten Fälle. "
@@ -1623,7 +1617,7 @@ T = {
     "nav.bereich.activity": "Aktivität",
     "nav.bereich.faces": "Gesichter",
     "nav.bereich.learn": "Anlernen",
-    "nav.bereich.person": "Person",
+    "nav.bereich.person": "Körpererkennung",
     "nav.bereich.vision": "Vision",
     "nav.bereich.live": "Live",
     "nav.bereich.frigate": "Frigate",
@@ -1716,8 +1710,8 @@ T = {
     "js.status.siehe_log": "siehe Dienst-Log",
     "js.status.diagnose": "Diagnose",
     "js.einheit.min": "{n} min",
-    "js.einheit.s": "{n} s",
-    "js.einheit.klammer_s": "({n} s)",
+    "js.einheit.s": "{n} sec",
+    "js.einheit.klammer_s": "({n} sec)",
     "js.allg.abbrechen": "Abbrechen",
     "js.neustart.zurueck": "Dienst ist zurück, lade …",
     "js.neustart.kommt": "Dienst kommt zurück …",
@@ -1728,8 +1722,11 @@ T = {
     "js.lernlauf.tag_fehlt": "erst einen Tag wählen",
     "js.lernlauf.abbruch_frage": "Diesen Lernlauf abbrechen?",
     "js.notif.frage": "Meldeeinstellungen speichern und den Dienst neu starten?",
-    "js.frigate.ro_frage": "Auf NUR-LESEN umschalten? suslik schreibt dann nichts mehr nach Frigate.",
-    "js.frigate.rw_frage": "SCHREIBEN nach Frigate aktivieren (sub_labels + Referenz-Abgleich)?",
+    "js.frigate.ro_frage":
+        "Schreiben beenden (nur lesen)? suslik schreibt dann nichts mehr nach Frigate: keine Sub-Labels, keine "
+        "Referenz-Uploads, keine Wächter-Ereignisse.",
+    "js.frigate.rw_frage":
+        "Schreiben aktivieren? suslik schreibt erkannte Namen nach Frigate (sub_labels + Referenzabgleich).",
     "js.catchup.frage": "Verpasste Ereignisse ab sofort beim Start überspringen? Der Dienst startet dafür neu.",
     "catchup.knopf": 'Nachholen',
     "catchup.knopf.tooltip": 'Unverarbeitete Ereignisse warten',
@@ -2346,7 +2343,7 @@ T = {
         "suslik).",
     "system.write.aktuell": "Aktuell:",
     "system.write.zustand_ro": "NUR-LESEN — suslik schreibt nicht nach Frigate",
-    "system.write.zustand_rw": "SCHREIBT nach Frigate — sub_labels",
+    "system.write.zustand_rw": "Schreibt erkannte Namen nach Frigate (sub_labels)",
     "system.write.zustand_rw_sync": " + Referenz-Abgleich",
     "system.write.knopf_rw": "Schreiben aktivieren",
     "system.write.knopf_ro": "Nur-Lesen",
@@ -2367,10 +2364,13 @@ T = {
     "vision.schalter.fehlt": "Fehlt noch:",
     # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW6 Punkt 4: Vision geparkt (Seiten und Schalter).
     "vision.geparkt_satz":
-        "Vision ist in dieser Version pausiert und lässt sich nicht einschalten. Es kommt zurück, sobald es auf die neuen Körperbilder umgebaut ist.",
+        "KI-Vision ist in dieser Version geparkt und kann nicht eingeschaltet werden. Sie kommt zurück, sobald sie auf "
+        "den neuen Körperbildern neu aufgebaut ist.",
     "vision.schalter.fehlt_galerien": "{n} von {soll} freigegebenen Galerien — eine bauen unter 'Galerie bauen'",
     "vision.schalter.fehlt_test": "ein gruener Verbindungstest",
-    "vision.schalter.fehlt_kandidaten": "beurteilte Bilder als Kandidatenquelle — sie erscheinen, waehrend ein Durchgang laeuft; 'Diagnose-Sammlung' unter Person einschalten, wenn sie bleiben sollen",
+    "vision.schalter.fehlt_kandidaten":
+        "beurteilte Bilder als Kandidatenquelle — sie erscheinen, waehrend ein Durchgang laeuft; 'Diagnose-Sammlung' "
+        "unter Körpererkennung einschalten, wenn sie bleiben sollen",
     "vision.schalter.titel_an": "Die Vision-Erkennung ist an",
     "vision.schalter.titel_aus": "Die Vision-Erkennung ist aus",
     "vision.schalter.aus_satz":
@@ -3752,7 +3752,11 @@ Personen zwischendurch auffüllen.</p>""",
     "anwesenheit.legende_leer": "Dienst lief nicht",
     "anwesenheit.legende_teil": "gelaufen, einzelne Ereignisse nicht analysiert",
     "anwesenheit.legende_jetzt": "jetzt",
-    "anwesenheit.legende_satz": "Weiß heißt ausschließlich: der Dienst lief in dieser Zeit nicht. Eine grüne Zelle mit abgeschnittener Ecke sagt, dass der Dienst lief, dabei aber einzelne Ereignisse nicht analysiert wurden — die Zahlen dazu stehen beim Draufzeigen.",
+    "anwesenheit.legende_satz":
+        "Weiß heißt ausschließlich: der Dienst lief in dieser Zeit nicht. Nachts deckt eine Zelle vier Viertelstunden "
+        "ab. Ohne erfasste Anwesenheit ist sie weiß, sobald der Dienst in einer davon nicht lief. Eine grüne Zelle mit "
+        "abgeschnittener Ecke sagt, dass der Dienst lief, dabei aber einzelne Ereignisse nicht analysiert wurden — die "
+        "Zahlen dazu stehen beim Draufzeigen.",
     "anwesenheit.zaehler": "{zeilen} Marken gelesen, {kaputt} kaputte Zeilen übersprungen.",
     "anwesenheit.gekappt": "Die Tagesdatei ist größer als die Lesegrenze; nur ihr Ende wurde gelesen.",
     "anwesenheit.nie": "In dieser Sicht nicht gesehen: {namen}",

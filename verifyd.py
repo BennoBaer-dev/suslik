@@ -7481,7 +7481,7 @@ VORLAUF_TAKT_S = 2.0
 VORLAUF_MIN_WERK = 20
 VORLAUF_MAX_WERK = 50
 VORLAUF_PARALLEL_WERK = 2
-VORLAUF_PARALLEL_MAX = 4
+VORLAUF_PARALLEL_MAX = 6                # Sammelplan analysen/bauplan_klein.md, Stufe K6 Punkt 4 (vorher 4)
 VORLAUF_MIN_GRENZE = 200
 VORLAUF_MAX_GRENZE = 500
 # Bauplan analysen/bauplan_abruffenster.md, Stufe AF1 (Eigentuemer 10.11.2026 09:07:36): so viele Sekunden wartet der
@@ -7574,7 +7574,8 @@ class Vorlauf:
     der gewichteten Reihenfolge, bis das Ziel an Clip-Kandidaten erreicht ist — nie die ganze Schlange auf einmal.
 
     HOLEN in der Reihenfolge, in der zugeteilt wird (7/2/1 ueber alle faelligen Ereignisse, in der Stufe das
-    neueste), bis zum Ziel `vorlauf_max` mit Pause bis unter `vorlauf_min` (NZ1); bei Vorrat aus oder Cache an der
+    neueste), in zwei Durchgaengen (Stufe K6): zuerst Eingespieltes und abgelaufener Deckel, dann der Rest; bis zum
+    Ziel `vorlauf_max` mit Pause bis unter `vorlauf_min` (NZ1); bei Vorrat aus oder Cache an der
     Grenze ist das Ziel die Zahl der Analyseplaetze. Hoechstens `vorlauf_parallel` Abrufe, alle Torplaetze, je Abruf
     die Frist der heutigen Job-Frist (`job_deadline`), drei Versuche. Jeder bereite Clip haelt einen benannten Pin;
     faellt sein Ereignis aus dem Ziel, wird er geloest und das Ereignis ist wieder holen.
@@ -7915,7 +7916,8 @@ class Vorlauf:
                        CLIP_AUFNAHME_DECKEL_GROSS)
 
     def _aufnahme_pruefen(self, eid, info, eingereiht):
-        """Fragt Frigate vor dem Abruf, ob ein Segment zur Endzeit des Ereignisses eingetragen ist (CV1 Punkt 3 und 6).
+        """Fragt Frigate vor dem Abruf, ob ein Segment zur Endzeit des Ereignisses eingetragen ist (CV1 Punkt 3 und 6);
+        ohne Frage holt sie, wenn der Deckel um ist, noch nie gefragt wurde und kein Rueckfall laeuft (Rueckstau, K6).
         -> (AUFNAHME_HOLEN, None oder Vermerk AUFNAHME_DECKEL / AUFNAHME_ABFRAGE_FEHLER) oder (AUFNAHME_WARTEN, bis als
         Wanduhrzeit, None heisst die naechste Runde)"""
         if _einspiel.ist_einspiel(eid):
@@ -7923,6 +7925,11 @@ class Vorlauf:
         abgelaufen = self._deckel_abgelaufen(eingereiht)
         if info.get("aufnahme") == AUFNAHME_ABFRAGE_FEHLER and abgelaufen:
             return AUFNAHME_HOLEN, AUFNAHME_ABFRAGE_FEHLER   # Rueckfall: nach dem Deckel ohne weitere Abfrage
+        if abgelaufen and not info.get("aufnahme_gefragt") and not self.aufnahme_rueckfall:     # K6 Punkt 1
+            self.svc.log.debug(f"vorlauf: {eid} fetched without the recording check, first turn after "
+                               f"{time.time() - float(eingereiht or time.time()):.0f} s in the queue (cap passed)")
+            return AUFNAHME_HOLEN, None
+        self._setzen(eid, aufnahme_gefragt=True)
         kamera = urllib.parse.quote(str(info.get("kamera") or ""), safe="")
         ende = info.get("end_time")
         with self._mutex:
@@ -8013,7 +8020,7 @@ class Vorlauf:
         alter = (_clip_alter_min(info.get("end_time"), info.get("start_time"))
                  if info.get("end_time") or info.get("start_time") else None)
         frist, erzeugung = job_deadline(cfg, clip_age_min=alter)
-        t0 = time.monotonic()
+        t0, aktion = time.monotonic(), None
         try:
             # CV1 Punkt 4: die Pruefung liegt im Schutz des `finally` (nur dort wird `_laeuft` frei). „warten“ stellt
             # den Eintrag zurueck: der Zustand bleibt holen, kein Versuch zaehlt, kein Pin, nichts geholt.
@@ -8062,6 +8069,8 @@ class Vorlauf:
                 _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             with self._mutex:
                 self._laeuft.discard(eid)
+            if aktion != AUFNAHME_WARTEN:
+                self.wecken.set()                         # K6 Punkt 3: jeder Abrufversuch weckt den Disponenten
 
     def _abruf_zaehlen(self):
         """Bauplan VOD2 Punkt 5b: den Weg des letzten Abrufs dieses Fadens und einen Rueckfall von VOD auf clip.mp4
@@ -8337,8 +8346,11 @@ class Vorlauf:
         with self._mutex:
             frei = par - len(self._laeuft)
             laeuft = set(self._laeuft)
-        jetzt = time.monotonic()
-        for eid, info in self._infos(fenster).items():
+        jetzt, infos = time.monotonic(), self._infos(fenster)
+        # K6 Punkt 2: zwei Durchgaenge in der heutigen Reihenfolge (stabil sortiert), zuerst Eingespieltes und Deckel um
+        for eid in sorted(infos, key=lambda e: not (_einspiel.ist_einspiel(e)
+                                                     or self._deckel_abgelaufen(self._einreihzeiten.get(e)))):
+            info = infos[eid]
             if frei <= 0 or self._stop.is_set():
                 return
             if (info.get("state") != DISPATCH_FETCH or eid in laeuft
@@ -12790,11 +12802,13 @@ class Service:
         "clip_aufnahme_deckel_s": (int, CLIP_AUFNAHME_DECKEL_KLEIN, CLIP_AUFNAHME_DECKEL_GROSS,
                                    f"the longest time, in seconds from the moment an event is queued, that suslik "
                                    f"waits until Frigate has recorded the event up to its end. This is an upper "
-                                   f"limit, not a fixed delay: before every clip fetch suslik asks Frigate whether "
+                                   f"limit, not a fixed delay: before a clip fetch suslik asks Frigate whether "
                                    f"the recording reaches the end of the event, and it fetches as soon as Frigate "
                                    f"says so. If the limit is reached first, suslik fetches what is there and notes "
                                    f"it in the log and in the record. Only if Frigate does not answer that question "
-                                   f"does every event wait the full time. Default {CLIP_AUFNAHME_DECKEL_WERK}. "
+                                   f"does every event wait the full time. An event that is first due only after the "
+                                   f"limit (a backlog) is fetched without asking and without a note, except while "
+                                   f"Frigate does not answer. Default {CLIP_AUFNAHME_DECKEL_WERK}. "
                                    f"Applies from the next check on, no restart"),
         "clip_retention_d": (int, 1, 60, "how long downloaded clips are kept as a cache, in days. They are only a cache — suslik fetches a clip from Frigate again whenever it needs one, so a short time costs nothing except a second download. The cache exists because Frigate's clip generation can stall, which is worth avoiding for the last hours, not for the last week: measured on the development system, 1212 of 1542 cached clips were older than two days and none of them was ever read again"),
         "live_verworfen_speichern": (bool, None, None, "keep the pictures the live watchers threw away (no human in frame): off by default — they are pure diagnostics, the interface never shows them, and they were the single largest item under the data folder (61 GB in nine days on the development system). They are still counted, so you can see how often the pose gate rejected something. Turn on only while chasing a bug"),
@@ -12948,9 +12962,9 @@ class Service:
         "vorrang": (list, ["erkennung", "wache"], None, "who wins when the accelerator cannot carry both: erkennung (default) = event recognition has priority, wache = the live watchers do. This only ever matters when the card is too small for both at the same time; on a card with room, nothing here changes anything. With erkennung the service first falls back to a minimum mode (one compute thread, one clip geometry — a second resolution then costs a rebuild each time instead of being kept ready), and if even that does not fit it takes live watchers off the net, the most recently started one first, only as many as the minimum needs. It says so in the log and in /health, and it switches them back on by itself once the card carries the full price again. With wache the analysis worker stays off in that situation, exactly as it did before 0.1.0.544 — but the log then says that recognition is off BECAUSE the watchers have priority, instead of asking you to edit config.json. A machine whose card cannot even carry the minimum gets neither: nothing is switched off for a recognition that would not run afterwards anyway"),
         "worker_vram_reserve_mb": (int, -1, 65536, f"unassigned card memory in MiB. -1 (default) uses one absolute {_cuda_budget.PROFILE['reserve_mb']} MiB safety reserve per CUDA worker process, independent of threads, geometries and repeated planning. Other backends retain their existing reserve rules. 0 explicitly disables the reserve; a positive value overrides it and is clamped to card size. CUDA uses native free memory and measured own states, with separate allowances for pending allocations and processing peaks. The shared arena is bounded, but its limit is distinct from total worker PID and decoder memory. The source is shown in the log and /health; the same configured wish is passed to the worker's runtime guards"),
         "bg_platz_getrennt": (int, 0, 1, "1 gives background work (collecting, harvesting, your clicks, the live body judgment, the wall-clock measurement) its own slot instead of one of the analysis slots. It is computed in a separate thread of the worker anyway, so a background job that holds an analysis slot blocks a compute thread for nothing — measured on 15.09.2026: a collection run held one of two analysis slots for eight minutes while events were waiting. Since 0.1.0.536 WHEN it starts changed too: with its own slot it takes its turn right away instead of waiting for an idle moment that never comes on a busy installation (46 postponed collection runs in one morning). 0 restores the behaviour of 0.1.0.533 and is load-bearing: every class then sits on the analysis slots again, the old idle rule and the rule that keeps one slot free for events apply word for word, and a collection run can take an analysis slot again"),
-        "vorlauf_max": (int, 0, VORLAUF_MAX_GRENZE, "how many finished clips the service keeps ready on disk ahead of the analysis. Live analyses read their clip only from the local clip cache; the service's dispatcher fetches all of them from Frigate, so no compute thread stands still while a clip is pulled. The dispatcher fetches in the order the clips will be needed: weighted by camera priority (High 7, Mid 2, Low 1 out of every ten), and within one priority the newest event first. It fetches until vorlauf_max clips are ready, then pauses until fewer than vorlauf_min are ready; a newer event without a clip is fetched right away. 50 is the default, derived from a field measurement: about 20 events per minute on two compute threads and about 3 s per fetch, so 50 gives short refill bursts instead of one long pull. 0 switches the stock off: the dispatcher then fetches only as many clips as there are compute threads, and it does the same while the clip cache is at its size cap. The clips go into the normal clip cache and obey its size cap"),
-        "vorlauf_min": (int, 0, VORLAUF_MIN_GRENZE, "the lower mark of the stock (see vorlauf_max): once fewer than this many clips are ready, the dispatcher fetches again until vorlauf_max is reached; a newer event without a clip is fetched right away in any case. 20 is the default, about one minute of stock at the measured rate. The gap between the two marks keeps the service from asking Frigate for a new clip after every single analysed event"),
-        "vorlauf_parallel": (int, 1, VORLAUF_PARALLEL_MAX, "how many clips the dispatcher fetches from Frigate at the same time. 2 is the default. Frigate 0.18 serves clip streams and authentication from one thread pool, so more parallel pulls make the whole installation slower, not faster. Up to this number the dispatcher may use every place of the clip gate; none is kept free for live analyses any more, because they no longer fetch their own clips"),
+        "vorlauf_max": (int, 0, VORLAUF_MAX_GRENZE, "how many finished clips the service keeps ready on disk ahead of the analysis. Live analyses read their clip only from the local clip cache; the service's dispatcher fetches all of them from Frigate, so no compute thread stands still while a clip is pulled. The dispatcher fetches in the order the clips will be needed: weighted by camera priority (High 7, Mid 2, Low 1 out of every ten), and within one priority the newest event first, except during a backlog, when events whose clip_aufnahme_deckel_s has run out are fetched first. It fetches until vorlauf_max clips are ready, then pauses until fewer than vorlauf_min are ready; a newer event without a clip is fetched right away. 50 is the default, derived from a field measurement: about 20 events per minute on two compute threads and about 3 s per fetch, so 50 gives short refill bursts instead of one long pull. 0 switches the stock off: the dispatcher then fetches only as many clips as there are compute threads, and it does the same while the clip cache is at its size cap. The clips go into the normal clip cache and obey its size cap"),
+        "vorlauf_min": (int, 0, VORLAUF_MIN_GRENZE, "the lower mark of the stock (see vorlauf_max): once fewer than this many clips are ready, the dispatcher fetches again until vorlauf_max is reached; a newer event without a clip is fetched right away in any case, during a backlog only after the events whose clip_aufnahme_deckel_s has run out. 20 is the default, about one minute of stock at the measured rate. The gap between the two marks keeps the service from asking Frigate for a new clip after every single analysed event"),
+        "vorlauf_parallel": (int, 1, VORLAUF_PARALLEL_MAX, "how many clips the dispatcher fetches from Frigate at the same time. 2 is the default. More parallel fetches can deliver more clips, but they put more load on Frigate (0.18 serves clip streams and authentication from one thread pool), so raise it one step at a time. Up to this number the dispatcher may use every place of the clip gate; none is kept free for live analyses any more, because they no longer fetch their own clips"),
         "vorlauf_timeout_s": (int, VORLAUF_TIMEOUT_KLEIN, VORLAUF_TIMEOUT_GROSS, f"fetch-ahead: how many seconds suslik waits for data from Frigate while it fetches the clip of a new event. If Frigate sends nothing for this long, the fetch is aborted and tried again. {VORLAUF_TIMEOUT_WERK} is the default. Raise it if the clips of long events fail with 'TimeoutError: timed out' in the log."),
         "zeitprotokoll": (int, 0, 1, "1 writes one balance line per event to the log and keeps the same figures in the record and in /health: how long the event waited in the queue, how long its clip took to fetch (with size), how long the handover to the worker took, how long until the first decoded frame (and which decoder), the analysis itself, writing the record, and the total time the analysis slot was busy. It costs one line per event and answers the question the record cannot: where the time goes when the accelerator sits idle while events are waiting. 0 turns the line off"),
         "api_event_max_min": (int, 1, 1440, "how long one of suslik's OWN Frigate events may stay open before the service closes it after the fact, in minutes. 30 is the default. The live watchers can create their own events in Frigate (per camera switch) and close them when the appearance is over; if that close is lost — Frigate creates API events asynchronously and can answer the close with a 404 — the event would stay open for ever, and an event without an end has no usable clip. The service keeps a list of its own open events, retries the close, and checks afterwards that the end really arrived"),
@@ -13332,7 +13346,7 @@ class Service:
         try:
             with open(os.path.join(self.cfg["data_dir"], "config", "config_audit.jsonl"), "a") as f:
                 f.write(json.dumps({"ts": round(time.time(), 1), "aenderungen": {},
-                                    "auto": "clip_delay removed (replaced by the recording check before every clip "
+                                    "auto": "clip_delay removed (replaced by the recording check before the clip "
                                             "fetch, clip_aufnahme_deckel_s)",
                                     "entfernt": {"clip_delay": vorher}}, ensure_ascii=False) + "\n")
                 f.flush()

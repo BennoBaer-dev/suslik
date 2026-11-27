@@ -53,8 +53,8 @@ T = {
     "kameras.steckbrief.fertig": "sera relev\u00e9 au prochain red\u00e9marrage",
     "readme.einleitung": "J'ai écrit ceci parce que ces questions revenaient sans cesse.",
     "readme.kontakt": 'Vos retours sont les bienvenus :',
-    "readme.titel": "À lire d'abord",
-        "readme.knopf": "À lire d'abord",
+    "readme.titel": "Aide et documentation",
+        "readme.knopf": "Aide et documentation",
         "readme.schliessen": 'Fermer',
     "readme.zurueck": 'Retour',
         "readme.fuss": 'Ce texte apparaît une fois après chaque redémarrage.',
@@ -130,8 +130,8 @@ T = {
     "kameras.karte.rec_aus": "pas de rec",
     "kameras.karte.pill_aus": "désactivée dans Frigate",
     "kameras.karte.pill_keine_detektion_titel":
-        "Frigate n'exécute aucune détection de personne sur ce flux "
-        "&mdash; aucun événement ne peut arriver ici",
+        "Frigate n'effectue aucune détection de personne sur ce flux ; aucun événement de personne ne peut donc "
+        "arriver ici. Activez la détection dans Frigate ou utilisez un autre flux.",
     "kameras.karte.pill_keine_detektion": "pas de détection dans Frigate",
     "kameras.karte.prio": "priorité",
     "kameras.prio.low": "basse",
@@ -362,17 +362,15 @@ T = {
     "frigate.kameras.knopf": "Gérer les caméras",
     "frigate.sync.titel": "Synchronisation",
     "frigate.sync.satz":
-        "Maintient les deux bibliothèques de visages alignées&nbsp;: "
-        "envoyer à Frigate les visages examinés, importer ce que seul "
-        "Frigate possède &mdash; toujours votre décision, jamais "
-        "automatique.",
+        "Compare les deux bibliothèques de visages : envoyez à Frigate les visages examinés et importez ceux qui "
+        "existent uniquement dans Frigate. Il s'agit de l'examen manuel ; l'export automatique après de nouvelles "
+        "références (paramètre frigate_sync, s'il est activé) s'exécute séparément.",
     "frigate.sync.knopf": "Examiner &amp; synchroniser",
     "frigate.fr.titel": "La reconnaissance faciale propre à Frigate",
     "frigate.fr.satz":
-        "Frigate sait aussi reconnaître les visages. Ce programme "
-        "fonctionne avec ou sans &mdash; l'interrupteur se trouve dans la "
-        "config de Frigate, lue ici en direct pour que vous sachiez ce "
-        "qu'une synchronisation peut faire à l'instant.",
+        "Frigate dispose également de sa propre reconnaissance faciale. suslik fonctionne avec ou sans. Le commutateur "
+        "se trouve dans la configuration de Frigate (lue ici en direct) et détermine si les téléversements d'images de "
+        "référence sont acceptés.",
     "frigate.fr.beweis_unbekannt": "état inconnu — {detail}",
     "frigate.js.url_fehlt": "saisissez l'URL de Frigate",
     "frigate.js.fehler": "erreur\u00a0:",
@@ -442,17 +440,27 @@ T = {
         "Les modifications sont journalisées (config_audit.jsonl)&nbsp;; "
         "après l'enregistrement, le service redémarre proprement.",
     "antwort.support_token_neu": "nouveau token de support cree — l'ancien n'est plus valable ; copiez-le maintenant, il n'est montre que cette fois",
-    "konfiguration.neustart.titel": "Redémarrer le service",
-    "konfiguration.neustart.satz": "Redémarre ce service sur place (le conteneur continue de tourner, toutes les données restent). À utiliser quand le traitement semble bloqué ; les événements en attente sont repris après le redémarrage.",
-    "konfiguration.neustart.knopf": "Redémarrer maintenant",
+    "konfiguration.neustart.titel": "Redémarrer le service de traitement",
+    "konfiguration.neustart.satz":
+        "Redémarre ce service sur place (le conteneur continue de fonctionner et les données sont conservées). "
+        "Utilisez cette option si le traitement semble bloqué ; les événements en attente reprennent après le "
+        "redémarrage.",
+    "konfiguration.neustart.knopf": "Redémarrer le traitement",
     "konfiguration.neustart.frage": "Redémarrer le service maintenant ? Le traitement s'interrompt quelques secondes.",
     "antwort.neustart": "Redémarrage en cours — cette page répond de nouveau dans quelques secondes.",
     "konfiguration.support.titel": "Acces support a distance",
-    "konfiguration.support.satz": "Telechargement en lecture seule de zones nommees (logs, config masquee, visages, passes d'apprentissage, materiel corporel, fichiers d'etat, liste des threads du service) pour le detenteur du token de support. L'interrupteur support_zugriff se trouve dans le tableau ci-dessous, desactive par defaut. Chaque requete est ecrite dans le log du service. Les zones visages et corps contiennent des images de personnes reelles — remettez le token avec prudence. Sans TLS devant ce service, le token circule en clair. Le jeton permet aussi six actions : redemarrer ce service a distance (POST /support/restart), renvoyer des evenements dans la reconnaissance (POST /support/einspielen), activer ou desactiver la mesure fine (POST /support/feinmessung), activer ou desactiver le log de debug sans redemarrage (POST /support/debug), mesurer de petites operations sur fichiers dans le service et dans un nouveau processus (POST /support/dateiprobe) et vider une fois le cache des clips (POST /support/cache_leeren).",
+    "konfiguration.support.satz":
+        "Le jeton de support permet de télécharger tout le dossier de données (configuration masquée), ainsi que six "
+        "actions à distance : redémarrage, rejeu, mesure fine, bascule du mode débogage, inspection de fichiers "
+        "et vidage du cache. Les zones visages et corps contiennent des images de personnes réelles. L'interrupteur "
+        "support_zugriff se trouve dans le tableau ci-dessous, désactivé par défaut. suslik utilise HTTP en "
+        "clair ; sans proxy inverse TLS, le jeton circule sans chiffrement. Traitez-le comme un mot de passe.",
     "konfiguration.support.token_gesetzt": "Un token de support est defini.",
     "konfiguration.support.token_fehlt": "Pas encore de token de support.",
     "konfiguration.support.knopf_token": "Creer un nouveau token",
-    "konfiguration.support.einmal_hinweis": "Le token apparait ici exactement une fois apres sa creation — conservez-le ; ensuite seul ••• est affiche.",
+    "konfiguration.support.einmal_hinweis":
+        "Le jeton est affiché exactement une fois après sa création. Copiez-le maintenant : il ne peut pas être "
+        "récupéré ; par la suite, seul ••• est affiché.",
     "konfiguration.titel": "Paramètres avancés",
     "konfiguration.kopf.satz1":
         "Les modifications sont journalisées (config_audit.jsonl)&nbsp;; "
@@ -469,13 +477,15 @@ T = {
     "konfiguration.frigate_auth.erkl_user":
         "nom d'utilisateur d'un compte Frigate. Vide = aucune connexion ; le vider "
         "efface aussi le mot de passe enregistr\u00e9",
+    "konfiguration.frigate_auth.label_user": "Nom d'utilisateur Frigate",
+    "konfiguration.frigate_auth.label_password": "Mot de passe Frigate",
     "konfiguration.frigate_auth.erkl_password":
         "mot de passe de ce compte. Il est enregistr\u00e9 avec vos autres r\u00e9glages dans "
         "/data et n'est jamais r\u00e9affich\u00e9 \u2014 laissez le champ vide pour le conserver",
     "konfiguration.frigate_auth.erkl_tls":
-        "v\u00e9rifier le certificat TLS de Frigate. Le port authentifi\u00e9 de Frigate est "
-        "livr\u00e9 avec un certificat auto-sign\u00e9 : d\u00e9sactivez ceci si vous l'atteignez en "
-        "https sans avoir remplac\u00e9 ce certificat",
+        "v\u00e9rifier le certificat TLS de Frigate. Le port authentifi\u00e9 de Frigate (8971) est livr\u00e9 avec "
+        "un certificat auto-sign\u00e9\u00a0: d\u00e9sactivez ceci si vous l'atteignez en https sans avoir "
+        "remplac\u00e9 ce certificat",
     "konfiguration.frigate_auth.pw_gesetzt": "enregistr\u00e9 \u2014 laissez vide pour le conserver",
     "konfiguration.frigate_auth.pw_leer": "aucun mot de passe enregistr\u00e9",
     "konfiguration.abschnitt_alle": "Tous les paramètres",
@@ -570,8 +580,7 @@ T = {
         "{n} groupe(s) supprimé(s) par vous (images effacées, conservés à titre d’enregistrement)",
     "lernanker.titel": "Groupes d'ancrage",
     "lernanker.liste.leer":
-        "Aucun point d'ancrage pour l'instant — une session "
-        "d'apprentissage les construit (Préparation → Collecte → "
+        "Aucun groupe pour le moment. Lancez d'abord une session d'apprentissage (Préparation → Collecte → "
         "Regroupement).",
     "lernanker.liste.leer_link": "Ouvrir la page de la session d'apprentissage",
     "lernanker.liste.kopf":
@@ -597,10 +606,8 @@ T = {
     "syncauswahl.titel":
         "Examiner &amp; synchroniser — références vers Frigate",
     "syncauswahl.kopf.satz":
-        "Frigate passe chaque référence téléversée dans son propre "
-        "détecteur de visages et refuse les images où il n'en trouve "
-        "aucun. Cette page vérifie d'abord la même chose, vous montre "
-        "chaque candidat et n'envoie que ce que vous cochez.",
+        "Frigate refuse les références sans visage détectable. Cette page le vérifie à l'avance, liste les candidats "
+        "et n'envoie que ceux qui sont cochés. La synchronisation automatique utilise la même liste d'exclusion.",
     "syncauswahl.fehler.titel": "Candidats indisponibles",
     "syncauswahl.fehler.satz":
         "La liste des candidats nécessite un Frigate joignable — sa "
@@ -650,8 +657,7 @@ T = {
     "syncauswahl.fr.satz_an":
         "(lue depuis Frigate au chargement de cette page) — il accepte "
         "les téléversements de références.",
-    "syncauswahl.fr.titel_aus":
-        "Reconnaissance faciale de Frigate&nbsp;: désactivée",
+    "syncauswahl.fr.titel_aus": "Reconnaissance faciale de Frigate : désactivée (téléversements rejetés)",
     "syncauswahl.bilanz.titel": "Bilan",
     "syncauswahl.bilanz.hauptzeile":
         "images de référence · {beide} déjà dans Frigate · {bereit} "
@@ -661,8 +667,8 @@ T = {
     "syncauswahl.bilanz.exportiert":
         "{n} envoyées auparavant (Frigate les a renommées)",
     "syncauswahl.bilanz.abgewaehlt": "{n} désélectionnées",
-    "syncauswahl.bilanz.vorrat": "{n} référence(s) du stock en local uniquement (basées sur l'embedding, non transférables)",
-    "syncauswahl.bilanz.nur_frigate": "{n} seulement dans Frigate",
+    "syncauswahl.bilanz.vorrat": "{n} référence(s) uniquement en local (basées sur l'embedding, non transférables)",
+    "syncauswahl.bilanz.nur_frigate": "{n} image(s) de référence uniquement dans Frigate",
     "syncauswahl.bilanz.je_person": "Dans Frigate, par personne&nbsp;:",
     "syncauswahl.bilanz.kandidaten.eins": "{n} candidat",
     "syncauswahl.bilanz.kandidaten.viele": "{n} candidats",
@@ -701,14 +707,9 @@ T = {
     "syncauswahl.gruppe.prueft": "{n} encore en vérification",
     "syncauswahl.geloescht.zusatz": "— votre décision",
     "syncauswahl.geloescht.satz":
-        "Celles-ci sont encore dans votre bibliothèque, mais Frigate ne "
-        "les a plus sous le nom avec lequel elles avaient été "
-        "enregistrées. suslik ne les renvoie jamais sans votre "
-        "décision&nbsp;: supprimer un visage dans Frigate peut être "
-        "volontaire. Proposez-la à nouveau pour en faire un candidat "
-        "normal — dès lors la prochaine synchronisation, y compris "
-        "l'automatique, la téléverse. Respectez la suppression pour la "
-        "garder définitivement à l'écart.",
+        "Toujours dans votre bibliothèque, mais disparue de Frigate sous ce nom. suslik ne la renvoie jamais sans "
+        "votre choix, car la suppression peut être intentionnelle. 'proposer à nouveau' réactive l'envoi, y compris la "
+        "synchronisation automatique ; 'respecter la suppression' le bloque définitivement.",
     "syncauswahl.aufklapp": "— afficher",
     "syncauswahl.api.titel":
         "{n} exportées auparavant — Frigate les conserve sous ses "
@@ -732,16 +733,12 @@ T = {
         "les copie dans votre bibliothèque&nbsp;; rien ne change dans "
         "Frigate.",
     "syncauswahl.import.warnung":
-        "Cette liste peut inclure vos propres téléversements&nbsp;: "
-        "Frigate renomme chaque référence qu'il accepte, suslik ne peut "
-        "donc pas les distinguer des visages ajoutés directement dans "
-        "Frigate. Les réimporter dupliquerait du contenu.",
-    "syncauswahl.import.knopf": "Les importer dans suslik",
+        "Attention : l'importation peut dupliquer des visages que vous possédez déjà, car Frigate renomme les "
+        "téléversements et suslik ne peut pas les distinguer. Vérifiez avant d'importer.",
+    "syncauswahl.import.knopf": "Importer dans suslik les images présentes uniquement dans Frigate",
     "syncauswahl.raus.satz":
-        "Mémorisées volontairement&nbsp;: celles-ci restent dans votre "
-        "bibliothèque mais ne sont jamais envoyées à Frigate, pas même "
-        "par la synchronisation automatique. Rétablir en remet une sur "
-        "la liste des candidats.",
+        "Ignoré volontairement : reste dans votre bibliothèque et n'est jamais envoyé à Frigate, même par la "
+        "synchronisation automatique. 'rétablir' le remet dans la liste des candidats.",
     "syncauswahl.alter.unbekannt": "âge inconnu",
     "syncauswahl.alter.sekunden": "il y a {s} s",
     "syncauswahl.alter.minuten": "il y a {m} min",
@@ -758,11 +755,8 @@ T = {
     "syncauswahl.ergebnis.dauer": "a duré {n} s",
     # ---------------------------------------------------- routes/live ---
     "live.hinweis_cpu":
-        "Mode CPU&nbsp;: les surveillances coûtent cher ici — la "
-        "vérification rapide prend typiquement 1–2 s (une version GPU "
-        "réagit en moins d'une seconde), et les surveillances "
-        "supplémentaires se ralentissent mutuellement. Leur nombre reste "
-        "votre choix&nbsp;; nous recommandons de commencer par une seule.",
+        "Sur CPU, chaque surveillance est coûteuse : un contrôle d’image prend environ 1–2 s (GPU : moins "
+        "d’1 s), et les surveillances se disputent le CPU. Commencez par une seule.",
     "live.zeile.alter": "(âgé de {tage} jour(s))",
     "live.test.zeile":
         "test de source {wann}&nbsp;: {aufloesung} → {skala}, "
@@ -779,9 +773,7 @@ T = {
     "live.test.fehlgeschlagen":
         "dernier test de source ÉCHOUÉ ({wann})&nbsp;: {fehler}",
     "live.messung.zeile": "charge mesurée le {wann}&nbsp;: {text}",
-    "live.messung.veraltet":
-        "— OBSOLÈTE&nbsp;: la source a changé depuis cette mesure, "
-        "mesurez à nouveau",
+    "live.messung.veraltet": "— OBSOLÈTE : la source a changé depuis cette mesure ; mesurez à nouveau",
     "live.messung.fehlgeschlagen":
         "dernière mesure de charge ÉCHOUÉE ({wann})&nbsp;: {fehler}",
     "live.zaehler.auftritte": "{n} visites",
@@ -793,9 +785,8 @@ T = {
     "live.engine.titel_aus": "Moteur de surveillance&nbsp;: à l'arrêt",
     "live.engine.satz_aus": "Aucun signal de vie du processus moteur. Les emplacements montrent la configuration enregistrée&nbsp;; activer, tester sur une surveillance en cours et mesurer la charge nécessitent le moteur — le service le démarre automatiquement dès qu'au moins une surveillance est activée.",
     "live.engine.cpu_mit_limit":
-        "CPU suslik à l'instant&nbsp;: {kerne} sur {limit} cœurs "
-        "autorisés (conteneur entier&nbsp;: surveillances, analyse, "
-        "service)",
+        "CPU suslik actuellement : {kerne} sur {limit} cœurs autorisés (conteneur entier : surveillances, "
+        "analyse, service)",
     "live.engine.cpu_ohne_limit":
         "CPU suslik à l'instant&nbsp;: {kerne} cœurs (conteneur "
         "entier&nbsp;: surveillances, analyse, service)",
@@ -844,8 +835,8 @@ T = {
     "live.intro_link": "Comment fonctionne la surveillance",
     "live.marke.aktiv": "{n} actives",
     "live.platz.name": "Live {n}",
-    "live.platz.frei": "libre",
-    "live.frei.titel": "Live {n} est libre",
+    "live.platz.frei": "inutilisé",
+    "live.frei.titel": "Live {n} n’est pas utilisé",
     "live.frei.satz": "Attribuez une caméra à cet emplacement. Ensuite, réglez ici ce qu’elle signale et activez-la.",
     "live.frei.keine": "Chaque caméra a déjà un emplacement.",
     "live.knopf_zuweisen": "Attribuer la caméra",
@@ -889,7 +880,7 @@ T = {
     "live.pause.kopf": "À partir du premier visage d’une visite signalée, c’est le calme pendant ce délai\u00a0:",
     "live.pause.besuche": "Les visites qui commencent pendant ce délai n’ont ni vidéo ni «\u00a0Personne inconnue\u00a0».",
     "live.pause.name": "Le même nom ne revient qu’après le même nombre de secondes.",
-    "live.detail.scharf_hinweis": "Home Assistant (MQTT) ne fait jamais de pause.",
+    "live.detail.scharf_hinweis": "Home Assistant (MQTT) ignore la mise en pause des notifications push.",
     "live.abschnitt.test": "Test de source",
     "live.detail.gesperrt_hinweis":
         "tester et mesurer sont indisponibles tant que la surveillance "
@@ -945,8 +936,8 @@ T = {
     "live.eigenepruefen.schalter": "Revérifier ses événements Frigate",
     "live.eigenepruefen.erklaerung": "Analyser aussi les événements que cette surveillance crée dans Frigate.",
     "live.workeraus.erklaerung": "Tant que la surveillance tourne, l’analyse des événements ignore ceux de cette caméra, sauf quand Frigate nomme lui-même une personne.",
-    "live.frigate.schalter": "Créer un événement dans Frigate",
-    "live.frigate.erklaerung": "Pour un nom reconnu, un événement propre portant ce nom.",
+    "live.frigate.schalter": "Créer un événement Frigate pour une personne reconnue",
+    "live.frigate.erklaerung": "Crée son propre événement portant le nom reconnu.",
     "live.frigate.abstand_label": "Écart par personne",
     "live.frigate.abstand_hinweis": "Vide signifie la pause push.",
     # --- WS2 (Bauplan analysen/bauplan_waechterseite.md): die Einstellseite eines Waechters nach der
@@ -987,8 +978,10 @@ T = {
     "live.push.video_hinweis": "Une vidéo par visite signalée, à partir du premier visage.",
     "live.push.nur_telegram": "Telegram seulement",
     "live.push.videolaenge": "Durée de la vidéo",
-    "live.push.neben": "Signaler aussi les inconnus à côté des personnes reconnues",
-    "live.push.neben_hinweis": "«\u00a0Personne inconnue\u00a0» arrive alors aussi quand quelqu’un a été reconnu dans la même visite, sans image.",
+    "live.push.neben": "Signaler aussi les personnes inconnues lors de visites où une personne a été reconnue",
+    "live.push.neben_hinweis":
+        "Un message «\u00a0Personne inconnue\u00a0» est alors aussi envoyé lorsqu’une personne a été reconnue au cours "
+        "de la même visite, sans image.",
     "live.abschnitt.besuch": "Visite",
     "live.besuch.zweck": "Une visite commence au premier visage et se termine quand aucun n’a été vu pendant ce délai. Ensuite, la même personne peut être reconnue de nouveau.",
     "live.besuch.global": "Identique pour toutes les caméras\u00a0: {fps} images par seconde, {stimmen} votes minimum.",
@@ -1207,6 +1200,7 @@ T = {
     "erkennung.unter.nur_ohne_gesicht": "Only if no face",
     "erkennung.unter.wenn_noetig": "If needed",
     "erkennung.vision.titel": "Vision IA",
+    "erkennung.vision.status_paused": "En pause",
     "erkennung.vision.beta": "Bêta",
     "erkennung.vision.satz":
         "Une IA d'image comme arbitre pour les cas difficiles. Nécessite "
@@ -1648,7 +1642,7 @@ T = {
     "nav.bereich.activity": "Passages",
     "nav.bereich.faces": "Visages",
     "nav.bereich.learn": "Apprentissage",
-    "nav.bereich.person": "Personne",
+    "nav.bereich.person": "Reconnaissance corporelle",
     "nav.bereich.vision": "Vision",
     "nav.bereich.live": "En direct",
     "nav.bereich.frigate": "Frigate",
@@ -1753,8 +1747,12 @@ T = {
     "js.lernlauf.tag_fehlt": "choisir d'abord un jour",
     "js.lernlauf.abbruch_frage": "Interrompre cette session d'apprentissage ?",
     "js.notif.frage": "Enregistrer les paramètres de notification et redémarrer le service ?",
-    "js.frigate.ro_frage": "Passer en LECTURE SEULE ? suslik cessera d'écrire dans Frigate.",
-    "js.frigate.rw_frage": "Activer l'ÉCRITURE dans Frigate (sub_labels + synchronisation des références) ?",
+    "js.frigate.ro_frage":
+        "Désactiver l'écriture (lecture seule) ? suslik n'écrira plus rien dans Frigate : ni "
+        "sous-étiquettes, ni téléversements de références, ni événements des surveillances.",
+    "js.frigate.rw_frage":
+        "Activer l'écriture ? suslik écrira les noms reconnus dans Frigate (sub_labels + synchronisation des "
+        "références).",
     "js.catchup.frage": "Ne plus rattraper les événements manqués au démarrage ? Le service redémarre pour appliquer ce choix.",
     "catchup.knopf": 'Rattraper',
     "catchup.knopf.tooltip": 'Des événements non traités sont en attente',
@@ -2396,7 +2394,7 @@ T = {
     "system.write.aktuell": "Actuellement :",
     "system.write.zustand_ro":
         "LECTURE SEULE — suslik n'écrit pas dans Frigate",
-    "system.write.zustand_rw": "ÉCRITURE dans Frigate — sub_labels",
+    "system.write.zustand_rw": "Écriture des noms reconnus dans Frigate (sub_labels)",
     "system.write.zustand_rw_sync": " + synchronisation des références",
     "system.write.knopf_rw": "Activer l'écriture",
     "system.write.knopf_ro": "Lecture seule",
@@ -2417,10 +2415,13 @@ T = {
     "vision.schalter.fehlt": "Il manque encore :",
     # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW6 Punkt 4: Vision geparkt (Seiten und Schalter).
     "vision.geparkt_satz":
-        "Vision est en pause dans cette version et ne peut pas être activé. Il reviendra lorsqu'il sera reconstruit sur les nouvelles images de corps.",
+        "La vision IA est en pause dans cette version et ne peut pas être activée. Elle reviendra une fois "
+        "reconstruite sur les nouvelles images de corps.",
     "vision.schalter.fehlt_galerien": "{n} sur {soll} galeries approuvees — creez-en une sous 'Creer une galerie'",
     "vision.schalter.fehlt_test": "un test de connexion au vert",
-    "vision.schalter.fehlt_kandidaten": "des images jugees comme source de candidats — elles apparaissent pendant un passage ; activez la 'collecte de diagnostic' sous Personne si vous voulez les garder",
+    "vision.schalter.fehlt_kandidaten":
+        "des images jugees comme source de candidats — elles apparaissent pendant un passage ; activez la 'collecte "
+        "de diagnostic' sous Reconnaissance corporelle si vous voulez les garder",
     "vision.schalter.titel_an": "La détection par vision est activée",
     "vision.schalter.titel_aus": "La détection par vision est désactivée",
     "vision.schalter.aus_satz":
@@ -3835,7 +3836,11 @@ connues.</p>""",
     "anwesenheit.legende_leer": "le service ne tournait pas",
     "anwesenheit.legende_teil": "en marche, certains événements non analysés",
     "anwesenheit.legende_jetzt": "maintenant",
-    "anwesenheit.legende_satz": "Le blanc ne veut dire qu'une chose : le service ne tournait pas à ce moment-là. Une cellule verte au coin coupé indique que le service tournait mais que certains événements n'ont pas été analysés — survolez pour voir les chiffres.",
+    "anwesenheit.legende_satz":
+        "Le blanc ne veut dire qu'une chose : le service ne tournait pas à ce moment-là. La nuit, une cellule couvre "
+        "quatre quarts d'heure. Sans présence enregistrée, elle reste blanche dès que le service ne tournait pas "
+        "pendant l'un d'eux. Une cellule verte au coin coupé indique que le service tournait mais que certains "
+        "événements n'ont pas été analysés — survolez pour voir les chiffres.",
     "anwesenheit.zaehler": "{zeilen} marques lues, {kaputt} lignes endommagées ignorées.",
     "anwesenheit.gekappt": "Le fichier du jour dépasse la limite de lecture ; seule sa fin a été lue.",
     "anwesenheit.nie": "Non vus dans cette vue : {namen}",

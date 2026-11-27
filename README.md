@@ -11,7 +11,7 @@ It can also recognize residents by the whole body when no face is visible, for e
 the stream and send an MQTT message as soon as a face appears, within about a second on a GPU.
 
 The `latest-*` image tags follow the newest release. To stay on a fixed version, use its tag, for
-example `ghcr.io/bennobaer-dev/suslik:0.1.1.116-gpu`.
+example `ghcr.io/bennobaer-dev/suslik:0.1.1.117-gpu`.
 
 ## Why this exists
 
@@ -26,7 +26,7 @@ one lucky frame is not enough for a name: several frames within a short window h
 The Today page shows who was on the property and when: one card per recognized person, plus cards
 for probable matches and unknown visitors. The walks themselves are on the Passes tab.
 
-![The Today page of suslik with recognized people and unknown visitors](docs/img/today.png?v=0.1.1.116)
+![The Today page of suslik with recognized people and unknown visitors](docs/img/today.png?v=0.1.1.117)
 
 *Screenshot from August 2026 (version 0.1.0.199), names and faces anonymized. The page has changed
 since then.*

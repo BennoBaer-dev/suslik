@@ -59,8 +59,8 @@ T = {
     "readme.einleitung":
         "Kirjoitin tämän, koska nämä kysymykset toistuivat jatkuvasti.",
     "readme.kontakt": "Kuulen sinusta mielelläni:",
-    "readme.titel": "Lue tämä ensin",
-    "readme.knopf": "Lue tämä ensin",
+    "readme.titel": "Ohjeet ja dokumentaatio",
+    "readme.knopf": "Ohjeet ja dokumentaatio",
     "readme.schliessen": "Sulje",
     "readme.zurueck": "Takaisin",
     "readme.fuss":
@@ -140,8 +140,8 @@ T = {
     "kameras.karte.rec_aus": "ei tallennusta",
     "kameras.karte.pill_aus": "pois Frigatessa",
     "kameras.karte.pill_keine_detektion_titel":
-        "Frigate ei tee tällä streamilla henkilöiden havaitsemista "
-        "&mdash; tänne ei voi tulla tapahtumia",
+        "Frigate ei tee henkilöiden havaitsemista tällä streamilla, joten tänne ei voi tulla henkilötapahtumia. Ota "
+        "havaitseminen käyttöön Frigatessa tai käytä toista streamia.",
     "kameras.karte.pill_keine_detektion": "ei havaitsemista Frigatessa",
     "kameras.karte.prio": "prioriteetti",
     "kameras.prio.low": "matala",
@@ -187,9 +187,8 @@ T = {
     "areas.verwaltung.knopf_anlegen": "Lisää alue",
     "areas.verwaltung.titel_zuweisen": "Liitä kamerat",
     "areas.verwaltung.satz_zuweisen":
-        "Yksi kamera kuuluu täsmälleen yhteen alueeseen; kaikki "
-        "liittämätön jää Defaultiin. Tallennus ei vaadi palvelun "
-        "uudelleenkäynnistystä.",
+        "Jokainen kamera on täsmälleen yhdessä alueessa; liittämättömät kamerat jäävät 'Default'-alueeseen. Tallennus "
+        "tulee voimaan ilman uudelleenkäynnistystä.",
     "areas.verwaltung.pill_nicht_gesehen": "ei nähty",
     "areas.verwaltung.attr_nicht_gesehen":
         "liitetty aiemmin, ei juuri nyt Frigatessa",
@@ -354,16 +353,14 @@ T = {
     "frigate.kameras.knopf": "Hallitse kameroita",
     "frigate.sync.titel": "Täsmäytys",
     "frigate.sync.satz":
-        "Pitää kasvokirjastot molemmin puolin samassa tahdissa: lähetä "
-        "läpikäydyt kasvot Frigateen, tuo se, mikä on vain Frigatella "
-        "&mdash; aina sinun päätöksesi, ei koskaan automaattisesti.",
+        "Vertailee kahta kasvokirjastoa: lähetä tarkistetut kasvot Frigateen ja tuo kasvot, joita on vain Frigatella. "
+        "Tämä on manuaalinen tarkistusvaihe; automaattinen täsmäytys uusien viitteiden jälkeen (asetus frigate_sync, "
+        "jos päällä) toimii erikseen.",
     "frigate.sync.knopf": "Käy läpi &amp; täsmäytä",
     "frigate.fr.titel": "Frigaten oma kasvontunnistus",
     "frigate.fr.satz":
-        "Myös Frigate osaa tunnistaa kasvot. Tämä ohjelma toimii sen "
-        "kanssa tai ilman sitä &mdash; kytkin on Frigaten configissa, ja "
-        "se luetaan tästä livenä, jotta tiedät mihin täsmäytys juuri nyt "
-        "pystyy.",
+        "Frigatella on oma kasvontunnistuksensa. suslik toimii sen kanssa tai ilman. Kytkin on Frigaten asetuksissa "
+        "(luetaan tästä livenä) ja päättää, hyväksytäänkö vertailukuvien lataukset.",
     "frigate.fr.beweis_unbekannt": "tila tuntematon — {detail}",
     "frigate.js.url_fehlt": "syötä Frigaten URL",
     "frigate.js.fehler": "virhe:",
@@ -431,13 +428,11 @@ T = {
     "antwort.support_token_neu":
         "uusi support-token luotu — vanha on mitätön; kopioi se nyt, se "
         "näytetään vain tämän yhden kerran",
-    "konfiguration.neustart.titel": "Käynnistä palvelu uudelleen",
+    "konfiguration.neustart.titel": "Käynnistä käsittelypalvelu uudelleen",
     "konfiguration.neustart.satz":
-        "Käynnistää tämän palvelun uudelleen paikallaan (kontti jatkaa "
-        "käyntiä, kaikki data säilyy). Käytä tätä, jos käsittely näyttää "
-        "jumittavan; avoimet tapahtumat otetaan uudelleen käsittelyyn "
-        "käynnistyksen jälkeen.",
-    "konfiguration.neustart.knopf": "Käynnistä nyt uudelleen",
+        "Käynnistää tämän palvelun uudelleen paikallaan (kontti jatkaa käyntiä; tiedot säilyvät). Käytä tätä, jos "
+        "käsittely näyttää jumittavalta; odottavat tapahtumat jatkuvat uudelleenkäynnistyksen jälkeen.",
+    "konfiguration.neustart.knopf": "Käynnistä käsittely uudelleen",
     "konfiguration.neustart.frage":
         "Käynnistetäänkö palvelu nyt uudelleen? Käsittely pysähtyy "
         "pariksi sekunniksi.",
@@ -446,28 +441,17 @@ T = {
         "uudelleen.",
     "konfiguration.support.titel": "Etätuen pääsy",
     "konfiguration.support.satz":
-        "Vain luku -lataus nimetyistä alueista (lokit, maskattu config, "
-        "kasvot, oppimisajot, kehomateriaali, tilatiedostot, palvelun "
-        "säieluettelo) sille, jolla "
-        "on support-token. Kytkin support_zugriff on alla olevassa "
-        "taulukossa, oletuksena pois. Jokainen pyyntö kirjataan palvelun "
-        "lokiin. Kasvo- ja kehoalueet sisältävät kuvia oikeista ihmisistä "
-        "— luovuta token harkiten. Ilman TLS:ää tämän palvelun edessä "
-        "token kulkee selkokielisenä. Token sallii myös kuusi toimintoa: "
-        "tämän palvelun uudelleenkäynnistyksen etänä (POST /support/restart), "
-        "tapahtumien ajamisen uudelleen tunnistuksen läpi "
-        "(POST /support/einspielen), hienomittauksen kytkemisen päälle tai "
-        "pois (POST /support/feinmessung), debug-lokin kytkemisen päälle "
-        "tai pois ilman uudelleenkäynnistystä (POST /support/debug), "
-        "pienten tiedosto-operaatioiden mittaamisen palvelussa ja uudessa "
-        "prosessissa (POST /support/dateiprobe) ja leikevälimuistin "
-        "tyhjentämisen kerran (POST /support/cache_leeren).",
+        "Tukitokenilla voi ladata koko datahakemiston (config maskattu) sekä kuusi etätoimintoa: uudelleenkäynnistys, "
+        "uudelleenajaminen, hienomittaus, debug-kytkimen vaihto, tiedostotesti ja välimuistin tyhjennys. Kasvo- ja "
+        "kehoalueet sisältävät kuvia oikeista ihmisistä. Kytkin support_zugriff on alla olevassa taulukossa, "
+        "oletuksena pois. suslik tarjoaa pelkkää HTTP-liikennettä; ilman TLS-käänteistä proxya token kulkee "
+        "salaamattomana. Kohtele sitä kuin salasanaa.",
     "konfiguration.support.token_gesetzt": "Support-token on asetettu.",
     "konfiguration.support.token_fehlt": "Ei vielä support-tokenia.",
     "konfiguration.support.knopf_token": "Luo uusi token",
     "konfiguration.support.einmal_hinweis":
-        "Token näkyy tässä vain kerran luonnin jälkeen — ota se "
-        "talteen; sen jälkeen näkyy vain •••.",
+        "Token näytetään täsmälleen kerran luonnin jälkeen. Kopioi se nyt — sitä ei voi palauttaa; myöhemmin näytetään "
+        "vain •••.",
     "konfiguration.titel": "Lisäasetukset",
     "konfiguration.kopf.satz1":
         "Muutokset kirjataan (config_audit.jsonl); tallennuksen jälkeen "
@@ -484,15 +468,15 @@ T = {
     "konfiguration.frigate_auth.erkl_user":
         "Frigate-tilin käyttäjätunnus. Tyhjä = ei kirjautumista lainkaan; "
         "tyhjennys poistaa myös tallennetun salasanan",
+    "konfiguration.frigate_auth.label_user": "Frigaten käyttäjätunnus",
+    "konfiguration.frigate_auth.label_password": "Frigaten salasana",
     "konfiguration.frigate_auth.erkl_password":
         "tilin salasana. Se tallennetaan muiden asetustesi mukana "
         "hakemistoon /data eikä sitä näytetä enää koskaan — jätä kenttä "
         "tyhjäksi, niin se säilyy",
     "konfiguration.frigate_auth.erkl_tls":
-        "tarkista Frigaten TLS-varmenne. Frigaten todennettu portti tuo "
-        "mukanaan itse allekirjoitetun varmenteen, joten kytke tämä pois, "
-        "jos otat siihen yhteyden https:llä etkä ole vaihtanut "
-        "varmennetta",
+        "tarkista Frigaten TLS-varmenne. Frigaten todennettu portti (8971) tuo mukanaan itse allekirjoitetun "
+        "varmenteen, joten kytke tämä pois, jos otat siihen yhteyden https:llä etkä ole vaihtanut varmennetta",
     "konfiguration.frigate_auth.pw_gesetzt":
         "tallennettu — jätä tyhjäksi, niin se säilyy",
     "konfiguration.frigate_auth.pw_leer": "ei salasanaa tallennettuna",
@@ -585,9 +569,7 @@ T = {
         "{n} ryhmää sinun poistamana (kuvat poissa, jäljellä vain "
         "merkintä)",
     "lernanker.titel": "Ankkuriryhmät",
-    "lernanker.liste.leer":
-        "Ei vielä ankkureita — oppimisajo rakentaa ne (Valmistelu → "
-        "Keräys → Ryhmittely).",
+    "lernanker.liste.leer": "Ei vielä ryhmiä. Suorita ensin oppimisajo (Valmistelu → Keräys → Ryhmittely).",
     "lernanker.liste.leer_link": "Avaa oppimisajon sivu",
     "lernanker.liste.kopf":
         "{n} ryhmää {ges} ankkurikelpoisesta kasvosta — {ok} siistiä, "
@@ -611,10 +593,8 @@ T = {
     "lernanker.liste.knopf_verwerfen": "Poista",
     "syncauswahl.titel": "Käy läpi &amp; täsmäytä — viitteet Frigateen",
     "syncauswahl.kopf.satz":
-        "Frigate ajaa jokaisen lähetetyn viitteen oman kasvodetektorinsa "
-        "läpi ja hylkää kuvat, joista se ei löydä kasvoja. Tämä sivu "
-        "tarkistaa ensin saman asian, näyttää sinulle jokaisen ehdokkaan "
-        "ja lähettää vain sen, minkä merkitset.",
+        "Frigate hylkää viitteet, joista ei löydy havaittavia kasvoja. Tämä sivu tarkistaa sen etukäteen, listaa "
+        "ehdokkaat ja lähettää vain ruksatut. Automaattinen täsmäytys käyttää samaa ohituslistaa.",
     "syncauswahl.fehler.titel": "Ehdokkaat eivät ole käytettävissä",
     "syncauswahl.fehler.satz":
         "Ehdokaslista tarvitsee tavoitettavan Frigaten — sen "
@@ -662,7 +642,7 @@ T = {
     "syncauswahl.fr.satz_an":
         "(luettu Frigatesta tämän sivun latautuessa) — se ottaa lähetetyt "
         "viitteet vastaan.",
-    "syncauswahl.fr.titel_aus": "Frigaten kasvontunnistus: pois",
+    "syncauswahl.fr.titel_aus": "Frigaten kasvontunnistus: EI KÄYTÖSSÄ (lähetykset hylätään)",
     "syncauswahl.bilanz.titel": "Yhteenveto",
     "syncauswahl.bilanz.hauptzeile":
         "viitekuvaa · {beide} jo Frigatessa · {bereit} valmiina siirtoon",
@@ -671,10 +651,8 @@ T = {
     "syncauswahl.bilanz.exportiert":
         "{n} lähetetty aiemmin (Frigate nimesi ne uudelleen)",
     "syncauswahl.bilanz.abgewaehlt": "{n} valinta poistettu",
-    "syncauswahl.bilanz.vorrat":
-        "{n} varastoviitettä vain paikallisesti (embedding-pohjaisia, ei "
-        "siirrettävissä)",
-    "syncauswahl.bilanz.nur_frigate": "{n} vain Frigatessa",
+    "syncauswahl.bilanz.vorrat": "{n} viitettä vain paikallisesti (embedding-pohjaisia, ei siirrettävissä)",
+    "syncauswahl.bilanz.nur_frigate": "{n} viitekuvaa vain Frigatessa",
     "syncauswahl.bilanz.je_person": "Frigatessa, henkilöä kohti:",
     "syncauswahl.bilanz.kandidaten.eins": "{n} ehdokas",
     "syncauswahl.bilanz.kandidaten.viele": "{n} ehdokasta",
@@ -710,13 +688,9 @@ T = {
     "syncauswahl.gruppe.prueft": "{n} vielä tarkistuksessa",
     "syncauswahl.geloescht.zusatz": "— sinun päätöksesi",
     "syncauswahl.geloescht.satz":
-        "Nämä ovat vielä kirjastossasi, mutta Frigatella niitä ei enää "
-        "ole sillä nimellä, jolla ne tallennettiin. suslik ei koskaan "
-        "lähetä niitä uudelleen ilman päätöstäsi: kasvojen poistaminen "
-        "Frigatesta voi olla tarkoituksellista. Tarjoa uudelleen tekee "
-        "siitä tavallisen ehdokkaan — siitä lähtien seuraava täsmäytys, "
-        "myös automaattinen, lähettää sen. Kunnioita poistoa pitää sen "
-        "pysyvästi poissa.",
+        "On vielä kirjastossasi, mutta ei enää Frigatessa sillä nimellä. suslik ei lähetä sitä koskaan uudelleen ilman "
+        "päätöstäsi, koska poisto voi olla tarkoituksellinen. 'Tarjoa uudelleen' ottaa lähetyksen uudelleen käyttöön, "
+        "myös automaattisen täsmäytyksen; 'Kunnioita poistoa' estää sen pysyvästi.",
     "syncauswahl.aufklapp": "— näytä",
     "syncauswahl.api.titel":
         "{n} vietiin aiemmin — Frigate pitää näitä omilla nimillään",
@@ -738,15 +712,12 @@ T = {
         "Nämä viitekuvat ovat Frigatella, susliklla ei. Tuonti kopioi ne "
         "kirjastoosi; Frigatessa ei muutu mikään.",
     "syncauswahl.import.warnung":
-        "Tässä listassa voi olla omia lähetyksiäsi: Frigate nimeää "
-        "uudelleen jokaisen hyväksymänsä viitteen, joten suslik ei voi "
-        "erottaa niitä kasvoista, jotka lisäsit suoraan Frigateen. Niiden "
-        "tuonti takaisin kaksinkertaistaisi sisältöä.",
-    "syncauswahl.import.knopf": "Tuo ne susliklin",
+        "Varoitus: tuonti voi kaksinkertaistaa kasvot, jotka sinulla jo on, koska Frigate nimeää lähetykset uudelleen "
+        "eikä suslik pysty erottamaan niitä. Tarkista ennen tuontia.",
+    "syncauswahl.import.knopf": "Tuo vain Frigatessa olevat kuvat suslikiin",
     "syncauswahl.raus.satz":
-        "Tarkoituksella muistissa: nämä pysyvät kirjastossasi, mutta "
-        "niitä ei koskaan lähetetä Frigateen, ei myöskään automaattisessa "
-        "täsmäytyksessä. Palauta nostaa yhden takaisin ehdokaslistalle.",
+        "Tarkoituksella ohitettu: säilyy kirjastossasi, eikä sitä lähetetä Frigateen edes automaattisessa "
+        "täsmäytyksessä. 'Palauta' palauttaa sen ehdokaslistalle.",
     "syncauswahl.alter.unbekannt": "ikä tuntematon",
     "syncauswahl.alter.sekunden": "{s} s sitten",
     "syncauswahl.alter.minuten": "{m} min sitten",
@@ -760,10 +731,8 @@ T = {
     "syncauswahl.ergebnis.uebersprungen": "{n} valinta poistettu (ohitettu)",
     "syncauswahl.ergebnis.dauer": "kesti {n} s",
     "live.hinweis_cpu":
-        "CPU-tila: vahdit ovat täällä kalliita — nopea tarkistus kestää "
-        "tyypillisesti 1–2 s (GPU-build vastaa alle sekunnissa), ja "
-        "lisävahdit hidastavat toisiaan. Kuinka monta niitä ajat, on "
-        "sinun päätöksesi; suosittelemme aloittamaan yhdestä.",
+        "CPU:lla jokainen vahti on kallis: yhden framen tarkistus kestää ~1–2 s (GPU: <1 s), ja vahdit kilpailevat "
+        "CPU:sta. Aloita yhdellä.",
     "live.zeile.alter": "({tage} päivää vanha)",
     "live.test.zeile":
         "lähdetesti {wann}: {aufloesung} → {skala}, {bilder_s} kuvaa/s",
@@ -780,9 +749,7 @@ T = {
     "live.test.fehlgeschlagen":
         "viimeisin lähdetesti EPÄONNISTUI ({wann}): {fehler}",
     "live.messung.zeile": "kuorma mitattu {wann}: {text}",
-    "live.messung.veraltet":
-        "— VANHENTUNUT: lähde on muuttunut tämän mittauksen jälkeen, "
-        "mittaa uudelleen",
+    "live.messung.veraltet": "— VANHENTUNUT: lähde on muuttunut tämän mittauksen jälkeen; mittaa uudelleen",
     "live.messung.fehlgeschlagen":
         "viimeisin kuormamittaus EPÄONNISTUI ({wann}): {fehler}",
     "live.zaehler.auftritte": "{n} käyntiä",
@@ -794,8 +761,7 @@ T = {
     "live.engine.titel_aus": "Live-engine: ei käynnissä",
     "live.engine.satz_aus": "Engine-prosessilta ei tule heartbeatia. Paikat näyttävät tallennetut asetukset; käyttöönotto, testit käynnissä olevaa vahtia vasten ja kuormamittaukset vaativat enginen — palvelu käynnistää sen automaattisesti heti, kun vähintään yksi vahti on päällä.",
     "live.engine.cpu_mit_limit":
-        "suslikin CPU juuri nyt: {kerne}/{limit} sallittua ydintä (koko "
-        "kontti: vahdit, analyysi, palvelu)",
+        "suslikin CPU nyt: {kerne} / {limit} sallittua ydintä (koko kontti: vahdit, analyysi, palvelu)",
     "live.engine.cpu_ohne_limit":
         "suslikin CPU juuri nyt: {kerne} ydintä (koko kontti: vahdit, "
         "analyysi, palvelu)",
@@ -885,7 +851,7 @@ T = {
     "live.pause.kopf": "Ilmoitetun käynnin ensimmäisistä kasvoista alkaen on näin kauan hiljaista:",
     "live.pause.besuche": "Tänä aikana alkavat käynnit eivät saa videota eivätkä ”Tuntematon henkilö” -viestiä.",
     "live.pause.name": "Sama nimi tulee uudelleen aikaisintaan yhtä monen sekunnin jälkeen.",
-    "live.detail.scharf_hinweis": "Home Assistant (MQTT) ei pidä koskaan taukoa.",
+    "live.detail.scharf_hinweis": "Home Assistant (MQTT) jättää push-tauon huomiotta.",
     "live.abschnitt.test": "Lähdetesti",
     "live.detail.gesperrt_hinweis":
         "testaaminen ja mittaaminen eivät ole käytettävissä, kun "
@@ -945,8 +911,8 @@ T = {
     "live.eigenepruefen.schalter": "Tarkista omat Frigate-tapahtumat",
     "live.eigenepruefen.erklaerung": "Analysoi myös tapahtumat, jotka tämä vahti luo Frigateen.",
     "live.workeraus.erklaerung": "Kun vahti on käynnissä, tapahtuma-analyysi ohittaa tämän kameran tapahtumat, paitsi kun Frigate itse nimeää henkilön.",
-    "live.frigate.schalter": "Luo tapahtuma Frigateen",
-    "live.frigate.erklaerung": "Tunnistetulle nimelle oma tapahtuma, jossa on nimi.",
+    "live.frigate.schalter": "Luo Frigate-tapahtuma tunnistetulle henkilölle",
+    "live.frigate.erklaerung": "Luo oman tapahtuman, jossa on tunnistettu nimi.",
     "live.frigate.abstand_label": "Väli henkilöä kohden",
     "live.frigate.abstand_hinweis": "Tyhjä tarkoittaa push-taukoa.",
     # --- WS2 (Bauplan analysen/bauplan_waechterseite.md): die Einstellseite eines Waechters nach der
@@ -987,8 +953,9 @@ T = {
     "live.push.video_hinweis": "Yksi video ilmoitettua käyntiä kohti, ensimmäisistä kasvoista alkaen.",
     "live.push.nur_telegram": "vain Telegram",
     "live.push.videolaenge": "Videon pituus",
-    "live.push.neben": "Ilmoita tuntemattomat myös tunnistettujen rinnalla",
-    "live.push.neben_hinweis": "”Tuntematon henkilö” tulee silloin myös, kun samalla käynnillä joku tunnistettiin, ilman kuvaa.",
+    "live.push.neben": "Ilmoita tuntemattomat henkilöt myös käynneillä, joilla on tunnistettu henkilö",
+    "live.push.neben_hinweis":
+        "”Tuntematon henkilö” -viesti lähetetään silloin myös, kun samalla käynnillä joku tunnistettiin, ilman kuvaa.",
     "live.abschnitt.besuch": "Käynti",
     "live.besuch.zweck": "Käynti alkaa ensimmäisistä kasvoista ja päättyy, kun kasvoja ei ole näkynyt näin pitkään aikaan. Sen jälkeen sama henkilö voidaan tunnistaa uudelleen.",
     "live.besuch.global": "Sama kaikille kameroille: {fps} kuvaa sekunnissa, {stimmen} vähimmäisääntä.",
@@ -1247,7 +1214,7 @@ T = {
         "ei käynnissä (Vision-tunnistus on kytketty pois)",
     "erkennung.koerper.knopf_register": "Rekisteröi keho …",
     "erkennung.koerper.melden.titel": "Ilmoittaa:",
-    "erkennung.koerper.melden.nur_anzeige": "vain näyttö",
+    "erkennung.koerper.melden.nur_anzeige": "ei mitään (vain näyttö)",
     "erkennung.koerper.melden.leer": "Mitään ei valittu: nimi vain näytetään.",
     "erkennung.koerper.melden.nicht_eingerichtet": "ei määritetty",
     "erkennung.koerper.melden.aria": "Henkilöntunnistuksen ilmoituskanavat",
@@ -1259,6 +1226,7 @@ T = {
     "erkennung.unter.nur_ohne_gesicht": "Only if no face",
     "erkennung.unter.wenn_noetig": "If needed",
     "erkennung.vision.titel": "Vision-tekoäly",
+    "erkennung.vision.status_paused": "Pysäytetty",
     "erkennung.vision.beta": "Beta",
     "erkennung.vision.satz":
         "Kuvatekoäly tuomarina vaikeisiin tapauksiin. Vaatii mallin "
@@ -1736,7 +1704,7 @@ T = {
     "nav.bereich.activity": "Toiminta",
     "nav.bereich.faces": "Kasvot",
     "nav.bereich.learn": "Opetus",
-    "nav.bereich.person": "Henkilö",
+    "nav.bereich.person": "Kehontunnistus",
     "nav.bereich.vision": "Vision",
     "nav.bereich.live": "Live",
     "nav.bereich.frigate": "Frigate",
@@ -1849,11 +1817,11 @@ T = {
         "Tallennetaanko ilmoitusasetukset ja käynnistetäänkö palvelu "
         "uudelleen?",
     "js.frigate.ro_frage":
-        "Vaihdetaanko VAIN LUKU -tilaan? suslik lakkaa kirjoittamasta "
-        "Frigateen.",
+        "Lopetetaanko kirjoittaminen (vain luku)? suslik ei enää kirjoita Frigateen mitään: ei alimerkintöjä, ei "
+        "vertailukasvojen latauksia eikä vahtien tapahtumia.",
     "js.frigate.rw_frage":
-        "Otetaanko KIRJOITUS Frigateen käyttöön (sub_labels + viitteiden "
-        "täsmäytys)?",
+        "Otetaanko kirjoittaminen käyttöön? suslik kirjoittaa tunnistetut nimet Frigateen (sub_labels + viitteiden "
+        "täsmäytys).",
     "js.catchup.frage":
         "Ohitetaanko tästä lähtien käynnistyksessä väliin jääneet "
         "tapahtumat? Palvelu käynnistyy uudelleen tämän vuoksi.",
@@ -2502,7 +2470,7 @@ T = {
         "rinnakkaiskäyttöön (Frigaten kasvontunnistus + suslik).",
     "system.write.aktuell": "Nyt:",
     "system.write.zustand_ro": "VAIN LUKU — suslik ei kirjoita Frigateen",
-    "system.write.zustand_rw": "KIRJOITTAA Frigateen — sub_labels",
+    "system.write.zustand_rw": "Tunnistettujen nimien kirjoittaminen Frigateen (sub_labels)",
     "system.write.zustand_rw_sync": " + viitteiden täsmäytys",
     "system.write.knopf_rw": "Ota kirjoitus käyttöön",
     "system.write.knopf_ro": "Vain luku",
@@ -2527,7 +2495,7 @@ T = {
     "vision.schalter.fehlt_kandidaten":
         "arvioidut kuvat ehdokkaiden lähteeksi — ne ilmestyvät, kun "
         "käynti on kesken; kytke 'diagnoosikeräys' päälle "
-        "Henkilö-sivulla, jos haluat niiden säilyvän",
+        "Kehontunnistus-sivulla, jos haluat niiden säilyvän",
     "vision.schalter.titel_an": "Vision-tunnistus on päällä",
     "vision.schalter.titel_aus": "Vision-tunnistus on pois",
     "vision.schalter.aus_satz":
@@ -3698,9 +3666,9 @@ T = {
     "anwesenheit.legende_teil": "kävi, yksittäisiä tapahtumia ei analysoitu",
     "anwesenheit.legende_jetzt": "nyt",
     "anwesenheit.legende_satz":
-        "Valkoinen tarkoittaa vain yhtä asiaa: palvelu ei ollut sinä "
-        "aikana käynnissä. Vihreä solu, jonka kulma on leikattu, kertoo "
-        "että palvelu kävi, mutta osa tapahtumista jäi analysoimatta — "
+        "Valkoinen tarkoittaa vain yhtä asiaa: palvelu ei ollut sinä aikana käynnissä. Yöllä yksi solu kattaa neljä "
+        "varttia. Ilman kirjattua läsnäoloa se on valkoinen heti, kun palvelu ei ollut käynnissä jonakin niistä. "
+        "Vihreä solu, jonka kulma on leikattu, kertoo että palvelu kävi, mutta osa tapahtumista jäi analysoimatta — "
         "luvut näkyvät, kun viet osoittimen sen päälle.",
     "anwesenheit.zaehler":
         "{zeilen} merkintää luettu, {kaputt} rikkinäistä riviä ohitettu.",

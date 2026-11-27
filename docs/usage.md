@@ -8,7 +8,7 @@ analysis runs as Frigate produces person events.
 ## The web UI
 The UI has **ten sections** (top bar): **Activity** (Today, Passes, Events, Unknown),
 **Faces** (Known, Unknown, Quality), **Learn** (Face learning run, Anchors, Suggestions),
-**Person** (Body images and Named persons, the pages of the body-recognition path; see
+**Body recognition** (Body images and Named persons, the pages of the body-recognition path; see
 [person-recognition.md](person-recognition.md)), **Vision** (vision detect, parked in this
 version: the page says why), **Live** (Live watchers, Live alerts; see
 [live-watchers.md](live-watchers.md)), **Frigate** (Frigate and Frigate sync, the
@@ -68,7 +68,7 @@ version that introduced the page — earlier days stay empty.
   framed, not a cut-out face). Its action is **View**, and the card opens that
   appearance's card in the live day view (`/live_alerts`). The card comes for every
   appearance that started outside the watcher's "Push pause" and in which nobody was
-  recognized, or, with "Also report unknown people next to recognized ones" on, in which
+  recognized, or, with "Also report unknown people in visits with a recognized person" on, in which
   names were recognized but other valid faces gave no name vote. The channel makes no
   difference: a watcher on MQTT only, one without any channel, or one with the "Unknown
   person" switches for Pushover and Telegram off gets these cards too, and there is no
@@ -154,7 +154,7 @@ version that introduced the page — earlier days stay empty.
     **respect the deletion** keeps it out for good.
   - *Exported earlier* — Frigate renames every reference it accepts, so suslik cannot tell by
     name whether these are still on the other side, and says so instead of guessing.
-  - *Only in Frigate* — **Import them into suslik** copies them into your library; nothing in
+  - *Only in Frigate* — **Import Frigate-only images into suslik** copies them into your library; nothing in
     Frigate changes. Import deliberately: your own earlier exports show up here too, renamed,
     and re-importing one duplicates it.
   - *Deselected* — images you skipped on purpose. The automatic sync skips them as well, and

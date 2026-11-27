@@ -146,17 +146,19 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   that suslik waits until Frigate has recorded the event up to its end. Default 20, allowed 5 to
   120; on the **Advanced** settings page, takes effect without a restart. This is an upper limit,
   not a fixed delay. Frigate builds a clip only from the recording segments it has already
-  written, so a clip fetched too early can end before the event does. Before every clip fetch
+  written, so a clip fetched too early can end before the event does. Before a clip fetch
   suslik therefore asks Frigate whether the recording reaches the end of the event
   (`/api/<camera>/recordings` at the event's end time) and fetches as soon as Frigate says so; until
-  then it asks again every 2 seconds. Older events are usually covered at the first question. If
-  the limit is reached first, suslik fetches what is there, writes a WARNING to the log and notes
+  then it asks again every 2 seconds. An event whose first turn comes only after the limit (a
+  backlog, for example after a restart) is fetched without asking and without a note, unless the
+  fallback below is active; in a backlog these events get the fetch slots first. If an event that
+  was asked reaches the limit first, suslik fetches what is there, writes a WARNING to the log and notes
   `aufnahme_unbestaetigt: deckel` in the event's record. Only if Frigate does not answer the
   question (an error, or an answer that is not a list) does the limit act like a fixed delay: the
   event waits the full time from being queued and is then fetched without the check
   (`aufnahme_unbestaetigt: abfrage_fehler`), and `/health` `ok` is false until a query succeeds
   again. `/health` `vorlauf.aufnahme` shows the number of queries (`abfragen`), the number of
-  fetches without confirmation (`deckel`), and for the fallback `rueckfall`, `fehler` and
+  fetches with the note (`deckel`), and for the fallback `rueckfall`, `fehler` and
   `letzter_fehler`. The limit counts on suslik's own clock and never compares it with Frigate's,
   so the two machines may run with different clocks. A larger value gives Frigate more time before
   a clip is fetched unconfirmed; it does not delay clips whose recording is already complete.

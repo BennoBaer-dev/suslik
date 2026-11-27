@@ -5,6 +5,14 @@ never pushed to GHCR; they ship bundled with the next release (each release entr
 says which steps it bundles). This file keeps the last five releases; the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git history.
 
+## 0.1.1.117 (2026-11-27)
+
+Test release. Person recognition stays a preview.
+
+- **Clip loading during a backlog**: when events pile up, the dispatcher first fetches the clips whose recording wait (`clip_aufnahme_deckel_s`) has run out, without asking Frigate again, and starts the next fetch as soon as one finishes. During a backlog, new events and their alerts can therefore come a little later, and a clip fetched without the check carries no note in its record. `vorlauf_parallel` now allows up to 6 parallel fetches; the default stays 2.
+- **Interface texts** (pull request #47, thanks to the contributor): many texts are shorter or clearer, in all six languages. Three texts that described the program wrongly are corrected (export to Frigate, support access, the night cell on the presence page). "Read me first" is now "Help & docs", the menu area "Person" is now "Body recognition", the Frigate login shows labels, and the parked Vision card says "Parked". The new Spanish, Finnish, French and Italian texts have not yet been proofread by native speakers.
+- **Documentation**: the start page on GitHub was rewritten, and wrong or outdated statements in the documentation were corrected.
+
 ## 0.1.1.116 (2026-11-26)
 
 Test release. Person recognition stays a preview.
@@ -38,14 +46,3 @@ Test release. Person recognition stays a preview.
 - A body name now also counts next to a face name on the same walk-through once the person has `koerper_stimmen` votes (default 3). The walk-through then shows both names, and the body name goes to presence, notifications and Frigate like any other. Until now it did not count next to a face that names someone else.
 - A body name that a face in the same video already confirmed is not used.
 - With `person_pfad` on `nur_wenn_gesicht_leer`, an event is always checked when the video shows several people and the tracked person got no face name.
-
-## 0.1.1.111 (2026-11-23)
-
-Test release. Person recognition stays a preview.
-
-- New page **Person → Named persons**: the people who got a body name in the last three days (at least `koerper_stimmen` votes on one pass), plus body names suslik wrote to Frigate. One row per person, newest picture on the left, at most twelve. Each picture is the one the comparison used and opens its event; date and time below it, camera, score, threshold and votes on hover.
-- Every event whose body comparison names a person now keeps the compared picture in its event folder (`koerper_treffer.png`), removed with the folder after `aufbewahrung_tage` days. Names from before this version have no picture; the page only counts them.
-- A wrong name is fixed with the small ✕ below its picture: choose the correct person, "stranger" or "don't know", then **Save**. The event loses its body name for good, on every page, and the log notes the correction without names. If suslik wrote the name to Frigate, it removes it there or puts in the person you chose; a chosen person is saved as your verdict for the event.
-- A correction can't be undone on the page. Notifications already sent and presence marks stay, and the event never gets a body name again, not even the right one.
-- **Recognition** page: the switch **Accept new images automatically** is now on the body card below **Start learning run**. Both are set only there (and on **Advanced**). The **Body images** page has no settings and no save button any more; its footer shows the current setting with a link to **Recognition**.
-- Live watchers: fields that earlier versions left in saved watchers are removed once at the first start, with one line in the log. The warning "… was removed in an earlier version" then no longer shows up.

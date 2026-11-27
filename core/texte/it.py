@@ -56,8 +56,8 @@ T = {
     "kameras.steckbrief.fertig": "verr\u00e0 rilevato di nuovo al prossimo riavvio",
     "readme.einleitung": 'Ho scritto questo perché queste domande tornavano di continuo.',
     "readme.kontakt": 'Mi fa piacere ricevere riscontri:',
-    "readme.titel": 'Leggimi prima',
-        "readme.knopf": 'Leggimi prima',
+    "readme.titel": 'Aiuto & documentazione',
+        "readme.knopf": 'Aiuto & documentazione',
         "readme.schliessen": 'Chiudi',
     "readme.zurueck": 'Indietro',
         "readme.fuss": 'Questo testo compare una volta dopo ogni riavvio.',
@@ -129,12 +129,9 @@ T = {
     "kameras.karte.rec_an": "rec ✓",
     "kameras.karte.rec_aus": "niente rec",
     "kameras.karte.pill_aus": "spenta in Frigate",
-    # Byte-Treue: das HTML-Entity &mdash; stammt aus dem Original-Attribut
-    # (title=...) und bleibt Stufe 0 exakt erhalten; huebscher machen ist
-    # eine spaetere bewusste Aenderung, nie Teil des Einzugs.
     "kameras.karte.pill_keine_detektion_titel":
-        "Frigate non esegue alcun rilevamento persone su questo stream "
-        "&mdash; qui non può arrivare nessun evento",
+        "Frigate non esegue alcun rilevamento persone su questo stream, quindi qui non possono arrivare eventi "
+        "persona. Attiva il rilevamento in Frigate o utilizza un altro stream.",
     "kameras.karte.pill_keine_detektion": "nessun rilevamento in Frigate",
     "kameras.karte.prio": "priorità",
     "kameras.prio.low": "bassa",
@@ -195,9 +192,8 @@ T = {
     "areas.verwaltung.knopf_anlegen": "Aggiungi area",
     "areas.verwaltung.titel_zuweisen": "Assegna le telecamere",
     "areas.verwaltung.satz_zuweisen":
-        "Ogni telecamera appartiene esattamente a un’area; tutto ciò che "
-        "non è assegnato resta in Default. Il salvataggio non richiede "
-        "il riavvio del servizio.",
+        "Ogni telecamera appartiene esattamente a un'area; le telecamere non assegnate rimangono in \"Default\". Il "
+        "salvataggio viene applicato senza riavvio.",
     "areas.verwaltung.pill_nicht_gesehen": "non vista",
     "areas.verwaltung.attr_nicht_gesehen":
         "assegnata in passato, al momento non presente in Frigate",
@@ -381,16 +377,14 @@ T = {
     "frigate.kameras.knopf": "Gestisci telecamere",
     "frigate.sync.titel": "Sincronizzazione",
     "frigate.sync.satz":
-        "Mantiene allineati i due archivi di volti: invia a Frigate i "
-        "volti rivisti, importa ciò che ha solo Frigate &mdash; sempre "
-        "su tua decisione, mai in automatico.",
+        "Confronta i due archivi di volti: invia a Frigate i volti rivisti e importa quelli che ha solo Frigate. "
+        "Questo è il passo di revisione manuale; l'esportazione automatica dopo nuovi riferimenti (impostazione "
+        "frigate_sync, se attiva) gira separatamente.",
     "frigate.sync.knopf": "Rivedi &amp; sincronizza",
     "frigate.fr.titel": "Il riconoscimento facciale di Frigate",
     "frigate.fr.satz":
-        "Anche Frigate sa riconoscere i volti. Questo programma funziona "
-        "con o senza &mdash; l’interruttore sta nella config di Frigate, "
-        "letta qui in diretta così sai cosa può fare una "
-        "sincronizzazione in questo momento.",
+        "Frigate ha il proprio riconoscimento facciale. suslik funziona con o senza di esso. L'interruttore è nella "
+        "config di Frigate (letta qui in diretta) e decide se gli upload di riferimento sono accettati.",
     "frigate.fr.beweis_unbekannt": "stato sconosciuto — {detail}",
     "frigate.js.url_fehlt": "inserisci l’URL di Frigate",
     "frigate.js.fehler": "errore:",
@@ -475,17 +469,26 @@ T = {
         "Le modifiche vengono tracciate (config_audit.jsonl); dopo il "
         "salvataggio il servizio si riavvia in modo pulito.",
     "antwort.support_token_neu": "nuovo token di supporto creato — il vecchio non vale piu; copialo adesso, viene mostrato solo questa volta",
-    "konfiguration.neustart.titel": "Riavvia il servizio",
-    "konfiguration.neustart.satz": "Riavvia questo servizio sul posto (il container resta attivo, tutti i dati rimangono). Da usare quando l'elaborazione sembra bloccata; gli eventi aperti vengono ripresi dopo il riavvio.",
-    "konfiguration.neustart.knopf": "Riavvia adesso",
+    "konfiguration.neustart.titel": "Riavvia il servizio di elaborazione",
+    "konfiguration.neustart.satz":
+        "Riavvia questo servizio in loco (il container resta attivo; i dati rimangono). Usalo se l'elaborazione sembra "
+        "bloccata; gli eventi in sospeso riprendono dopo il riavvio.",
+    "konfiguration.neustart.knopf": "Riavvia elaborazione",
     "konfiguration.neustart.frage": "Riavviare il servizio adesso? L'elaborazione si ferma per qualche secondo.",
     "antwort.neustart": "Riavvio in corso — questa pagina risponde di nuovo tra pochi secondi.",
     "konfiguration.support.titel": "Accesso remoto di supporto",
-    "konfiguration.support.satz": "Download in sola lettura di aree con nome (log, config mascherata, volti, corse di apprendimento, materiale del corpo, file di stato, elenco dei thread del servizio) per chi possiede il token di supporto. L'interruttore support_zugriff sta nella tabella qui sotto, spento di default. Ogni richiesta finisce nel log del servizio. Le aree volti e corpo contengono immagini di persone reali — consegna il token con prudenza. Senza TLS davanti a questo servizio il token viaggia in chiaro. Il token consente anche sei azioni: riavviare questo servizio da remoto (POST /support/restart), rimandare eventi attraverso il riconoscimento (POST /support/einspielen), accendere o spegnere la misura fine (POST /support/feinmessung), accendere o spegnere il log di debug senza riavvio (POST /support/debug), misurare piccole operazioni sui file nel servizio e in un processo nuovo (POST /support/dateiprobe) e svuotare una volta la cache dei clip (POST /support/cache_leeren).",
+    "konfiguration.support.satz":
+        "Il token di supporto può scaricare l'intera cartella dei dati (config mascherata) e consente sei azioni "
+        "remote: riavvio, reinvio degli eventi, misura fine, debug acceso o spento, prova dei file e svuotamento della "
+        "cache. Le aree volti e corpo contengono immagini di persone reali. L'interruttore support_zugriff sta nella "
+        "tabella qui sotto, spento di default. suslik usa HTTP in chiaro; senza un reverse proxy TLS il token viaggia "
+        "senza cifratura. Trattalo come una password.",
     "konfiguration.support.token_gesetzt": "Un token di supporto e impostato.",
     "konfiguration.support.token_fehlt": "Nessun token di supporto ancora.",
     "konfiguration.support.knopf_token": "Crea nuovo token",
-    "konfiguration.support.einmal_hinweis": "Il token appare qui esattamente una volta dopo la creazione — conservalo; dopo viene mostrato solo •••.",
+    "konfiguration.support.einmal_hinweis":
+        "Il token appare qui esattamente una volta dopo la creazione. Copialo ora — non può essere recuperato; in "
+        "seguito viene mostrato solo •••.",
     "konfiguration.titel": "Impostazioni avanzate",
     "konfiguration.kopf.satz1":
         "Le modifiche vengono tracciate (config_audit.jsonl); dopo il "
@@ -502,13 +505,14 @@ T = {
     "konfiguration.frigate_auth.erkl_user":
         "nome utente di un account Frigate. Vuoto = nessun accesso; svuotandolo si "
         "cancella anche la password salvata",
+    "konfiguration.frigate_auth.label_user": "Nome utente Frigate",
+    "konfiguration.frigate_auth.label_password": "Password Frigate",
     "konfiguration.frigate_auth.erkl_password":
         "password di quell'account. Viene salvata insieme alle altre impostazioni in "
         "/data e non viene pi\u00f9 mostrata \u2014 lasciate il campo vuoto per mantenerla",
     "konfiguration.frigate_auth.erkl_tls":
-        "verificare il certificato TLS di Frigate. La porta autenticata di Frigate ha "
-        "di fabbrica un certificato autofirmato: disattivate qui se la raggiungete via "
-        "https e non avete sostituito quel certificato",
+        "verificare il certificato TLS di Frigate. La porta autenticata di Frigate (8971) ha di fabbrica un "
+        "certificato autofirmato: disattivate qui se la raggiungete via https e non avete sostituito quel certificato",
     "konfiguration.frigate_auth.pw_gesetzt": "salvata \u2014 lasciate vuoto per mantenerla",
     "konfiguration.frigate_auth.pw_leer": "nessuna password salvata",
     "konfiguration.abschnitt_alle": "Tutti i parametri",
@@ -648,10 +652,8 @@ T = {
     # der <b>-Zahl (Split an der Markup-Grenze — neue Gattung §8).
     "syncauswahl.titel": "Rivedi &amp; sincronizza — riferimenti verso Frigate",
     "syncauswahl.kopf.satz":
-        "Frigate fa passare ogni riferimento caricato nel proprio "
-        "rilevatore di volti e rifiuta le immagini in cui non trova un "
-        "volto. Questa pagina controlla prima la stessa cosa, ti mostra "
-        "ogni candidato e invia solo ciò che selezioni.",
+        "Frigate rifiuta i riferimenti senza un volto rilevabile. Questa pagina lo controlla prima, mostra i candidati "
+        "e invia solo quelli selezionati. La sincronizzazione automatica usa la stessa lista di esclusione.",
     "syncauswahl.fehler.titel": "Candidati non disponibili",
     "syncauswahl.fehler.satz":
         "La lista dei candidati richiede un Frigate raggiungibile — il "
@@ -701,8 +703,7 @@ T = {
     "syncauswahl.fr.satz_an":
         "(letto da Frigate al caricamento di questa pagina) — accetta "
         "il caricamento dei riferimenti.",
-    "syncauswahl.fr.titel_aus":
-        "Riconoscimento facciale di Frigate: disattivato",
+    "syncauswahl.fr.titel_aus": "Riconoscimento facciale di Frigate: DISATTIVATO (caricamenti rifiutati)",
     "syncauswahl.bilanz.titel": "Bilancio",
     "syncauswahl.bilanz.hauptzeile":
         "immagini di riferimento · {beide} già in Frigate · {bereit} "
@@ -712,8 +713,8 @@ T = {
     "syncauswahl.bilanz.exportiert":
         "{n} inviate in precedenza (Frigate le ha rinominate)",
     "syncauswahl.bilanz.abgewaehlt": "{n} deselezionate",
-    "syncauswahl.bilanz.vorrat": "{n} riferimento/i del materiale solo in locale (basati su embedding, non trasferibili)",
-    "syncauswahl.bilanz.nur_frigate": "{n} solo in Frigate",
+    "syncauswahl.bilanz.vorrat": "{n} riferimento/i solo locali (basati su embedding, non trasferibili)",
+    "syncauswahl.bilanz.nur_frigate": "{n} immagine/i di riferimento solo in Frigate",
     "syncauswahl.bilanz.je_person": "In Frigate, per persona:",
     # echter Plural schon im Original — t_n loest .eins/.viele auf.
     "syncauswahl.bilanz.kandidaten.eins": "{n} candidato",
@@ -780,11 +781,9 @@ T = {
         "L’importazione le copia nel tuo archivio; in Frigate non "
         "cambia nulla.",
     "syncauswahl.import.warnung":
-        "Questa lista può includere caricamenti fatti da te: Frigate "
-        "rinomina ogni riferimento che accetta, quindi suslik non può "
-        "distinguerli dai volti aggiunti direttamente in Frigate. "
-        "Reimportarli duplicherebbe il contenuto.",
-    "syncauswahl.import.knopf": "Importali in suslik",
+        "Attenzione: l'importazione può duplicare i volti che già possiedi, perché Frigate rinomina i caricamenti e "
+        "suslik non può distinguerli. Controlla prima dell'importazione.",
+    "syncauswahl.import.knopf": "Importa in suslik le immagini presenti solo in Frigate",
     "syncauswahl.raus.satz":
         "Memorizzate di proposito: restano nel tuo archivio ma non "
         "vengono mai inviate a Frigate, nemmeno dalla sincronizzazione "
@@ -1237,10 +1236,9 @@ T = {
     "erkennung.knopf_register_face": "Registra volto …",
     "erkennung.gesicht.titel": "Riconoscimento facciale",
     "erkennung.gesicht.satz":
-        "Il metodo più preciso: ogni passaggio viene confrontato con i "
-        "volti delle persone che hai fatto conoscere al sistema. È la "
-        "spina dorsale — corpo e visione dipendono dal suo esito sul "
-        "passaggio, perciò oggi non ha interruttore di spegnimento.",
+        "Il metodo più preciso: ogni passaggio viene controllato rispetto ai volti delle persone che hai insegnato al "
+        "sistema. È la spina dorsale — corpo e visione dipendono dal suo verdetto sul passaggio, quindi non può essere "
+        "disabilitato in questa versione.",
     "erkennung.gesicht.beweis_personen": "{n} persone",
     "erkennung.gesicht.beweis_bilder": "{n} immagini di riferimento",
     "erkennung.gesicht.knopf_verwalten": "Gestisci le persone …",
@@ -1267,6 +1265,7 @@ T = {
     "erkennung.unter.nur_ohne_gesicht": "Only if no face",
     "erkennung.unter.wenn_noetig": "If needed",
     "erkennung.vision.titel": "Visione AI",
+    "erkennung.vision.status_paused": "In pausa",
     "erkennung.vision.beta": "Beta",
     "erkennung.vision.satz":
         "Un’AI per immagini come arbitro nei casi difficili. Richiede "
@@ -1739,7 +1738,7 @@ T = {
     "nav.bereich.activity": "Attività",
     "nav.bereich.faces": "Volti",
     "nav.bereich.learn": "Apprendimento",
-    "nav.bereich.person": "Persona",
+    "nav.bereich.person": "Riconoscimento del corpo",
     "nav.bereich.vision": "Visione",
     "nav.bereich.live": "Live",
     "nav.bereich.frigate": "Frigate",
@@ -1844,8 +1843,12 @@ T = {
     "js.lernlauf.tag_fehlt": "scegli prima un giorno",
     "js.lernlauf.abbruch_frage": "Interrompere questa sessione di apprendimento?",
     "js.notif.frage": "Salvare le impostazioni delle notifiche e riavviare il servizio?",
-    "js.frigate.ro_frage": "Passare a SOLA LETTURA? suslik smetterà di scrivere su Frigate.",
-    "js.frigate.rw_frage": "Attivare la SCRITTURA su Frigate (sub_labels + sincronizzazione dei riferimenti)?",
+    "js.frigate.ro_frage":
+        "Interrompere la scrittura (sola lettura)? suslik non scriverà più nulla su Frigate: niente sub_labels, niente "
+        "caricamenti di riferimenti, niente eventi delle sentinelle.",
+    "js.frigate.rw_frage":
+        "Attiva la scrittura? suslik scriverà nomi riconosciuti su Frigate (sub_labels + sincronizzazione dei "
+        "riferimenti).",
     "js.catchup.frage": "D’ora in poi saltare il recupero degli eventi persi all’avvio? Il servizio si riavvia per applicarlo.",
     "catchup.knopf": 'Recupera',
     "catchup.knopf.tooltip": 'Eventi non elaborati in attesa',
@@ -2485,7 +2488,7 @@ T = {
     "system.write.aktuell": "Attuale:",
     "system.write.zustand_ro":
         "SOLA LETTURA — suslik non scrive su Frigate",
-    "system.write.zustand_rw": "SCRITTURA su Frigate — sub_labels",
+    "system.write.zustand_rw": "Scrittura dei nomi riconosciuti su Frigate (sub_labels)",
     "system.write.zustand_rw_sync": " + sincronizzazione dei riferimenti",
     "system.write.knopf_rw": "Attiva la scrittura",
     "system.write.knopf_ro": "Sola lettura",
@@ -2504,10 +2507,13 @@ T = {
     "vision.schalter.fehlt": "Manca ancora:",
     # Bauplan analysen/bauplan_koerperweg_neu.md, Stufe KW6 Punkt 4: Vision geparkt (Seiten und Schalter).
     "vision.geparkt_satz":
-        "Vision è in pausa in questa versione e non si può attivare. Tornerà quando sarà ricostruito sulle nuove immagini del corpo.",
+        "La visione AI è in pausa in questa versione e non può essere attivata. Torna una volta ricostruita sulle "
+        "nuove immagini del corpo.",
     "vision.schalter.fehlt_galerien": "{n} di {soll} gallerie approvate — creane una sotto 'Crea una galleria'",
     "vision.schalter.fehlt_test": "un test di connessione verde",
-    "vision.schalter.fehlt_kandidaten": "immagini giudicate come fonte di candidati — compaiono mentre gira un passaggio; attiva la 'raccolta diagnostica' sotto Persona se vuoi conservarle",
+    "vision.schalter.fehlt_kandidaten":
+        "immagini giudicate come fonte di candidati — compaiono mentre gira un passaggio; attiva la 'raccolta "
+        "diagnostica' sotto Riconoscimento del corpo se vuoi conservarle",
     "vision.schalter.titel_an": "Il rilevamento visione è attivo",
     "vision.schalter.titel_aus": "Il rilevamento visione è disattivato",
     "vision.schalter.aus_satz":
@@ -3922,7 +3928,11 @@ vista del giorno integri le persone conosciute.</p>""",
     "anwesenheit.legende_leer": "il servizio non era in funzione",
     "anwesenheit.legende_teil": "in funzione, alcuni eventi non analizzati",
     "anwesenheit.legende_jetzt": "adesso",
-    "anwesenheit.legende_satz": "Il bianco significa una cosa sola: il servizio non era in funzione in quel momento. Una cella verde con un angolo tagliato indica che il servizio era in funzione ma alcuni eventi non sono stati analizzati: passa il mouse per vedere i numeri.",
+    "anwesenheit.legende_satz":
+        "Il bianco significa una cosa sola: il servizio non era in funzione in quel momento. Di notte una cella copre "
+        "quattro quarti d'ora. Senza presenza registrata è bianca non appena il servizio non era in funzione in uno di "
+        "essi. Una cella verde con un angolo tagliato indica che il servizio era in funzione ma alcuni eventi non sono "
+        "stati analizzati: passa il mouse per vedere i numeri.",
     "anwesenheit.zaehler": "{zeilen} marcature lette, {kaputt} righe danneggiate saltate.",
     "anwesenheit.gekappt": "Il file del giorno supera il limite di lettura; è stata letta solo la parte finale.",
     "anwesenheit.nie": "Non visti in questa vista: {namen}",

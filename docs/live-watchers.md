@@ -130,7 +130,7 @@ Each watcher has nine settings for what Pushover and Telegram get:
 | `telegram_known` | Recognized person, column Telegram | on | Telegram gets name alerts and the list of names. |
 | `pushover_unknown` | Unknown person, column Pushover | on | Pushover gets "Unknown person" at the end of an appearance. |
 | `telegram_unknown` | Unknown person, column Telegram | on | Telegram gets "Unknown person" at the end of an appearance that has no video. |
-| `unknown_with_known` | Also report unknown people next to recognized ones | off | "Unknown person" also comes when names were recognized and other valid faces gave no name vote, then without a picture. Applies to both channels. |
+| `unknown_with_known` | Also report unknown people in visits with a recognized person | off | "Unknown person" also comes when names were recognized and other valid faces gave no name vote, then without a picture. Applies to both channels. |
 | `pushover_image` | Attach picture, column Pushover | on | Name and unknown person alerts on Pushover carry the picture. Off: text only. |
 | `telegram_image` | Attach picture, column Telegram | on | Name and unknown person alerts on Telegram come as a photo with the line as caption. Off: a text message. |
 | `telegram_video` | Attach video, column Telegram | on | Telegram gets one video per reported appearance, whether anyone was recognized or not. |
@@ -146,7 +146,7 @@ table: the rows are Recognized person, Unknown person, Attach picture and
 Attach video, the columns are Pushover and Telegram, each headed by the
 switch of its channel; a channel that is switched off shows its column
 dimmed. Attach video exists for Telegram only. "Also report unknown people
-next to recognized ones" sits below the table because it applies to both
+in visits with a recognized person" sits below the table because it applies to both
 channels. Save stores them. A video length outside
 3 to 60 seconds, or one with a fraction, is refused with a message, and
 nothing of that save is stored. The same keys are in the config store
@@ -246,12 +246,12 @@ watchers are paused during the measurement so the numbers are honest.
    always enough to show the highest slot number in use. Each slot button
    shows its number, the camera and the state of its watcher in the colour of
    that state; a camera that is set up here but not in Frigate right now is
-   yellow, unless it is disturbed. A free slot shows "Live N" and "free".
+   yellow, unless it is disturbed. A free slot shows "Live N" and "unused".
    Clicking a slot shows it below the bar. If you changed fields without
    saving, the page asks first ("Live N has unsaved changes.") with **Save and
    switch**, **Discard** and **Stay here**; as long as fields are unsaved, the
    page does not reload by itself either.
-2. **Assign camera** on a free slot ("Live N is free"): choose one of the
+2. **Assign camera** on a free slot ("Live N is unused"): choose one of the
    cameras that have no slot yet and press the button. A camera has at most
    one slot, and a slot at most one camera. An occupied slot shows the
    settings of its camera, called the watcher page in this guide. The
@@ -335,7 +335,7 @@ sampling grid of step 2, `stapel_stimmen` the votes a name needs (step 4).
 holds back Pushover and Telegram only; "MQTT does not pause" below describes
 it in full.
 
-**Frigate (optional).** "Create event in Frigate" is off by default. When it
+**Frigate (optional).** "Create a Frigate event for a recognized person" is off by default. When it
 is on and the watcher recognizes a name (step 6), suslik creates its own event
 in Frigate for this camera, with the name in the sub label, and ends it when
 the visit ends. It does not touch Frigate's own events, and it does not
@@ -365,7 +365,7 @@ because the watcher already looks at the same stream. This holds only while
 the watcher is enabled and actually running: when it is disturbed or the
 engine stops, the events are analysed normally again. A name that Frigate
 itself has put on an event is always checked. Events that this watcher
-created in Frigate ("Create event in Frigate") are skipped as well, although
+created in Frigate ("Create a Frigate event for a recognized person") are skipped as well, although
 they carry a name, unless "Re-check own Frigate events" is on; that second
 switch matters only while the first one is on. A skipped event stays in the
 event list, marked "Handled by live watcher".

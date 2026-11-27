@@ -37,7 +37,7 @@ path already recognized the person.
 2. **The person learning run starts.** The choice **Start learning run**
    on the body card of the **Recognition** page (setting `koerper_lauf`)
    has three positions:
-   - **by hand** (the default): open **Person → Body images**, set how
+   - **by hand** (the default): open **Body recognition → Body images**, set how
      many videos per person, optionally choose single people, and press
      **Start learning run**. The run takes the newest suitable videos of
      the last `koerper_max_tage` days that it has not handled yet. It picks
@@ -81,8 +81,8 @@ is missing, the start button is disabled and the page says why.
 
 ## The Body images page
 
-**Person → Body images** (`/koerperbilder`) is the first page of the
-Person menu, next to **Named persons** (below). It is one short page and
+**Body recognition → Body images** (`/koerperbilder`) is the first page of the
+Body recognition menu, next to **Named persons** (below). It is one short page and
 shows only what has data, from top to bottom:
 
 - **Person learning run**: the button **Start learning run (N videos
@@ -198,7 +198,7 @@ your system, you get no name rather than a wrong one.
 
 ## The Named persons page
 
-**Person → Named persons** (`/koerpernamen`) shows only the people who
+**Body recognition → Named persons** (`/koerpernamen`) shows only the people who
 got a body name in the last three days, by the same rule as above, plus
 names suslik wrote to Frigate. Each person gets one row of the newest
 pictures, at most twelve, newest on the left; the row scrolls sideways.

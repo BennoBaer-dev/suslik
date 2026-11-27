@@ -131,7 +131,7 @@ function llFpsUpdate(el) {
   if (!a) { out.textContent = ''; return; }
   var s = Math.round(a * (fps / 3) + r);
   var dauer = s >= 60 ? TT('js.einheit.min', '{n} min', {n: Math.round(s / 60)})
-                      : TT('js.einheit.s', '{n} s', {n: s});
+                      : TT('js.einheit.s', '{n} sec', {n: s});
   out.textContent = TT('js.lernlauf.fps_zeile', '≈ total ~{dauer} at {fps}/s',
                        {dauer: dauer, fps: fps});
 }
@@ -288,8 +288,8 @@ function testKanal(kanal, btn) {
 }
 
 function frigateWrite(readonly) {
-  var txt = readonly ? TT('js.frigate.ro_frage', 'Switch to READ-ONLY? suslik will stop writing to Frigate.')
-                     : TT('js.frigate.rw_frage', 'Enable WRITING to Frigate (sub_labels + reference sync)?');
+  var txt = readonly ? TT('js.frigate.ro_frage', 'Stop writing (read-only)? suslik will no longer write anything to Frigate: no sub-labels, no reference uploads, no watcher events.')
+                     : TT('js.frigate.rw_frage', 'Enable writing? suslik will write recognized names to Frigate (sub_labels + reference sync).');
   if (!confirm(txt)) return;
   var st = document.getElementById('fw-status');
   st.textContent = TT('js.status.speichern', 'saving …');
@@ -1198,7 +1198,7 @@ function personUmbenennen(person, btn) {
   if (!start) { start = Date.now(); sessionStorage.setItem(key, String(start)); }
   function tick() {
     var s = Math.round((Date.now() - start) / 1000);
-    for (var i = 0; i < spans.length; i++) spans[i].textContent = TT('js.einheit.klammer_s', '({n} s)', {n: s});
+    for (var i = 0; i < spans.length; i++) spans[i].textContent = TT('js.einheit.klammer_s', '({n} sec)', {n: s});
   }
   tick();
   setInterval(tick, 1000);
@@ -1441,7 +1441,7 @@ function visionSpeichern(danach) {
    als "not run" stehen. Kein Polling, kein Server-Zustand. */
 function _visionStufeText(s) {
   var w = [];
-  if (s.dauer_s != null) w.push(TT('js.einheit.s', '{n} s', {n: s.dauer_s}));
+  if (s.dauer_s != null) w.push(TT('js.einheit.s', '{n} sec', {n: s.dauer_s}));
   if (s.treffer != null) w.push(TT('js.vision.treffer', '{n}/2 right', {n: s.treffer}));
   if (s.ist != null) w.push(TT('js.vision.tokens', '{ist} tokens vs {soll}', {ist: s.ist, soll: s.soll}));
   return (s.text || '') + (w.length ? ' · ' + w.join(' · ') : '');
